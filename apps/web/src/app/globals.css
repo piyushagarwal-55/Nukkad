@@ -1,0 +1,895 @@
+@import 'tailwindcss';
+
+/* ---------------------------------------------------------------------
+   Palette. Cream, not white, is the whole signal. Pure white reads cheap
+   next to it. #1A1A1A rather than #000 for the same reason.
+   --------------------------------------------------------------------- */
+:root {
+  --bg:      #ffffeb;   /* cream */
+  --sand:    #e4e4d0;   /* warm secondary surface */
+  --ink:     #1a1a1a;   /* near black */
+  --muted:   #71716e;
+  --faint:   #9d9c98;
+  --line:    #1a1a1a26; /* 15% ink */
+  --line-2:  #1a1a1a4d; /* 30% ink */
+
+  --accent:  #f0d7ff;   /* lavender, CTA fill. Ink text sits on it. */
+  --hot:     #ff6c4c;   /* coral, emphasis */
+  --amber:   #ffa946;
+  --green:   #034f46;
+  --pink:    #ffbcf2;
+
+  /* aliases the dashboard already consumes */
+  --panel:   #fffdf9;
+  --warn:    #ff6c4c;
+
+  --radius:  2.5rem;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------------------------------------------------
+   Display type. Serif at weight 400, set very tight. The tightness is
+   doing as much work as the typeface.
+   --------------------------------------------------------------------- */
+.display {
+  font-family: var(--font-garamond), Georgia, serif;
+  font-weight: 400;
+  line-height: 0.95;
+  letter-spacing: -0.03em;
+}
+
+.eyebrow {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.muted { color: var(--muted); }
+
+/* ---------------------------------------------------------------------
+   Motion
+   --------------------------------------------------------------------- */
+
+/* infinite marquee. Track holds the content twice, so -50% loops seamlessly. */
+@keyframes ticker {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.ticker-track {
+  display: flex;
+  width: max-content;
+  animation: ticker 38s linear infinite;
+}
+.ticker-mask {
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+
+/* gradient sweeping across text, the "resolved" moment */
+@keyframes polish {
+  from { background-position: 0% 0; }
+  to   { background-position: 200% 0; }
+}
+.polish {
+  background: linear-gradient(90deg, var(--muted) 0%, var(--muted) 35%, var(--hot) 50%, var(--ink) 65%, var(--ink) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: polish 3.4s ease-in-out infinite;
+}
+
+/* rotating conic border. Animating a registered custom property is what
+   makes the angle interpolate instead of snapping. */
+@property --ang {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes spin-border { to { --ang: 360deg; } }
+.flow-border {
+  position: relative;
+  border-radius: 16px;
+  background: var(--panel);
+}
+.flow-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: conic-gradient(from var(--ang), transparent 0deg, var(--hot) 60deg, var(--accent) 140deg, transparent 220deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: spin-border 5s linear infinite;
+  pointer-events: none;
+}
+
+/* scroll reveal */
+.reveal {
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1),
+              transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.reveal.in { opacity: 1; transform: none; }
+
+/* hero entrance, staggered by inline delay */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(22px); }
+  to   { opacity: 1; transform: none; }
+}
+.rise { animation: rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* soft pulse for the listening dot */
+@keyframes breathe {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.45; transform: scale(0.86); }
+}
+.breathe { animation: breathe 1.8s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ticker-track, .polish, .flow-border::before, .rise, .breathe { animation: none; }
+  .reveal { opacity: 1; transform: none; transition: none; }
+  .polish { color: var(--ink); background: none; -webkit-text-fill-color: currentColor; }
+}
+
+/* ---------------------------------------------------------------------
+   Hero extras
+   --------------------------------------------------------------------- */
+
+/* waveform bars. scaleY keeps it on the compositor rather than
+   re-laying-out thirty elements every frame. */
+@keyframes wave {
+  0%, 100% { transform: scaleY(0.42); }
+  50%      { transform: scaleY(1); }
+}
+.wave-bar {
+  transform-origin: center;
+  animation: wave 1.25s ease-in-out infinite;
+}
+
+/* floating pill nav */
+.nav-pill {
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line-2);
+  border-radius: 18px;
+}
+
+/* the italic half of the display heading */
+.display-italic {
+  font-style: italic;
+  font-family: var(--font-garamond), Georgia, serif;
+  font-weight: 400;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wave-bar { animation: none; transform: scaleY(0.7); }
+}
+
+/* ---------------------------------------------------------------------
+   Pantry gauge, the hero's left-hand visual.
+
+   Says the thing the headline claims: household staples deplete on a
+   near-fixed rhythm, and the shop knows when. Each bar drains, flashes
+   coral as it empties, then restocks. Durations are all coprime-ish so
+   the rows never fall into lockstep and the block always looks alive.
+   --------------------------------------------------------------------- */
+@keyframes drain {
+  0%, 3%    { transform: scaleX(1); }
+  84%       { transform: scaleX(0.06); }
+  93%       { transform: scaleX(0.06); }
+  95%, 100% { transform: scaleX(1); }
+}
+@keyframes drain-tint {
+  0%, 76%   { background: var(--ink); }
+  84%, 93%  { background: var(--hot); }
+  95%, 100% { background: var(--ink); }
+}
+.gauge-fill {
+  transform-origin: left center;
+  animation: drain var(--dur) cubic-bezier(0.4, 0, 0.6, 1) infinite,
+             drain-tint var(--dur) linear infinite;
+}
+
+/* the "khatam" tag, visible only while the bar is spent */
+@keyframes low-tag {
+  0%, 78%   { opacity: 0; transform: translateX(-4px); }
+  85%, 92%  { opacity: 1; transform: none; }
+  95%, 100% { opacity: 0; }
+}
+.gauge-tag { animation: low-tag var(--dur) linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .gauge-fill { animation: none; transform: scaleX(var(--rest, 0.6)); }
+  .gauge-tag { animation: none; opacity: 0; }
+}
+
+/* =====================================================================
+   COMIC SEQUENCE
+   ---------------------------------------------------------------------
+   A print-comic language built entirely in CSS: Ben-Day screens, hard
+   ink rules, offset shadows with zero blur, burst shapes, speed lines
+   and a rubber-stamp effect. Nothing here loads an image.
+   ===================================================================== */
+
+/* --- Ben-Day dot screen ---------------------------------------------
+   Two offset radial grids, not one. A single regular lattice reads as a
+   CSS pattern; two offset ones read as halftone. Density is a variable
+   so each panel carries its own weight of ink. */
+.halftone {
+  background-image:
+    radial-gradient(var(--dot, #1a1a1a22) var(--dot-r, 1.5px), transparent calc(var(--dot-r, 1.5px) + 0.4px)),
+    radial-gradient(var(--dot, #1a1a1a22) var(--dot-r, 1.5px), transparent calc(var(--dot-r, 1.5px) + 0.4px));
+  background-size: var(--dot-gap, 12px) var(--dot-gap, 12px), var(--dot-gap, 12px) var(--dot-gap, 12px);
+  background-position: 0 0, calc(var(--dot-gap, 12px) / 2) calc(var(--dot-gap, 12px) / 2);
+}
+
+/* --- panel chrome ---------------------------------------------------
+   Heavy ink rule, hard offset shadow. A blurred shadow instantly reads
+   as interface rather than print, so the blur radius stays at zero. */
+.comic-frame {
+  border: 3px solid var(--ink);
+  border-radius: 4px;
+  box-shadow: 12px 12px 0 var(--ink);
+  isolation: isolate;
+}
+
+.comic-caption {
+  border: 2.5px solid var(--ink);
+  background: var(--bg);
+  box-shadow: 5px 5px 0 var(--ink);
+  font-weight: 700;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+/* --- speech bubbles -------------------------------------------------
+   The tail is a rotated square inheriting the border and fill, so it
+   stays welded to the body through any parallax with no second element
+   to keep in sync. */
+.comic-bubble {
+  position: relative;
+  border: 3px solid var(--ink);
+  border-radius: 20px;
+  background: var(--bg);
+  box-shadow: 5px 5px 0 var(--ink);
+}
+.comic-bubble::after {
+  content: "";
+  position: absolute;
+  left: 38px;
+  bottom: -12px;
+  width: 20px;
+  height: 20px;
+  background: var(--bg);
+  border-right: 3px solid var(--ink);
+  border-bottom: 3px solid var(--ink);
+  transform: rotate(45deg);
+}
+.comic-thought::after {
+  left: 34px;
+  bottom: -16px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  transform: none;
+}
+.comic-thought-dot {
+  position: absolute;
+  left: 20px;
+  bottom: -32px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2.5px solid var(--ink);
+  background: var(--bg);
+}
+
+/* --- sound effects --------------------------------------------------
+   clip-path spikes beat any border trick for a starburst. */
+.comic-burst {
+  clip-path: polygon(
+    50% 0%, 61% 19%, 82% 11%, 76% 33%, 98% 37%, 80% 51%, 96% 67%,
+    74% 67%, 78% 89%, 58% 75%, 50% 100%, 42% 75%, 22% 89%, 26% 67%,
+    4% 67%, 20% 51%, 2% 37%, 24% 33%, 18% 11%, 39% 19%
+  );
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* radiating speed lines, masked to a ring so the centre stays clear */
+.comic-rays {
+  background: repeating-conic-gradient(
+    from 0deg,
+    var(--ink) 0deg 1.4deg,
+    transparent 1.4deg 10deg
+  );
+  -webkit-mask-image: radial-gradient(circle, transparent 40%, #000 47%, #000 64%, transparent 72%);
+  mask-image: radial-gradient(circle, transparent 40%, #000 47%, #000 64%, transparent 72%);
+}
+
+/* --- rubber stamp --------------------------------------------------- */
+.comic-stamp {
+  border: 5px solid currentColor;
+  border-radius: 999px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  opacity: 0.92;
+  box-shadow: inset 0 0 0 3px var(--bg), inset 0 0 0 6px currentColor;
+}
+
+/* =====================================================================
+   PHONE UI INSIDE THE PANELS
+   Real interface, not a suggestion of one. This is what makes the
+   sequence legible without a caption explaining it.
+   ===================================================================== */
+
+.ph-shell {
+  background: #1a1a1a;
+  border-radius: 30px;
+  padding: 7px;
+  box-shadow: 0 0 0 2.5px var(--ink), 8px 8px 0 rgba(26, 26, 26, 0.18);
+}
+.ph-screen {
+  background: #efe7dc;
+  border-radius: 24px;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.ph-notch {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40%;
+  height: 14px;
+  background: #1a1a1a;
+  border-bottom-left-radius: 10px;
+  border-bottom-right-radius: 10px;
+  z-index: 5;
+}
+.ph-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 13px 3px;
+  font-size: 8px;
+  font-weight: 700;
+  color: #1a1a1a;
+  flex: none;
+}
+.ph-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px;
+  background: #f6f1e9;
+  border-bottom: 1px solid #1a1a1a1f;
+  flex: none;
+}
+.ph-home {
+  height: 3.5px;
+  width: 32%;
+  margin: 4px auto 6px;
+  border-radius: 999px;
+  background: #1a1a1a;
+  opacity: 0.32;
+  flex: none;
+}
+
+.ph-chat {
+  --dot: #1a1a1a0f;
+  --dot-r: 1.1px;
+  --dot-gap: 15px;
+  background-color: #efe7dc;
+  padding: 8px 9px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* --- message bubbles ------------------------------------------------ */
+.msg {
+  max-width: 84%;
+  border-radius: 10px;
+  padding: 6px 8px 4px;
+  font-size: 9.5px;
+  line-height: 1.42;
+  position: relative;
+  box-shadow: 0 1px 1px rgba(26, 26, 26, 0.12);
+}
+.msg-in {
+  align-self: flex-start;
+  background: #fffdf9;
+  border-top-left-radius: 3px;
+}
+.msg-out {
+  align-self: flex-end;
+  background: #f0d7ff;
+  border-top-right-radius: 3px;
+}
+.msg-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  margin-top: 2px;
+  font-size: 7.5px;
+  color: #1a1a1a80;
+}
+.msg-tick {
+  color: #2f7de1;
+  font-size: 9px;
+  letter-spacing: -2.5px;
+  font-weight: 700;
+}
+
+/* --- the parsed order card ------------------------------------------ */
+.ord-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 9px;
+  padding: 2.5px 0;
+}
+.ord-rule { height: 1px; background: #1a1a1a26; margin: 4px 0; }
+.ord-total { font-weight: 700; font-size: 9.5px; }
+
+.chip {
+  border: 1.5px solid #1a1a1a40;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 8.5px;
+  font-weight: 600;
+  background: #fffdf9;
+  white-space: nowrap;
+}
+.chip-go {
+  background: #034f46;
+  color: #fffdf9;
+  border-color: #034f46;
+}
+
+.pay-btn {
+  background: #034f46;
+  color: #fffdf9;
+  border-radius: 8px;
+  padding: 7px;
+  text-align: center;
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+/* --- call screen ----------------------------------------------------- */
+.call-avatar {
+  width: 58px;
+  height: 58px;
+  border-radius: 999px;
+  background: #f0d7ff;
+  border: 2.5px solid #1a1a1a;
+  display: grid;
+  place-items: center;
+  margin: 0 auto;
+}
+.call-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  color: #fffdf9;
+  font-size: 12px;
+}
+
+/* --- the handwritten list, as a photo attachment --------------------- */
+.note-photo {
+  background: #fdfbf3;
+  border-radius: 5px;
+  border: 1px solid #1a1a1a26;
+  padding: 8px 9px;
+  background-image: repeating-linear-gradient(
+    transparent, transparent 12px, #2f6ea830 12px, #2f6ea830 13px
+  );
+}
+
+/* --- progress rail across the sequence ------------------------------- */
+.comic-rail {
+  height: 3px;
+  background: #1a1a1a1f;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.comic-rail-fill {
+  height: 100%;
+  background: var(--ink);
+  transform-origin: left center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .comic-frame { box-shadow: 7px 7px 0 var(--ink); }
+}
+
+/* --- voice agent screens ---------------------------------------------
+   The product is a VOICE agent that calls people. These screens are the
+   prediction readout, the live call, and the confirmation — the parts a
+   chat thread cannot show.
+   --------------------------------------------------------------------- */
+
+/* the agent's own readout: which staple runs out, and when */
+.ag-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid #1a1a1a1a;
+}
+.ag-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #ff6c4c;
+  flex: none;
+}
+.ag-body { padding: 9px 10px; display: flex; flex-direction: column; gap: 9px; }
+
+.ag-row { display: flex; flex-direction: column; gap: 3px; }
+.ag-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 9px;
+}
+.ag-days { font-weight: 700; font-variant-numeric: tabular-nums; }
+.ag-bar {
+  height: 5px;
+  border-radius: 999px;
+  background: #1a1a1a17;
+  overflow: hidden;
+}
+.ag-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: #1a1a1a;
+  transform-origin: left center;
+}
+.ag-fill-low { background: #ff6c4c; }
+
+.ag-verdict {
+  margin-top: 2px;
+  border-top: 1px dashed #1a1a1a33;
+  padding-top: 8px;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+/* --- live call ------------------------------------------------------- */
+.call-wave { display: flex; align-items: center; justify-content: center; gap: 3px; height: 26px; }
+.call-wave span {
+  width: 3px;
+  border-radius: 999px;
+  background: #1a1a1a;
+}
+
+/* who is speaking, as a coloured pill above the transcript */
+.turn-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 7.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.turn-agent { background: #f0d7ff; color: #1a1a1a; }
+.turn-user { background: #ffd9d0; color: #1a1a1a; }
+
+/* live transcript lines, styled as captions rather than chat bubbles so
+   nobody mistakes a phone call for a messaging thread */
+.tx {
+  border-left: 2.5px solid #1a1a1a;
+  padding: 1px 0 1px 7px;
+  font-size: 9.5px;
+  line-height: 1.42;
+}
+.tx-agent { border-color: #b98ad6; }
+.tx-user { border-color: #ff6c4c; }
+
+/* ticks as the agent commits each line of the order, on the call */
+.tick-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 9.5px;
+  padding: 2px 0;
+}
+.tick-mark {
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  background: #034f46;
+  color: #fffdf9;
+  font-size: 8px;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.tick-added { background: #ff6c4c; }
+
+/* small credit strip, e.g. the speech stack doing the talking */
+.tech-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 7px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #1a1a1a70;
+  padding: 5px 0 2px;
+  border-top: 1px solid #1a1a1a14;
+}
+
+/* --- split demo card -------------------------------------------------
+   The before/after card was a pale panel on a pale page with a hairline
+   border, and readers scrolled straight past it. The split itself now
+   carries the meaning: warm paper on the left for what a person said,
+   ink on the right for what the machine resolved it to.
+   --------------------------------------------------------------------- */
+.split-card {
+  border: 3px solid var(--ink);
+  border-radius: 18px;
+  box-shadow: 12px 12px 0 var(--ink);
+  overflow: hidden;
+}
+
+/* the seam badge, sitting on the boundary between the two halves */
+.split-seam {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  background: var(--hot);
+  border: 3px solid var(--ink);
+  display: grid;
+  place-items: center;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink);
+  z-index: 10;
+}
+
+/* eyebrow on the dark half */
+.eyebrow-inv {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #fffdf98c;
+}
+
+/* the sweep, retuned for cream-on-ink. The light version fades toward
+   var(--ink), which is invisible against an ink background. */
+.polish-inv {
+  background: linear-gradient(
+    90deg,
+    #fffdf95c 0%, #fffdf95c 35%,
+    var(--hot) 50%,
+    #fffdf9 65%, #fffdf9 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: polish 3.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .polish-inv {
+    animation: none;
+    background: none;
+    color: #fffdf9;
+    -webkit-text-fill-color: #fffdf9;
+  }
+}
+
+/* --- bill to catalogue -----------------------------------------------
+   The section claims a supplier bill fills the catalogue by itself, and
+   it used to claim it beside an empty grey box. This is that sentence,
+   animated: a scan sweeps the bill, and rows land in the catalogue in
+   step behind it.
+
+   One shared 5.6s cycle. Every delay below is a fraction of it, so the
+   scan and the rows stay locked together no matter what else is on the
+   page.
+   --------------------------------------------------------------------- */
+
+.b2c-paper {
+  background: #fffdf9;
+  border: 2.5px solid var(--ink);
+  border-radius: 10px;
+  box-shadow: 6px 6px 0 var(--ink);
+  position: relative;
+  overflow: hidden;
+}
+
+/* the scan bar travelling down the bill */
+@keyframes b2c-scan {
+  0%        { transform: translateY(0);    opacity: 0; }
+  6%        { opacity: 1; }
+  52%       { opacity: 1; }
+  62%, 100% { transform: translateY(150px); opacity: 0; }
+}
+.b2c-scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 22px;
+  background: linear-gradient(180deg, transparent, #ff6c4c40 55%, #ff6c4c);
+  border-bottom: 2px solid var(--hot);
+  animation: b2c-scan 5.6s cubic-bezier(0.4, 0, 0.5, 1) infinite;
+  pointer-events: none;
+}
+
+/* each bill line lights as the bar passes it */
+@keyframes b2c-lit {
+  0%, 8%   { background: transparent; }
+  14%, 46% { background: #ff6c4c1f; }
+  54%,100% { background: transparent; }
+}
+.b2c-line { animation: b2c-lit 5.6s ease-in-out infinite; border-radius: 4px; }
+
+/* rows arriving in the catalogue, one after another */
+@keyframes b2c-row {
+  0%, 20%   { opacity: 0; transform: translateY(7px); }
+  30%, 88%  { opacity: 1; transform: none; }
+  96%, 100% { opacity: 0; transform: translateY(7px); }
+}
+.b2c-row { animation: b2c-row 5.6s ease-out infinite; }
+
+/* the tick stamping in a beat after its row */
+@keyframes b2c-tick {
+  0%, 26%   { transform: scale(0); }
+  36%, 88%  { transform: scale(1); }
+  96%, 100% { transform: scale(0); }
+}
+.b2c-tick { animation: b2c-tick 5.6s cubic-bezier(0.3, 1.5, 0.5, 1) infinite; }
+
+/* the local names we suggest, popping in last */
+@keyframes b2c-chip {
+  0%, 58%   { opacity: 0; transform: scale(0.7); }
+  70%, 88%  { opacity: 1; transform: none; }
+  96%, 100% { opacity: 0; transform: scale(0.7); }
+}
+.b2c-chip { animation: b2c-chip 5.6s cubic-bezier(0.3, 1.4, 0.5, 1) infinite; }
+
+/* the arrow between the two cards */
+@keyframes b2c-arrow {
+  0%, 14%  { opacity: 0.25; transform: translateX(-4px); }
+  34%, 70% { opacity: 1; transform: translateX(3px); }
+  90%,100% { opacity: 0.25; transform: translateX(-4px); }
+}
+.b2c-arrow { animation: b2c-arrow 5.6s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .b2c-scan { display: none; }
+  .b2c-line, .b2c-row, .b2c-tick, .b2c-chip, .b2c-arrow {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* --- closing statement -----------------------------------------------
+   The last thing anyone sees. Full-bleed ink, the largest type on the
+   site, and a field of dots standing in for the shops themselves — a
+   handful of them lighting up on a slow stagger.
+   --------------------------------------------------------------------- */
+
+.closer {
+  background: var(--ink);
+  color: var(--bg);
+  position: relative;
+  overflow: hidden;
+}
+
+/* the shop field. Faint by default; a few wake up. */
+.closer-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: #fffdf9;
+  opacity: 0.1;
+}
+@keyframes closer-wake {
+  0%, 72%   { background: #fffdf9; opacity: 0.1; transform: scale(1); }
+  78%, 88%  { background: #ff6c4c; opacity: 1;   transform: scale(2.4); }
+  94%, 100% { background: #fffdf9; opacity: 0.1; transform: scale(1); }
+}
+.closer-dot-live { animation: closer-wake 9s ease-in-out infinite; }
+
+/* a soft pool of light behind the type so the words stay off the dots */
+.closer-glow {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  transform: translate(-50%, -50%);
+  width: 78%;
+  height: 62%;
+  background: radial-gradient(ellipse at center, #1a1a1a 38%, transparent 72%);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .closer-dot-live { animation: none; }
+}
+
+/* --- footer wordmark -------------------------------------------------
+   The sign-off. The name is set as large as the column allows and does
+   the work a logo would, with a voice mark beside it.
+
+   The bars ripple left to right on a stagger rather than pulsing in
+   unison, so the mark reads as a phrase being spoken and then repeated,
+   which is what the name means.
+   --------------------------------------------------------------------- */
+@keyframes mark-wave {
+  0%, 100% { transform: scaleY(0.34); }
+  45%      { transform: scaleY(1); }
+}
+.mark-bar {
+  transform-box: fill-box;   /* without this, transform-origin resolves
+                                against the SVG viewport, not the rect */
+  transform-origin: center;
+  animation: mark-wave 2.6s cubic-bezier(0.4, 0, 0.4, 1) infinite;
+}
+
+/* The corner token. A nukkad IS a street corner, so the mark is a crossing
+   with the shop sitting on one quadrant of it, and the shop pulses the way a
+   dropped pin does. The old mark here was a repeat arrow, which only made
+   sense while the product was called Dobara. */
+.corner-badge {
+  background: var(--accent);
+  border: 2px solid var(--ink);
+}
+@keyframes corner-pulse {
+  0%, 58%   { transform: scale(1); }
+  72%       { transform: scale(1.5); }
+  86%, 100% { transform: scale(1); }
+}
+.corner-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: corner-pulse 5s cubic-bezier(0.4, 0, 0.3, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mark-bar { animation: none; transform: scaleY(0.72); }
+  .corner-dot { animation: none; }
+}
