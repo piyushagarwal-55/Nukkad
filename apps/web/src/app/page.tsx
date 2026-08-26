@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { Reveal } from '@/components/Reveal';
+import { VoiceMark } from '@/components/VoiceMark';
 import { HeroFlow, VoicePill } from '@/components/HeroFlow';
 import { DepletionScroll } from '@/components/DepletionScroll';
 import { ComicScroll } from '@/components/ComicScroll';
@@ -254,43 +255,6 @@ function ShopField() {
         />
       ))}
     </div>
-  );
-}
-
-
-/* ---------------------------------------------------------------------
-   The voice mark that sits beside the footer wordmark. Five bars on a
-   staggered ripple, so it reads as speech rather than a loading bar.
-   --------------------------------------------------------------------- */
-const MARK_BARS = [
-  { x: 0,   h: 46,  delay: 0 },
-  { x: 26,  h: 80,  delay: 0.14 },
-  { x: 52,  h: 100, delay: 0.28 },
-  { x: 78,  h: 80,  delay: 0.42 },
-  { x: 104, h: 46,  delay: 0.56 },
-];
-
-function VoiceMark() {
-  return (
-    <svg
-      viewBox="0 0 122 100"
-      aria-hidden
-      className="h-[clamp(1.75rem,12.6cqw,9rem)] w-auto shrink-0 overflow-visible"
-    >
-      {MARK_BARS.map((b) => (
-        <rect
-          key={b.x}
-          className="mark-bar"
-          x={b.x}
-          y={(100 - b.h) / 2}
-          width="18"
-          height={b.h}
-          rx="9"
-          fill={b.x === 52 ? 'var(--hot)' : 'var(--ink)'}
-          style={{ animationDelay: `${b.delay}s` }}
-        />
-      ))}
-    </svg>
   );
 }
 
@@ -657,7 +621,7 @@ export default function Landing() {
               clamp maximum is set against max-w-6xl rather than left to
               run on with the viewport. */}
           <div className="flex items-center gap-[3.2cqw]">
-            <VoiceMark />
+            <VoiceMark className="h-[clamp(1.75rem,12.6cqw,9rem)] w-auto shrink-0 overflow-visible" />
             {/* Solved, not guessed. Measured in the browser: "Nukkad" in EB
                 Garamond at this tracking renders 2.982em wide. The mark and
                 gap take 15.4 + 3.2 = 18.6cqw of the column, leaving 81.4cqw

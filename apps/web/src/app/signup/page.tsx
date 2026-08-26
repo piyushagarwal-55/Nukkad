@@ -4,22 +4,46 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { post } from '@/lib/api';
+import { AuthSplit } from '@/components/AuthSplit';
+
+const FIELDS = [
+  {
+    key: 'shopName' as const,
+    label: 'Dukaan ka naam',
+    placeholder: 'Sunita Kirana Store',
+    inputMode: undefined,
+  },
+  {
+    key: 'ownerName' as const,
+    label: 'Aapka naam',
+    placeholder: 'Sunita Devi',
+    inputMode: undefined,
+  },
+  {
+    key: 'phone' as const,
+    label: 'Mobile number',
+    placeholder: '98765 43210',
+    inputMode: 'numeric' as const,
+  },
+];
 
 export default function Signup() {
-  const [shopName, setShop] = useState('');
-  const [ownerName, setOwner] = useState('');
-  const [phone, setPhone] = useState('');
+  const [form, setForm] = useState({ shopName: '', ownerName: '', phone: '' });
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const router = useRouter();
 
-  const ready = shopName.length > 1 && ownerName.length > 1 && phone.replace(/\D/g, '').length >= 10;
+  const ready =
+    form.shopName.length > 1 &&
+    form.ownerName.length > 1 &&
+    form.phone.replace(/\D/g, '').length >= 10;
 
   async function submit() {
-    setBusy(true); setErr(null);
+    setBusy(true);
+    setErr(null);
     try {
-      await post('/auth/signup', { shopName, ownerName, phone });
-      router.push(`/login?phone=${encodeURIComponent(phone)}`);
+      await post('/auth/signup', form);
+      router.push(`/login?phone=${encodeURIComponent(form.phone)}`);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -28,36 +52,58 @@ export default function Signup() {
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6">
-      <p className="muted text-sm tracking-widest uppercase">Nukkad</p>
-      <h1 className="mt-3 text-2xl font-semibold">Dukaan register kijiye</h1>
-      <p className="muted mt-2 text-sm">Do minute. Koi password nahi.</p>
+    <AuthSplit>
+      <h1 className="display text-[clamp(2rem,4vw,2.6rem)]">
+        Dukaan register kijiye
+      </h1>
+      <p className="muted mt-3 text-[15px] leading-relaxed">
+        Do minute lagenge. Koi password nahi, koi app download nahi.
+      </p>
 
-      <label className="muted mt-8 block text-sm">Dukaan ka naam</label>
-      <input value={shopName} onChange={(e) => setShop(e.target.value)}
-        placeholder="Sunita Kirana Store"
-        className="panel mt-2 w-full px-4 py-3 outline-none" />
+      <div className="mt-9 space-y-5">
+        {FIELDS.map((f) => (
+          <div key={f.key}>
+            <label
+              htmlFor={f.key}
+              className="mb-2 block text-[13px] font-medium text-[var(--muted)]"
+            >
+              {f.label}
+            </label>
+            <input
+              id={f.key}
+              value={form[f.key]}
+              inputMode={f.inputMode}
+              onChange={(e) => setForm({ ...form, [f.key]: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && ready && !busy) void submit();
+              }}
+              placeholder={f.placeholder}
+              className="auth-field px-4 py-3.5 text-[15px]"
+            />
+          </div>
+        ))}
+      </div>
 
-      <label className="muted mt-4 block text-sm">Aapka naam</label>
-      <input value={ownerName} onChange={(e) => setOwner(e.target.value)}
-        placeholder="Sunita Devi"
-        className="panel mt-2 w-full px-4 py-3 outline-none" />
+      {err && (
+        <p className="mt-5 rounded-lg border border-[var(--hot)]/30 bg-[var(--hot)]/8 px-3 py-2.5 text-sm text-[var(--hot)]">
+          {err}
+        </p>
+      )}
 
-      <label className="muted mt-4 block text-sm">Mobile number</label>
-      <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="numeric"
-        placeholder="98765 43210"
-        className="panel mt-2 w-full px-4 py-3 outline-none" />
-
-      {err && <p className="mt-4 text-sm text-[var(--warn)]">{err}</p>}
-
-      <button onClick={submit} disabled={!ready || busy}
-        className="mt-6 rounded-lg bg-[var(--accent)] px-5 py-3 font-medium text-black disabled:opacity-40">
+      <button
+        onClick={submit}
+        disabled={!ready || busy}
+        className="auth-cta mt-7 w-full py-3.5 text-[15px] font-semibold"
+      >
         {busy ? 'Rukiye...' : 'Register karein'}
       </button>
 
-      <Link href="/login" className="muted mt-4 text-sm hover:text-[var(--accent)]">
-        Pehle se account hai? Login
-      </Link>
-    </main>
+      <p className="muted mt-6 text-sm">
+        Pehle se account hai?{' '}
+        <Link href="/login" className="font-medium text-[var(--ink)] underline underline-offset-4 hover:text-[var(--hot)]">
+          Login
+        </Link>
+      </p>
+    </AuthSplit>
   );
 }

@@ -893,3 +893,147 @@ html, body {
   .mark-bar { animation: none; transform: scaleY(0.72); }
   .corner-dot { animation: none; }
 }
+
+/* --- auth screens -----------------------------------------------------
+   Signup and login are a split: the form on cream at left, and at right a
+   dark stage carrying the argument for signing up at all.
+
+   The argument is made in line art, not in copy. One object -- the steel
+   jar every Indian kitchen keeps its atta in -- drawn twice. Empty on the
+   left, refilled on the right. Two words underneath and one sentence at
+   the bottom, and that is the whole panel.
+   --------------------------------------------------------------------- */
+
+.auth-stage {
+  background: var(--ink);
+  position: relative;
+  overflow: hidden;
+}
+
+/* faint dot field for depth */
+.auth-stage::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(#fffdf9 1px, transparent 1px);
+  background-size: 26px 26px;
+  opacity: 0.045;
+  pointer-events: none;
+}
+
+/* a pool of warmth under the second jar, so the eye ends on the fix */
+.auth-stage::after {
+  content: '';
+  position: absolute;
+  left: 62%;
+  top: 50%;
+  width: 90%;
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, #ff6c4c1f 0%, transparent 58%);
+  pointer-events: none;
+}
+
+/* ---- the line work ---- */
+.jar-line {
+  fill: none;
+  stroke: var(--bg);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.jar-dim { opacity: 0.34; }
+.jar-lit { opacity: 1; }
+
+/* the level it used to sit at, on the empty jar */
+.jar-was {
+  fill: none;
+  stroke: var(--bg);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 5;
+  opacity: 0.28;
+}
+
+/* contents draining away and staying away */
+@keyframes jar-drain {
+  0%, 10%   { transform: scaleY(1); }
+  55%, 100% { transform: scaleY(0.04); }
+}
+.jar-drain {
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: jar-drain 9s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+}
+
+/* and on the other jar, coming back */
+@keyframes jar-refill {
+  0%, 24%   { transform: scaleY(0.04); }
+  62%, 100% { transform: scaleY(1); }
+}
+.jar-refill {
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: jar-refill 9s cubic-bezier(0.4, 0, 0.3, 1) infinite;
+}
+
+/* the call going out, drawn as arcs leaving the jar */
+@keyframes jar-ping {
+  0%, 12%  { opacity: 0; transform: translateX(-5px); }
+  30%      { opacity: 1; transform: none; }
+  62%, 100% { opacity: 0; transform: translateX(5px); }
+}
+.jar-ping { animation: jar-ping 9s ease-in-out infinite; }
+
+/* the turn between the two states */
+@keyframes auth-arrow {
+  0%, 22%   { opacity: 0.25; transform: translateX(-5px); }
+  46%, 84%  { opacity: 1; transform: translateX(5px); }
+  96%, 100% { opacity: 0.25; transform: translateX(-5px); }
+}
+.auth-arrow { animation: auth-arrow 9s ease-in-out infinite; }
+
+/* ---- form chrome ---- */
+.auth-field {
+  width: 100%;
+  background: var(--panel);
+  border: 1.5px solid var(--line-2);
+  border-radius: 12px;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.auth-field::placeholder { color: var(--faint); }
+.auth-field:focus {
+  outline: none;
+  border-color: var(--ink);
+  box-shadow: 0 0 0 3px #ff6c4c33;
+}
+
+/* Lavender fill on a hard ink shadow, the same object language the rest of
+   the site uses for anything solid. The shadow collapses as the button is
+   pressed, so it reads as physically going down. */
+.auth-cta {
+  background: var(--accent);
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  box-shadow: 4px 4px 0 var(--ink);
+  transition: transform 0.14s ease, box-shadow 0.14s ease, opacity 0.14s ease;
+}
+.auth-cta:not(:disabled):hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 5px 5px 0 var(--ink);
+}
+.auth-cta:not(:disabled):active {
+  transform: translate(4px, 4px);
+  box-shadow: 0 0 0 var(--ink);
+}
+.auth-cta:disabled {
+  opacity: 0.4;
+  box-shadow: 4px 4px 0 var(--line-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jar-drain  { animation: none; transform: scaleY(0.04); }
+  .jar-refill { animation: none; transform: scaleY(1); }
+  .jar-ping   { animation: none; opacity: 1; transform: none; }
+  .auth-arrow { animation: none; opacity: 1; transform: none; }
+}

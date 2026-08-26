@@ -4,6 +4,7 @@ import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { post } from '@/lib/api';
+import { AuthSplit } from '@/components/AuthSplit';
 
 /**
  * Phone plus OTP. No password anywhere in this product, because a shop owner
@@ -21,74 +22,155 @@ function LoginInner() {
   const router = useRouter();
 
   async function sendOtp() {
-    setBusy(true); setErr(null);
+    setBusy(true);
+    setErr(null);
     try {
       const r = await post<{ sent: boolean; devOtp?: string }>('/auth/otp', { phone });
       setDevOtp(r.devOtp ?? null);
       setStep('otp');
-    } catch (e) { setErr((e as Error).message); }
-    finally { setBusy(false); }
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function verify() {
-    setBusy(true); setErr(null);
+    setBusy(true);
+    setErr(null);
     try {
       await post('/auth/verify', { phone, otp });
       router.push('/dashboard');
-    } catch (e) { setErr((e as Error).message); }
-    finally { setBusy(false); }
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
 
-  return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6">
-      <p className="muted text-sm tracking-widest uppercase">Nukkad</p>
-      <h1 className="mt-3 text-2xl font-semibold">Dukaan login</h1>
+  const error = err && (
+    <p className="mt-5 rounded-lg border border-[var(--hot)]/30 bg-[var(--hot)]/8 px-3 py-2.5 text-sm text-[var(--hot)]">
+      {err}
+    </p>
+  );
 
+  return (
+    <AuthSplit>
       {step === 'phone' ? (
         <>
-          <label className="muted mt-8 block text-sm">Mobile number</label>
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="numeric"
-            onKeyDown={(e) => { if (e.key === 'Enter' && !busy) void sendOtp(); }}
-            placeholder="98765 43210"
-            className="panel mt-2 w-full px-4 py-3 outline-none" />
-          {err && <p className="mt-4 text-sm text-[var(--warn)]">{err}</p>}
-          <button onClick={sendOtp} disabled={phone.replace(/\D/g, '').length < 10 || busy}
-            className="mt-4 rounded-lg bg-[var(--accent)] px-5 py-3 font-medium text-black disabled:opacity-40">
+          <h1 className="display text-[clamp(2rem,4vw,2.6rem)]">Dukaan login</h1>
+          <p className="muted mt-3 text-[15px] leading-relaxed">
+            Number daaliye. OTP SMS par aa jayega.
+          </p>
+
+          <div className="mt-9">
+            <label
+              htmlFor="phone"
+              className="mb-2 block text-[13px] font-medium text-[var(--muted)]"
+            >
+              Mobile number
+            </label>
+            <input
+              id="phone"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              inputMode="numeric"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !busy) void sendOtp();
+              }}
+              placeholder="98765 43210"
+              className="auth-field px-4 py-3.5 text-[15px]"
+            />
+          </div>
+
+          {error}
+
+          <button
+            onClick={sendOtp}
+            disabled={phone.replace(/\D/g, '').length < 10 || busy}
+            className="auth-cta mt-7 w-full py-3.5 text-[15px] font-semibold"
+          >
             {busy ? 'Bhej rahe hain...' : 'OTP bhejo'}
           </button>
-          <Link href="/signup" className="muted mt-4 text-sm hover:text-[var(--accent)]">
-            Nayi dukaan register karein
-          </Link>
+
+          <p className="muted mt-6 text-sm">
+            Nayi dukaan hai?{' '}
+            <Link
+              href="/signup"
+              className="font-medium text-[var(--ink)] underline underline-offset-4 hover:text-[var(--hot)]"
+            >
+              Register karein
+            </Link>
+          </p>
         </>
       ) : (
         <>
-          <label className="muted mt-8 block text-sm">OTP</label>
-          <input value={otp} onChange={(e) => setOtp(e.target.value)} inputMode="numeric" maxLength={6}
-            onKeyDown={(e) => { if (e.key === 'Enter' && otp.length === 6 && !busy) void verify(); }}
-            placeholder="000000"
-            className="panel mt-2 w-full px-4 py-3 tracking-[0.4em] outline-none" />
+          <h1 className="display text-[clamp(2rem,4vw,2.6rem)]">OTP daaliye</h1>
+          <p className="muted mt-3 text-[15px] leading-relaxed">
+            Chah ank ka code bheja hai{' '}
+            <span className="font-medium text-[var(--ink)]">{phone}</span> par.
+          </p>
+
+          <div className="mt-9">
+            <label
+              htmlFor="otp"
+              className="mb-2 block text-[13px] font-medium text-[var(--muted)]"
+            >
+              OTP
+            </label>
+            <input
+              id="otp"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+              inputMode="numeric"
+              maxLength={6}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && otp.length === 6 && !busy) void verify();
+              }}
+              placeholder="000000"
+              className="auth-field px-4 py-3.5 text-center text-[22px] tracking-[0.5em] tabular-nums"
+            />
+          </div>
 
           {devOtp && (
-            <p className="muted mt-3 text-xs">
-              Dev mode: OTP is <span className="text-[var(--accent)]">{devOtp}</span>.
-              In production this arrives by SMS and is never shown here.
+            <p className="muted mt-4 rounded-lg border border-[var(--line)] bg-[var(--sand)]/60 px-3 py-2.5 text-xs leading-relaxed">
+              Dev mode: OTP is{' '}
+              <span className="font-semibold text-[var(--ink)]">{devOtp}</span>. In
+              production this arrives by SMS and is never shown here.
             </p>
           )}
-          {err && <p className="mt-4 text-sm text-[var(--warn)]">{err}</p>}
 
-          <button onClick={verify} disabled={otp.length !== 6 || busy}
-            className="mt-4 rounded-lg bg-[var(--accent)] px-5 py-3 font-medium text-black disabled:opacity-40">
+          {error}
+
+          <button
+            onClick={verify}
+            disabled={otp.length !== 6 || busy}
+            className="auth-cta mt-7 w-full py-3.5 text-[15px] font-semibold"
+          >
             {busy ? 'Check kar rahe hain...' : 'Login'}
           </button>
-          <button onClick={() => { setStep('phone'); setErr(null); }} className="muted mt-3 text-sm">
-            Number badlein
+
+          <button
+            onClick={() => {
+              setStep('phone');
+              setOtp('');
+              setErr(null);
+            }}
+            className="muted mt-6 text-sm hover:text-[var(--hot)]"
+          >
+            &larr; Number badlein
           </button>
         </>
       )}
-    </main>
+    </AuthSplit>
   );
 }
 
 export default function Login() {
-  return <Suspense fallback={null}><LoginInner /></Suspense>;
+  return (
+    <Suspense fallback={null}>
+      <LoginInner />
+    </Suspense>
+  );
 }
