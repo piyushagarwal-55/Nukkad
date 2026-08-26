@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useState } from 'react';
 import { get, rupees } from '@/lib/api';
+import { RowsSkeleton } from '@/components/Loading';
 
 interface Line {
   name: string; quantity: number; linePaise: number;
@@ -28,7 +29,7 @@ export default function Orders() {
   }, []);
 
   if (err) return <p className="text-[var(--warn)]">{err}</p>;
-  if (!orders) return <p className="muted text-sm">Loading...</p>;
+  if (!orders) return <RowsSkeleton rows={8} />;
 
   return (
     <>

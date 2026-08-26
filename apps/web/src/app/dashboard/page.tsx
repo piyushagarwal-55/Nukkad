@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { get, rupees } from '@/lib/api';
+import { OverviewSkeleton, Skel } from '@/components/Loading';
 
 /* ------------------------------------------------------------------ types */
 interface Day {
@@ -279,7 +280,7 @@ export default function Overview() {
   }, [a, win]);
 
   if (err) return <p className="text-[var(--warn)]">{err}</p>;
-  if (!a) return <p className="muted text-sm">Loading…</p>;
+  if (!a) return <OverviewSkeleton />;
 
   const avg = shown.orders ? Math.round(shown.paise / shown.orders) : 0;
   const spark = win === 'last7' ? a.series.slice(-7) : a.series;
@@ -388,7 +389,12 @@ export default function Overview() {
           </div>
 
           {!detail ? (
-            <p className="muted mt-4 text-sm">Loading…</p>
+            <div className="mt-4 space-y-3">
+              <Skel className="h-10 w-40" />
+              {[0, 1, 2].map((i) => (
+                <Skel key={i} className="h-5 w-full" />
+              ))}
+            </div>
           ) : (
             <>
               <p className="display mt-3 text-[40px] leading-none">

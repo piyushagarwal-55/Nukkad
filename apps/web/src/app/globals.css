@@ -1198,3 +1198,84 @@ html, body {
   .tile:hover,
   .cal-cell[data-has='true']:hover { transform: none; }
 }
+
+/* --- loading ----------------------------------------------------------
+   Two kinds, for two different waits.
+
+   THE SPLASH is for the session check, where nothing about the page can
+   be drawn yet because we do not know who is asking. It is the voice mark
+   speaking, which is the one thing that is true regardless of the answer.
+
+   SKELETONS are for everything after that, where the shape of the answer
+   IS known. A skeleton that matches the real layout means the page does
+   not jump when the data lands, and the eye has already found the columns
+   before there is anything in them.
+
+   Both are held back for a beat by useDelayed() in Loading.tsx. A request
+   that returns in 120ms should show nothing at all rather than flashing a
+   loader, which reads as jank rather than as speed.
+   --------------------------------------------------------------------- */
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.load-in { animation: fade-up 0.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* the rail under the splash mark. A coral segment crossing a sand track,
+   indeterminate on purpose: we cannot know how long auth will take, and a
+   percentage bar that lies is worse than one that does not claim to know. */
+@keyframes boot-rail {
+  0%   { transform: translateX(-100%) scaleX(0.45); }
+  50%  { transform: translateX(0%) scaleX(0.7); }
+  100% { transform: translateX(220%) scaleX(0.45); }
+}
+.boot-rail {
+  height: 3px;
+  width: 132px;
+  border-radius: 999px;
+  background: var(--sand);
+  overflow: hidden;
+  position: relative;
+}
+.boot-rail::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--hot);
+  transform-origin: left;
+  animation: boot-rail 1.35s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+/* ---- skeletons ----
+   Sand base with a lighter sweep across it. Cream on cream would be
+   invisible for the same reason the old dashboard cards were. */
+@keyframes skel-sweep {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+.skel {
+  border-radius: 8px;
+  background-color: var(--sand);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    #fffdf9b8 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: skel-sweep 1.6s ease-in-out infinite;
+}
+/* on the ink block the sweep has to go the other way: light base, and a
+   darker gap moving through it */
+.skel-inv {
+  background-color: #fffdf926;
+  background-image: linear-gradient(90deg, transparent 0%, #fffdf933 50%, transparent 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-rail::after { animation: none; transform: scaleX(0.5); }
+  .skel { animation: none; background-image: none; }
+  .load-in { animation: none; }
+}

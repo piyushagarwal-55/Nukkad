@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { API, get, post } from '@/lib/api';
+import { RowsSkeleton } from '@/components/Loading';
 
 interface Connect {
   counterQrUrl: string;
@@ -73,7 +74,7 @@ export default function Connect() {
   }
 
   if (err) return <p className="text-[var(--warn)]">{err}</p>;
-  if (!c) return <p className="muted text-sm">Loading…</p>;
+  if (!c) return <RowsSkeleton rows={5} />;
 
   return (
     <>

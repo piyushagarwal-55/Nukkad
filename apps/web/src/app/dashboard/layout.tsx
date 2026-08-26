@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { get, type Me } from '@/lib/api';
 import { RailProvider, Sidebar, MobileNav } from '@/components/Sidebar';
+import { BootSplash } from '@/components/Loading';
 
 /**
  * No page header. The shop name lives at the foot of the rail and the
@@ -23,7 +24,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       .finally(() => setChecked(true));
   }, [router]);
 
-  if (!checked) return <div className="muted p-8 text-sm">Loading…</div>;
+  if (!checked) return <BootSplash />;
   if (!me) return null;
 
   return (

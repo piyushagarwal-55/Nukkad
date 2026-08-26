@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { get, patch, post, rupees } from '@/lib/api';
+import { RowsSkeleton } from '@/components/Loading';
 
 /**
  * The CORRECTION surface, not the entry surface. Nobody types 400 SKUs here.
@@ -32,7 +33,7 @@ export default function Catalogue() {
   }
 
   if (err) return <p className="text-[var(--warn)]">{err}</p>;
-  if (!skus) return <p className="muted text-sm">Loading...</p>;
+  if (!skus) return <RowsSkeleton rows={9} />;
 
   if (!skus.length) {
     return (
