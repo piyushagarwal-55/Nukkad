@@ -58,9 +58,9 @@ function LoginInner() {
     <AuthSplit>
       {step === 'phone' ? (
         <>
-          <h1 className="display text-[clamp(2rem,4vw,2.6rem)]">Dukaan login</h1>
+          <h1 className="display text-[clamp(2rem,4vw,2.6rem)]">Log in to your shop</h1>
           <p className="muted mt-3 text-[15px] leading-relaxed">
-            Number daaliye. OTP SMS par aa jayega.
+            Enter your number and we will text you a code.
           </p>
 
           <div className="mt-9">
@@ -90,25 +90,25 @@ function LoginInner() {
             disabled={phone.replace(/\D/g, '').length < 10 || busy}
             className="auth-cta mt-7 w-full py-3.5 text-[15px] font-semibold"
           >
-            {busy ? 'Bhej rahe hain...' : 'OTP bhejo'}
+            {busy ? 'Sending…' : 'Send code'}
           </button>
 
           <p className="muted mt-6 text-sm">
-            Nayi dukaan hai?{' '}
+            New shop?{' '}
             <Link
               href="/signup"
               className="font-medium text-[var(--ink)] underline underline-offset-4 hover:text-[var(--hot)]"
             >
-              Register karein
+              Register it
             </Link>
           </p>
         </>
       ) : (
         <>
-          <h1 className="display text-[clamp(2rem,4vw,2.6rem)]">OTP daaliye</h1>
+          <h1 className="display text-[clamp(2rem,4vw,2.6rem)]">Enter the code</h1>
           <p className="muted mt-3 text-[15px] leading-relaxed">
-            Chah ank ka code bheja hai{' '}
-            <span className="font-medium text-[var(--ink)]">{phone}</span> par.
+            We sent a six digit code to{' '}
+            <span className="font-medium text-[var(--ink)]">{phone}</span>.
           </p>
 
           <div className="mt-9">
@@ -116,7 +116,7 @@ function LoginInner() {
               htmlFor="otp"
               className="mb-2 block text-[13px] font-medium text-[var(--muted)]"
             >
-              OTP
+              Code
             </label>
             <input
               id="otp"
@@ -135,7 +135,7 @@ function LoginInner() {
 
           {devOtp && (
             <p className="muted mt-4 rounded-lg border border-[var(--line)] bg-[var(--sand)]/60 px-3 py-2.5 text-xs leading-relaxed">
-              Dev mode: OTP is{' '}
+              Dev mode: the code is{' '}
               <span className="font-semibold text-[var(--ink)]">{devOtp}</span>. In
               production this arrives by SMS and is never shown here.
             </p>
@@ -148,7 +148,7 @@ function LoginInner() {
             disabled={otp.length !== 6 || busy}
             className="auth-cta mt-7 w-full py-3.5 text-[15px] font-semibold"
           >
-            {busy ? 'Check kar rahe hain...' : 'Login'}
+            {busy ? 'Checking…' : 'Log in'}
           </button>
 
           <button
@@ -159,7 +159,7 @@ function LoginInner() {
             }}
             className="muted mt-6 text-sm hover:text-[var(--hot)]"
           >
-            &larr; Number badlein
+            &larr; Use a different number
           </button>
         </>
       )}

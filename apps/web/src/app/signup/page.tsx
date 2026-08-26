@@ -9,13 +9,13 @@ import { AuthSplit } from '@/components/AuthSplit';
 const FIELDS = [
   {
     key: 'shopName' as const,
-    label: 'Dukaan ka naam',
+    label: 'Shop name',
     placeholder: 'Sunita Kirana Store',
     inputMode: undefined,
   },
   {
     key: 'ownerName' as const,
-    label: 'Aapka naam',
+    label: 'Your name',
     placeholder: 'Sunita Devi',
     inputMode: undefined,
   },
@@ -54,10 +54,11 @@ export default function Signup() {
   return (
     <AuthSplit>
       <h1 className="display text-[clamp(2rem,4vw,2.6rem)]">
-        Dukaan register kijiye
+        Register your shop
       </h1>
       <p className="muted mt-3 text-[15px] leading-relaxed">
-        Do minute lagenge. Koi password nahi, koi app download nahi.
+        Two minutes, and no password to remember. You sign in with your
+        phone, the same way you do everywhere else.
       </p>
 
       <div className="mt-9 space-y-5">
@@ -95,11 +96,11 @@ export default function Signup() {
         disabled={!ready || busy}
         className="auth-cta mt-7 w-full py-3.5 text-[15px] font-semibold"
       >
-        {busy ? 'Rukiye...' : 'Register karein'}
+        {busy ? 'Creating…' : 'Create shop'}
       </button>
 
       <p className="muted mt-6 text-sm">
-        Pehle se account hai?{' '}
+        Already registered?{' '}
         <Link href="/login" className="font-medium text-[var(--ink)] underline underline-offset-4 hover:text-[var(--hot)]">
           Login
         </Link>

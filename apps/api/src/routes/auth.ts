@@ -36,7 +36,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     const phone = toE164(parsed.data.phone);
     if (await prisma.shopUser.findUnique({ where: { phone } })) {
-      return reply.code(409).send({ error: 'Is number par dukaan already registered hai. Login kijiye.' });
+      return reply.code(409).send({ error: 'A shop is already registered on this number. Log in instead.' });
     }
 
     const kirana = await prisma.kirana.create({
@@ -66,7 +66,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     const phone = toE164(parsed.data.phone);
     const user = await prisma.shopUser.findUnique({ where: { phone } });
-    if (!user) return reply.code(404).send({ error: 'Ye number registered nahi hai. Pehle signup kijiye.' });
+    if (!user) return reply.code(404).send({ error: 'That number is not registered. Create a shop first.' });
 
     const otp = newOtp();
     await prisma.shopUser.update({
@@ -89,13 +89,13 @@ export async function authRoutes(app: FastifyInstance) {
     const user = await prisma.shopUser.findUnique({ where: { phone }, include: { kirana: true } });
 
     if (!user?.otpHash || !user.otpSentAt) {
-      return reply.code(400).send({ error: 'Pehle OTP mangwaiye.' });
+      return reply.code(400).send({ error: 'Request a code first.' });
     }
     if (Date.now() - user.otpSentAt.getTime() > OTP_TTL_MS) {
-      return reply.code(400).send({ error: 'OTP expire ho gaya. Naya mangwaiye.' });
+      return reply.code(400).send({ error: 'That code has expired. Request a new one.' });
     }
     if (hashOtp(parsed.data.otp) !== user.otpHash) {
-      return reply.code(401).send({ error: 'Galat OTP.' });
+      return reply.code(401).send({ error: 'That code is not right.' });
     }
 
     // single use

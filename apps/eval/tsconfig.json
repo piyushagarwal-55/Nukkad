@@ -1,6 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "outDir": "dist", "rootDir": "src", "strict": true },
+  // No rootDir on purpose. The harness imports the REAL pipeline out of
+  // apps/api rather than a copy, which is the whole point of it -- a harness
+  // scoring a reimplementation proves nothing. rootDir would demand every
+  // source file live under src/, and it constrains emit layout only, which
+  // never happens here: this package runs through tsx and type-checks with
+  // --noEmit.
+  "compilerOptions": { "outDir": "dist", "strict": true },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }

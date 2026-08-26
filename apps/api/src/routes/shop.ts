@@ -4,7 +4,14 @@ import { z } from 'zod';
 import { prisma } from '@nukkad/db';
 import { env } from '../config/env.js';
 import { requireSession } from './auth.js';
+import { toE164, maskPhone } from '../lib/phone.js';
 import { invalidateCatalog } from '../services/catalog/cache.js';
+
+const newHousehold = z.object({
+  name: z.string().min(2),
+  phone: z.string().min(10),
+  memberCount: z.number().int().min(1).max(30).optional(),
+});
 
 const patchSku = z.object({
   sellPaise: z.number().int().nonnegative().optional(),
@@ -125,6 +132,49 @@ export async function shopRoutes(app: FastifyInstance) {
         streak: h.streak, orders: h._count.orders,
       })),
     };
+  });
+
+  /**
+   * Register a customer against THIS shop.
+   *
+   * Without this there is no way to create a household outside the seed
+   * script, which means a shop that signs up through the web form can
+   * never receive a message: conversation/core.ts resolves the household
+   * by (kiranaId, phone) and bails when it finds nothing.
+   *
+   * The number is normalised through toE164 on the way in, because that is
+   * exactly what the Twilio adapter does to the inbound `From` field. If
+   * these two disagree by so much as a `whatsapp:` prefix the lookup misses
+   * and the shop sits there silently.
+   */
+  app.post('/households', async (req, reply) => {
+    const { kiranaId } = requireSession(req);
+    const parsed = newHousehold.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message });
+    }
+
+    const phone = toE164(parsed.data.phone);
+
+    // scoped to this shop, so the same customer can belong to two kiranas
+    const clash = await prisma.household.findUnique({
+      where: { kiranaId_phone: { kiranaId, phone } },
+    });
+    if (clash) {
+      return reply.code(409).send({ error: 'That number is already a customer here.' });
+    }
+
+    const hh = await prisma.household.create({
+      data: {
+        kiranaId,
+        name: parsed.data.name,
+        phone,
+        memberCount: parsed.data.memberCount ?? 4,
+      },
+    });
+
+    app.log.info({ kiranaId, phone: maskPhone(phone) }, 'household added');
+    return { ok: true, id: hh.id, name: hh.name, phone: hh.phone };
   });
 
   /**
