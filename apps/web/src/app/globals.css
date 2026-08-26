@@ -1037,3 +1037,164 @@ html, body {
   .jar-ping   { animation: none; opacity: 1; transform: none; }
   .auth-arrow { animation: none; opacity: 1; transform: none; }
 }
+
+/* --- dashboard shell --------------------------------------------------
+   The dashboard borrows the landing page's object language rather than
+   inventing an admin one.
+
+   THE RULE THAT MATTERS: no surface may be the same colour as the page.
+   --panel (#fffdf9) on --bg (#ffffeb) is a difference you cannot see, so
+   a grid of panel-coloured cards reads as a stack of empty outlines. Every
+   surface here therefore commits to a real colour -- ink, lavender, pink,
+   amber, sand -- and the palette carries the hierarchy instead of borders.
+   --------------------------------------------------------------------- */
+
+/* ---- the rail ---- */
+.rail {
+  background: var(--sand);
+  border-right: 2px solid var(--ink);
+}
+.rail-item {
+  border-radius: 10px;
+  border: 2px solid transparent;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+.rail-item:hover { background: #1a1a1a0f; }
+.rail-item[data-active='true'] {
+  background: var(--accent);
+  border-color: var(--ink);
+  box-shadow: 2px 2px 0 var(--ink);
+}
+/* the label slides out of the icon rather than just fading, so the rail
+   reads as widening rather than as text appearing on top of it */
+.rail-label { transition: opacity 0.2s ease, transform 0.2s ease; }
+.rail-label[data-shown='false'] {
+  opacity: 0;
+  transform: translateX(-8px);
+  pointer-events: none;
+}
+
+/* ---- surfaces ----
+   One shape, five colours. `.pane` is the neutral one and still steps away
+   from the page because it is sand, not panel. */
+.pane {
+  background: var(--sand);
+  border: 2px solid var(--ink);
+  border-radius: 18px;
+}
+.pane-ink {
+  background: var(--ink);
+  color: var(--bg);
+  border-radius: 18px;
+}
+
+/* the small stat blocks. Flat colour, ink type, hard shadow. */
+.tile {
+  border: 2px solid var(--ink);
+  border-radius: 16px;
+  box-shadow: 4px 4px 0 var(--ink);
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+.tile:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 6px 6px 0 var(--ink);
+}
+.tile-1 { background: var(--accent); }
+.tile-2 { background: var(--pink); }
+.tile-3 { background: var(--amber); }
+
+/* ---- segmented filter, sitting on ink ---- */
+.seg-pill {
+  border: 1.5px solid #fffdf940;
+  border-radius: 999px;
+  background: #fffdf90f;
+  padding: 3px;
+}
+.seg-btn {
+  border-radius: 999px;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #fffdf98c;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+.seg-btn[data-on='true'] { background: var(--bg); color: var(--ink); }
+.seg-btn[data-on='false']:hover { color: var(--bg); background: #fffdf91a; }
+
+/* ---- sparkline, inside the ink block ---- */
+.spark-bar {
+  background: #fffdf940;
+  border-radius: 3px 3px 0 0;
+  transition: background 0.14s ease;
+  min-height: 2px;
+}
+.spark-col:hover .spark-bar { background: var(--hot); }
+.spark-col[data-on='true'] .spark-bar { background: var(--hot); }
+
+/* ---- the donut ----
+   Each arc grows from nothing on load, the only motion here that is not a
+   hover response.
+
+   It animates stroke-dasharray, NOT stroke-dashoffset. Offset already
+   carries each arc's start angle around the circle, so animating it would
+   spin the segments through each other instead of drawing them. */
+@keyframes donut-draw {
+  from { stroke-dasharray: 0 var(--circ); }
+  to   { stroke-dasharray: var(--dash) var(--circ); }
+}
+.donut-arc {
+  animation: donut-draw 1.1s cubic-bezier(0.3, 0, 0.2, 1) both;
+  transition: opacity 0.18s ease, stroke-width 0.18s ease;
+  cursor: pointer;
+}
+.donut-arc[data-dim='true'] { opacity: 0.22; }
+.donut-arc[data-on='true'] { stroke-width: 30; }
+
+.legend-row {
+  border-radius: 9px;
+  border: 2px solid transparent;
+  transition: background 0.16s ease, border-color 0.16s ease;
+  cursor: pointer;
+}
+.legend-row:hover { background: #1a1a1a0d; }
+.legend-row[data-on='true'] { background: var(--panel); border-color: var(--ink); }
+
+/* ---- calendar ---- */
+.cal-cell {
+  aspect-ratio: 1;
+  border-radius: 10px;
+  border: 1.5px solid #1a1a1a1f;
+  background: #fffdf980;
+  transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease;
+}
+.cal-cell[data-has='true'] { border-color: var(--ink); cursor: pointer; }
+.cal-cell[data-has='true']:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 3px 3px 0 var(--ink);
+}
+.cal-cell[data-sel='true'] {
+  border-color: var(--ink);
+  box-shadow: 3px 3px 0 var(--hot);
+  transform: translate(-2px, -2px);
+}
+.cal-cell[data-today='true'] { outline: 2px dashed var(--hot); outline-offset: 2px; }
+
+/* intensity ramp, so a busy day reads before the number inside it does */
+.cal-i1 { background: #ff6c4c2b; }
+.cal-i2 { background: #ff6c4c4d; }
+.cal-i3 { background: #ff6c4c73; }
+.cal-i4 { background: #ff6c4c9e; }
+
+/* ---- entrance ---- */
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+.card-in { animation: card-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .donut-arc { animation: none; stroke-dasharray: var(--dash) var(--circ); }
+  .card-in { animation: none; }
+  .tile:hover,
+  .cal-cell[data-has='true']:hover { transform: none; }
+}

@@ -12,6 +12,7 @@ import { razorpayRoutes } from './routes/razorpay.js';
 import { billRoutes } from './routes/bills.js';
 import { authRoutes } from './routes/auth.js';
 import { shopRoutes } from './routes/shop.js';
+import { analyticsRoutes } from './routes/analytics.js';
 
 const app = Fastify({ logger: loggerConfig, bodyLimit: 20 * 1024 * 1024 });
 
@@ -30,6 +31,7 @@ await app.register(razorpayRoutes);
 await app.register(billRoutes);
 await app.register(authRoutes);
 await app.register(shopRoutes);
+await app.register(analyticsRoutes);
 
 try {
   await app.listen({ port: env.PORT, host: '0.0.0.0' });
