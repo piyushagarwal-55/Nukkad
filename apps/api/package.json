@@ -1,0 +1,42 @@
+{
+  "name": "@nukkad/api",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "dotenv -e ../../.env -- tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "worker:nudge": "dotenv -e ../../.env -- tsx src/workers/nudge-scheduler.ts",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "smoke": "dotenv -e ../../.env -- tsx src/scripts/smoke.ts"
+  },
+  "dependencies": {
+    "@nukkad/db": "*",
+    "@nukkad/shared": "*",
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/cors": "^10.0.0",
+    "@fastify/formbody": "^8.0.0",
+    "@fastify/multipart": "^9.4.0",
+    "@fastify/static": "^9.0.0",
+    "dotenv": "^16.4.0",
+    "fastify": "^5.2.0",
+    "fastify-plugin": "^5.0.0",
+    "openai": "^6.32.0",
+    "pino-pretty": "^13.0.0",
+    "qrcode": "^1.5.4",
+    "razorpay": "^2.9.6",
+    "twilio": "^5.4.0",
+    "undici": "^7.24.4",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "@types/qrcode": "^1.5.6",
+    "dotenv-cli": "^11.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
