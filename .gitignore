@@ -1,0 +1,20 @@
+.env
+.env.local
+*.env
+!.env.example
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+media/
+tmp/
+dist/
+.next/
+*.log
+.DS_Store
+
+# build artifacts
+*.tsbuildinfo
+next-env.d.ts
+.turbo/

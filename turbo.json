@@ -1,0 +1,25 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": [".env"],
+  "globalPassThroughEnv": [
+    "DATABASE_URL", "DIRECT_URL",
+    "GROQ_API_KEY", "GROQ_BASE_URL", "GROQ_ASR_MODEL", "GROQ_ASR_MODEL_FAST",
+    "GROQ_ASR_LANGUAGE", "GROQ_LLM_MODEL", "GROQ_LLM_MODEL_BIG", "GROQ_VISION_MODEL",
+    "SARVAM_API_KEY", "SARVAM_BASE_URL", "SARVAM_MODEL", "SARVAM_MODE",
+    "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_WHATSAPP_FROM",
+    "TWILIO_SANDBOX_JOIN_CODE",
+    "RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "RAZORPAY_WEBHOOK_SECRET",
+    "PUBLIC_BASE_URL", "PORT", "NODE_ENV",
+    "DEMO_HOUSEHOLD_NUMBER", "DEMO_KIRANA_NUMBER",
+    "NEXT_PUBLIC_API_URL"
+  ],
+  "tasks": {
+    "build":      { "dependsOn": ["^build"], "outputs": [".next/**", "dist/**"] },
+    "dev":        { "cache": false, "persistent": true },
+    "lint":       { "dependsOn": ["^build"] },
+    "type-check": { "dependsOn": ["^build"] },
+    "test":       { "dependsOn": ["^build"] },
+    "eval":       { "cache": false },
+    "clean":      { "cache": false }
+  }
+}
