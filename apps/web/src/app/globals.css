@@ -1369,3 +1369,60 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .inv-row, .chip, .chip-suggest, .inv-field { transition: none; }
 }
+
+/* --- bill agent -------------------------------------------------------
+   The review screen replays the graph. Each node reports what it decided
+   and how long it took, because an agent that writes to a shop catalogue
+   has to be auditable, and because watching it think is the clearest way
+   to show what it actually does.
+   --------------------------------------------------------------------- */
+
+.node-row {
+  border-left: 2px solid var(--line-2);
+  padding-left: 1rem;
+  position: relative;
+}
+.node-row::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 0.45rem;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--green);
+  border: 2px solid var(--panel);
+}
+.node-row[data-status=RETRY]::before { background: var(--amber); }
+.node-row[data-status=FAIL]::before  { background: var(--hot); }
+.node-row[data-status=SKIP]::before  { background: var(--faint); }
+.node-row:last-child { border-left-color: transparent; }
+
+/* nodes appear one after another, so the trace reads as a run */
+@keyframes node-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+.node-in { animation: node-in 0.34s ease both; }
+
+.badge {
+  border-radius: 999px;
+  border: 1.5px solid var(--ink);
+  padding: 0.05rem 0.5rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.badge-restock   { background: var(--green); color: var(--panel); }
+.badge-new       { background: var(--accent); }
+.badge-ambiguous { background: var(--amber); }
+.badge-skipped   { background: var(--sand); color: var(--muted); }
+
+.delta-up   { color: var(--hot); font-weight: 600; }
+.delta-down { color: var(--green); font-weight: 600; }
+
+/* confidence, as a bar rather than a number nobody calibrates */
+.conf-rail { height: 4px; border-radius: 999px; background: #1a1a1a1a; overflow: hidden; }
+.conf-fill { height: 100%; border-radius: 999px; background: var(--ink); }
+
+@media (prefers-reduced-motion: reduce) { .node-in { animation: none; } }

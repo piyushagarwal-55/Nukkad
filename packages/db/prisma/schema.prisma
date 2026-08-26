@@ -18,10 +18,10 @@ datasource db {
 // ---------------------------------------------------------------- enums
 
 enum AutonomyTier {
-  MANUAL     // 0. household messages when it wants
-  SUGGESTED  // 1. agent proposes, household taps confirm. DEFAULT.
-  STANDING   // 2. agent places it, household has a veto window
-  SILENT     // 3. locked staples basket under a rupee cap
+  MANUAL // 0. household messages when it wants
+  SUGGESTED // 1. agent proposes, household taps confirm. DEFAULT.
+  STANDING // 2. agent places it, household has a veto window
+  SILENT // 3. locked staples basket under a rupee cap
 }
 
 enum InputSource {
@@ -74,18 +74,34 @@ enum Direction {
   IN
   OUT
 }
+
 enum BillStatus {
   UPLOADED
   PARSED
+  PLANNED
   REVIEWED
   COMMITTED
   FAILED
 }
+
+/// What the agent decided to do with one line of a supplier bill.
+enum LineDecision {
+  /// matched a SKU already in this shop's catalogue: add quantity to it
+  RESTOCK
+  /// nothing close enough: create a new SKU
+  NEW
+  /// two or more plausible matches. The owner picks; we never guess.
+  AMBIGUOUS
+  /// a tax row, a discount line, or the grand total
+  SKIPPED
+}
+
 enum AliasSource {
   OWNER
   LLM_SUGGESTED
   LEARNED
 }
+
 enum PartyRole {
   HOUSEHOLD
   KIRANA
@@ -94,12 +110,12 @@ enum PartyRole {
 // ---------------------------------------------------------------- parties
 
 model Kirana {
-  id             String   @id @default(cuid())
-  name           String
-  ownerName      String?
-  phone          String   @unique
-  address        String?
-  createdAt      DateTime @default(now())
+  id        String   @id @default(cuid())
+  name      String
+  ownerName String?
+  phone     String   @unique
+  address   String?
+  createdAt DateTime @default(now())
 
   // --- per-shop WhatsApp connection, the multi-tenant boundary -------
   // Every shop gets its OWN number, own bot, own catalogue. Inbound is
@@ -112,11 +128,11 @@ model Kirana {
   //
   // NEVER onboard via Baileys / whatsapp-web.js QR pairing. Those
   // reverse-engineer WhatsApp Web, breach ToS, and get numbers banned.
-  whatsappNumber String?  @unique
+  whatsappNumber String?   @unique
   wabaId         String?
   phoneNumberId  String?
   // PENDING | QR_ISSUED | CONNECTED | FAILED
-  wabaStatus     String   @default("PENDING")
+  wabaStatus     String    @default("PENDING")
   onboardedAt    DateTime?
 
   households          Household[]
@@ -130,21 +146,21 @@ model Kirana {
 }
 
 model Household {
-  id          String       @id @default(cuid())
+  id          String  @id @default(cuid())
   kiranaId    String
   name        String
   phone       String
-  memberCount Int          @default(4)
+  memberCount Int     @default(4)
   address     String?
 
-  autonomyTier AutonomyTier @default(SUGGESTED)
+  autonomyTier   AutonomyTier @default(SUGGESTED)
   // consecutive correct predictions. Gates promotion to STANDING:
   // autonomy is EARNED by measured accuracy, per household.
-  streak       Int          @default(0)
+  streak         Int          @default(0)
   // tier 2 only: how long silence counts as consent
-  vetoWindowMins Int        @default(360)
+  vetoWindowMins Int          @default(360)
   // tier 3 only: hard rupee ceiling on a silent order
-  capPaise     Int?
+  capPaise       Int?
 
   createdAt DateTime @default(now())
 
@@ -162,22 +178,22 @@ model Household {
 // ---------------------------------------------------------------- catalogue
 
 model Sku {
-  id       String  @id @default(cuid())
-  kiranaId String
-  name     String
-  brand    String?
-  packSize Float   @default(1)
-  unit     String  @default("pc")
-  mrpPaise Int?
+  id        String   @id @default(cuid())
+  kiranaId  String
+  name      String
+  brand     String?
+  packSize  Float    @default(1)
+  unit      String   @default("pc")
+  mrpPaise  Int?
   sellPaise Int
-  category String?
+  category  String?
   // hand-added local names: "chakki atta", "peela tel". Feeds the matcher
   // and is the single cheapest accuracy win in the whole system.
-  aliases  String[] @default([])
-  active   Boolean  @default(true)
+  aliases   String[] @default([])
+  active    Boolean  @default(true)
   createdAt DateTime @default(now())
 
-  kirana     Kirana      @relation(fields: [kiranaId], references: [id], onDelete: Cascade)
+  kirana     Kirana             @relation(fields: [kiranaId], references: [id], onDelete: Cascade)
   stock      Stock?
   orderLines OrderLine[]
   burnRates  BurnRate[]
@@ -185,7 +201,7 @@ model Sku {
   billLines  SupplierBillLine[]
 
   // cost basis from the most recent supplier bill, so margin is computable
-  costPaise  Int?
+  costPaise Int?
 
   @@index([kiranaId, active])
 }
@@ -231,7 +247,7 @@ model Order {
 }
 
 model OrderLine {
-  id      String @id @default(cuid())
+  id      String  @id @default(cuid())
   orderId String
   skuId   String?
 
@@ -250,7 +266,7 @@ model OrderLine {
   wasSubstituted       Boolean @default(false)
   substitutedFromSkuId String?
   // top-k alternates as offered, so a rejected suggestion is still analysable
-  alternatesJson Json?
+  alternatesJson       Json?
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
   sku   Sku?  @relation(fields: [skuId], references: [id])
@@ -261,8 +277,8 @@ model OrderLine {
 // ---------------------------------------------------------------- money
 
 model Invoice {
-  id          String        @id @default(cuid())
-  orderId     String        @unique
+  id          String @id @default(cuid())
+  orderId     String @unique
   kiranaId    String
   householdId String
 
@@ -276,7 +292,7 @@ model Invoice {
   referenceId      String  @unique
 
   // Partial payment IS the udhaar mechanic, and it needs no beta access.
-  acceptPartial       Boolean @default(true)
+  acceptPartial        Boolean @default(true)
   firstMinPartialPaise Int?
 
   expiresAt DateTime?
@@ -390,7 +406,7 @@ model Conversation {
   state       ConversationState @default(IDLE)
   contextJson Json?
 
-  lastInboundAt DateTime?
+  lastInboundAt   DateTime?
   // Meta's 24h session window. Past this, only a pre-approved TEMPLATE may
   // be sent. The scheduler MUST check this before composing anything.
   windowExpiresAt DateTime?
@@ -439,35 +455,31 @@ model WebhookEvent {
   @@unique([source, externalId])
 }
 
-
 // ---------------------------------------------------------------- module 1
 
 // The shop owner's account. Deliberately thin: phone plus OTP is how this
 // user logs into everything else in their life.
 model ShopUser {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   kiranaId  String
-  phone     String   @unique
+  phone     String    @unique
   name      String?
   otpHash   String?
   otpSentAt DateTime?
   lastLogin DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   kirana Kirana @relation(fields: [kiranaId], references: [id], onDelete: Cascade)
 }
 
 /**
  * THE ONBOARDING WALL, SOLVED.
- *
  * Typing 400 SKUs at ~20s each is over two hours of a shop owner's evening,
  * and that wall is what kills every catalogue product in this segment.
  * Uploading six supplier bills is five minutes.
- *
  * A bill also carries more than a product list: quantity is stock received,
  * rate is COST price so margin becomes computable, and the date sequence is
  * the shop's own restock cadence with its distributor.
- *
  * CAVEAT THE ALIAS LAYER EXISTS TO SOLVE: a bill carries the TRADE's name
  * ("AASHIRVAAD ATTA 5KG"). A customer says "atta bhejo". That word is never
  * on the bill.
@@ -493,8 +505,12 @@ model SupplierBill {
   createdAt   DateTime  @default(now())
   committedAt DateTime?
 
-  kirana Kirana           @relation(fields: [kiranaId], references: [id], onDelete: Cascade)
+  kirana Kirana             @relation(fields: [kiranaId], references: [id], onDelete: Cascade)
   lines  SupplierBillLine[]
+  steps  BillAgentStep[]
+
+  /// milliseconds for the whole agent graph, parse included
+  agentMs Int?
 
   @@index([kiranaId, status])
 }
@@ -504,16 +520,37 @@ model SupplierBillLine {
   billId String
 
   // verbatim from the bill. Never overwrite, the review screen diffs on it.
-  rawName  String
-  quantity Float
+  rawName     String
+  quantity    Float
   ratePaise   Int
   amountPaise Int
 
   // filled in at review time when the owner links this to a catalogue SKU,
   // or when fuzzy matching finds an existing one above threshold
-  skuId       String?
-  createSku   Boolean @default(true)
-  matchScore  Float?
+  skuId      String?
+  createSku  Boolean @default(true)
+  matchScore Float?
+
+  // ---- what the reconciliation agent decided, and why -----------------
+  decision       LineDecision @default(NEW)
+  confidence     Float        @default(0)
+  /// one sentence, shown to the owner. An agent that cannot say why it
+  /// matched something is an agent nobody should let write to a catalogue.
+  reasoning      String?
+  /// every candidate the retriever returned, with its scores. Kept so the
+  /// review screen can show the runners-up and so a wrong call is auditable.
+  candidatesJson Json?
+
+  // ---- price movement -------------------------------------------------
+  /// ratePaise minus what this shop last paid. Positive means the supplier
+  /// put the price up. Null when the item is new.
+  priceDeltaPaise   Int?
+  /// proposed selling price, carried from the old margin rather than from a
+  /// flat markup, so a shop's own pricing survives a restock
+  proposedSellPaise Int?
+
+  /// subnames the alias agent proposes for this line, grounded in the KB
+  suggestedAliases String[] @default([])
 
   bill SupplierBill @relation(fields: [billId], references: [id], onDelete: Cascade)
   sku  Sku?         @relation(fields: [skuId], references: [id])
@@ -521,24 +558,76 @@ model SupplierBillLine {
   @@index([billId])
 }
 
+/// One node execution in the bill agent graph.
+///
+/// Persisted rather than logged because the review screen replays it: the
+/// owner (and a judge watching a demo) can see exactly which node ran, what
+/// it decided, how long it took and where it retried.
+model BillAgentStep {
+  id     String  @id @default(cuid())
+  billId String
+  seq    Int
+  node   String
+  /// OK | RETRY | FAIL | SKIP
+  status String
+  ms     Int     @default(0)
+  note   String?
+  detail Json?
+
+  createdAt DateTime @default(now())
+
+  bill SupplierBill @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@index([billId, seq])
+}
+
+/// The retrieval corpus.
+///
+/// A supplier bill carries the TRADE's name for a product. A customer says
+/// something else entirely and that word is never printed on the bill. This
+/// table is the bridge: canonical products with the local names Indian
+/// households actually use for them.
+///
+/// It exists so alias generation RETRIEVES instead of free-recalling. Asked
+/// cold, a model will happily invent subnames nobody says; given the real
+/// ones for the nearest known products, it stays on the ground. This is the
+/// single biggest lever on resolution accuracy in the whole system.
+model ProductKb {
+  id         String   @id @default(cuid())
+  canonical  String
+  /// empty string, never null: Prisma cannot query a nullable field inside a
+  /// compound unique, and every lookup here is by (canonical, brand)
+  brand      String   @default("")
+  category   String
+  unit       String   @default("pc")
+  /// lowercase Roman Hinglish, most-said first
+  subnames   String[]
+  /// canonical + brand + subnames, flattened for trigram search
+  searchText String
+
+  createdAt DateTime @default(now())
+
+  @@unique([canonical, brand])
+  @@index([category])
+}
+
 /**
  * The bridge between trade language and household language, and the single
  * highest-leverage data in the system.
- *
  * Never typed from scratch. Either LLM_SUGGESTED at import and approved with
  * one tap, or LEARNED: when the resolver is unsure and the buyer taps a
  * disambiguation option, that is a labelled example and becomes an alias.
  * The catalogue gets smarter every time it gets something wrong.
  */
 model SkuAlias {
-  id     String      @id @default(cuid())
-  skuId  String
-  alias  String
-  source AliasSource @default(LLM_SUGGESTED)
-  approved Boolean   @default(false)
+  id        String      @id @default(cuid())
+  skuId     String
+  alias     String
+  source    AliasSource @default(LLM_SUGGESTED)
+  approved  Boolean     @default(false)
   // how many orders this alias actually resolved. Cheap proof it earns its keep.
-  hitCount Int       @default(0)
-  createdAt DateTime @default(now())
+  hitCount  Int         @default(0)
+  createdAt DateTime    @default(now())
 
   sku Sku @relation(fields: [skuId], references: [id], onDelete: Cascade)
 

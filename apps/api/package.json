@@ -14,13 +14,14 @@
     "smoke": "dotenv -e ../../.env -- tsx src/scripts/smoke.ts"
   },
   "dependencies": {
-    "@nukkad/db": "*",
-    "@nukkad/shared": "*",
     "@fastify/cookie": "^11.1.2",
     "@fastify/cors": "^10.0.0",
     "@fastify/formbody": "^8.0.0",
     "@fastify/multipart": "^9.4.0",
     "@fastify/static": "^9.0.0",
+    "@langchain/langgraph": "^1.4.12",
+    "@nukkad/db": "*",
+    "@nukkad/shared": "*",
     "dotenv": "^16.4.0",
     "fastify": "^5.2.0",
     "fastify-plugin": "^5.0.0",

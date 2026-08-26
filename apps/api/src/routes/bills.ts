@@ -2,13 +2,12 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
+import { z } from 'zod';
 import { prisma } from '@nukkad/db';
-import { parseBill } from '../services/bills/parse.js';
-import { suggestAliases } from '../services/bills/aliases.js';
+import { planBill } from '../services/bills/graph.js';
 import { invalidateCatalog } from '../services/catalog/cache.js';
 import { syncAliasArray } from '../services/catalog/aliases.js';
 import { requireSession } from './auth.js';
-import { rupeesToPaise } from '@nukkad/shared';
 
 const MEDIA_DIR = join(process.cwd(), 'media');
 
@@ -18,10 +17,23 @@ const MEDIA_DIR = join(process.cwd(), 'media');
  * Three steps on purpose, because a parser that writes straight to the
  * catalogue with no review is a parser that silently corrupts a shop's
  * prices:
- *   POST /bills/parse    -> read the image, return line items, persist as UPLOADED
- *   POST /bills/:id/commit -> owner has reviewed, create/update SKUs and stock
- *   GET  /bills          -> history
+ *
+ *   POST /bills/parse      -> run the agent graph, persist a PLAN
+ *   GET  /bills/:id/plan   -> the plan and the agent's trace, for review
+ *   POST /bills/:id/commit -> owner has reviewed, apply it
  */
+
+const commitSchema = z.object({
+  lines: z.array(z.object({
+    id: z.string(),
+    decision: z.enum(['RESTOCK', 'NEW', 'AMBIGUOUS', 'SKIPPED']),
+    skuId: z.string().nullable().optional(),
+    sellPaise: z.number().int().nonnegative().optional(),
+    quantity: z.number().nonnegative().optional(),
+    aliases: z.array(z.string().min(1).max(60)).max(12).optional(),
+  })).optional(),
+});
+
 export async function billRoutes(app: FastifyInstance) {
   app.post('/bills/parse', async (req, reply) => {
     const file = await (req as unknown as { file: () => Promise<{
@@ -44,29 +56,19 @@ export async function billRoutes(app: FastifyInstance) {
     });
 
     try {
-      const { bill, model, latencyMs } = await parseBill(path, file.mimetype);
-
-      await prisma.supplierBill.update({
-        where: { id: row.id },
-        data: {
-          status: 'PARSED',
-          supplierName: bill.supplier,
-          billNo: bill.billNo,
-          totalPaise: bill.totalPaise,
-          visionModel: model,
-          parseMs: latencyMs,
-          lines: {
-            create: bill.items.map((i) => ({
-              rawName: i.name,
-              quantity: i.qty,
-              ratePaise: i.ratePaise,
-              amountPaise: i.amountPaise,
-            })),
-          },
-        },
+      const result = await planBill({
+        billId: row.id, kiranaId, imagePath: path, mime: file.mimetype,
       });
 
-      return { billId: row.id, model, latencyMs, bill };
+      if (result.failure) {
+        await prisma.supplierBill.update({
+          where: { id: row.id },
+          data: { status: 'FAILED', parseError: result.failure },
+        });
+        return reply.code(422).send({ error: result.failure, billId: row.id, steps: result.steps });
+      }
+
+      return { billId: row.id, ...(await readPlan(row.id, kiranaId)) };
     } catch (err) {
       await prisma.supplierBill.update({
         where: { id: row.id },
@@ -76,82 +78,102 @@ export async function billRoutes(app: FastifyInstance) {
     }
   });
 
+  /** The plan and the trace, so a reload does not lose the review. */
+  app.get('/bills/:id/plan', async (req, reply) => {
+    const { kiranaId } = requireSession(req);
+    const { id } = req.params as { id: string };
+    const plan = await readPlan(id, kiranaId);
+    if (!plan) return reply.code(404).send({ error: 'no such bill' });
+    return { billId: id, ...plan };
+  });
+
   /**
-   * Commit. Creates SKUs that do not exist, tops up stock for those that do,
-   * records cost price from the bill rate, and asks the LLM for candidate
-   * aliases which stay UNAPPROVED until the owner taps them.
+   * Apply the reviewed plan.
    *
-   * Selling price is cost plus a default markup, because nobody is typing
-   * 400 selling prices by hand.
+   * Overrides from the review screen win over the agent: the owner is the
+   * authority and the agent is a proposal. An AMBIGUOUS line the owner did
+   * not resolve is SKIPPED, never guessed.
    */
   app.post('/bills/:id/commit', async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const { markupPct = 15 } = (req.body ?? {}) as { markupPct?: number };
-
     const { kiranaId } = requireSession(req);
+    const { id } = req.params as { id: string };
 
-    // scoped to the session's shop, not just to the id
+    const parsed = commitSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: 'bad body' });
+    const overrides = new Map((parsed.data.lines ?? []).map((l) => [l.id, l]));
+
     const bill = await prisma.supplierBill.findFirst({
       where: { id, kiranaId }, include: { lines: true },
     });
     if (!bill) return reply.code(404).send({ error: 'no such bill' });
+    if (bill.status === 'COMMITTED') {
+      return reply.code(409).send({ error: 'This bill has already been applied.' });
+    }
 
-    let created = 0, restocked = 0;
+    let created = 0, restocked = 0, skipped = 0, aliasesAdded = 0;
+    const touched: string[] = [];
 
     for (const line of bill.lines) {
-      const existing = line.skuId
-        ? await prisma.sku.findUnique({ where: { id: line.skuId } })
-        : await prisma.sku.findFirst({
-            where: { kiranaId: bill.kiranaId, name: line.rawName },
-          });
+      const o = overrides.get(line.id);
+      const decision = o?.decision ?? line.decision;
+      const skuId = o?.skuId !== undefined ? o.skuId : line.skuId;
+      const qty = o?.quantity ?? line.quantity;
+      const sellPaise = o?.sellPaise ?? line.proposedSellPaise ?? line.ratePaise;
+      const aliases = o?.aliases ?? line.suggestedAliases;
 
-      const sellPaise = Math.round(line.ratePaise * (1 + markupPct / 100));
+      // an unresolved ambiguity is left alone. Guessing here is exactly the
+      // failure this whole graph exists to avoid.
+      if (decision === 'SKIPPED' || (decision === 'AMBIGUOUS' && !skuId)) {
+        skipped++;
+        continue;
+      }
 
-      if (existing) {
+      if ((decision === 'RESTOCK' || decision === 'AMBIGUOUS') && skuId) {
+        const owned = await prisma.sku.findFirst({ where: { id: skuId, kiranaId } });
+        if (!owned) { skipped++; continue; }
+
         await prisma.sku.update({
-          where: { id: existing.id },
-          data: { costPaise: line.ratePaise },
+          where: { id: skuId },
+          data: { costPaise: line.ratePaise, sellPaise },
         });
         await prisma.stock.upsert({
-          where: { skuId: existing.id },
-          create: { skuId: existing.id, quantity: line.quantity },
-          update: { quantity: { increment: line.quantity } },
+          where: { skuId },
+          create: { skuId, quantity: qty },
+          update: { quantity: { increment: qty } },
         });
+
+        // a restock can still TEACH the catalogue: a bill that spells a
+        // product differently is a new way customers might say it too
+        aliasesAdded += await addAliases(skuId, aliases);
+        touched.push(skuId);
+        await prisma.supplierBillLine.update({ where: { id: line.id }, data: { skuId } });
         restocked++;
         continue;
       }
 
       const sku = await prisma.sku.create({
         data: {
-          kiranaId: bill.kiranaId,
+          kiranaId,
           name: line.rawName,
           sellPaise,
           costPaise: line.ratePaise,
-          stock: { create: { quantity: line.quantity } },
+          stock: { create: { quantity: qty } },
         },
       });
-
-      // Suggested, never auto-approved. The owner taps.
-      const aliases = await suggestAliases(line.rawName);
-      if (aliases.length) {
-        await prisma.skuAlias.createMany({
-          data: aliases.map((a) => ({ skuId: sku.id, alias: a, source: 'LLM_SUGGESTED' as const })),
-          skipDuplicates: true,
-        });
-      }
-
-      await prisma.supplierBillLine.update({
-        where: { id: line.id }, data: { skuId: sku.id },
-      });
+      aliasesAdded += await addAliases(sku.id, aliases);
+      touched.push(sku.id);
+      await prisma.supplierBillLine.update({ where: { id: line.id }, data: { skuId: sku.id } });
       created++;
     }
+
+    for (const skuId of new Set(touched)) await syncAliasArray(skuId);
 
     await prisma.supplierBill.update({
       where: { id }, data: { status: 'COMMITTED', committedAt: new Date() },
     });
-    invalidateCatalog(bill.kiranaId);
+    invalidateCatalog(kiranaId);
 
-    return { ok: true, created, restocked };
+    return { ok: true, created, restocked, skipped, aliasesAdded };
   });
 
   app.get('/bills', async (req) => {
@@ -171,9 +193,7 @@ export async function billRoutes(app: FastifyInstance) {
     const { kiranaId } = requireSession(req);
     const { id } = req.params as { id: string };
 
-    const owned = await prisma.skuAlias.findFirst({
-      where: { id, sku: { kiranaId } },
-    });
+    const owned = await prisma.skuAlias.findFirst({ where: { id, sku: { kiranaId } } });
     if (!owned) return reply.code(404).send({ error: 'no such alias' });
 
     await prisma.skuAlias.update({ where: { id }, data: { approved: true } });
@@ -185,9 +205,7 @@ export async function billRoutes(app: FastifyInstance) {
     const { kiranaId } = requireSession(req);
     const { id } = req.params as { id: string };
 
-    const owned = await prisma.skuAlias.findFirst({
-      where: { id, sku: { kiranaId } },
-    });
+    const owned = await prisma.skuAlias.findFirst({ where: { id, sku: { kiranaId } } });
     if (!owned) return reply.code(404).send({ error: 'no such alias' });
 
     await prisma.skuAlias.delete({ where: { id } });
@@ -196,4 +214,51 @@ export async function billRoutes(app: FastifyInstance) {
   });
 }
 
+/** Approved on arrival: these were reviewed by the owner before commit. */
+async function addAliases(skuId: string, aliases: string[]): Promise<number> {
+  const clean = [...new Set(aliases.map((a) => a.trim().toLowerCase()).filter(Boolean))];
+  if (!clean.length) return 0;
 
+  const res = await prisma.skuAlias.createMany({
+    data: clean.map((alias) => ({ skuId, alias, source: 'LLM_SUGGESTED' as const, approved: true })),
+    skipDuplicates: true,
+  });
+  return res.count;
+}
+
+async function readPlan(billId: string, kiranaId: string) {
+  const bill = await prisma.supplierBill.findFirst({
+    where: { id: billId, kiranaId },
+    include: {
+      lines: { orderBy: { id: 'asc' } },
+      steps: { orderBy: { seq: 'asc' } },
+    },
+  });
+  if (!bill) return null;
+
+  return {
+    status: bill.status,
+    supplier: bill.supplierName,
+    billNo: bill.billNo,
+    totalPaise: bill.totalPaise,
+    agentMs: bill.agentMs,
+    steps: bill.steps.map((s) => ({
+      node: s.node, status: s.status, ms: s.ms, note: s.note, detail: s.detail,
+    })),
+    lines: bill.lines.map((l) => ({
+      id: l.id,
+      rawName: l.rawName,
+      quantity: l.quantity,
+      ratePaise: l.ratePaise,
+      amountPaise: l.amountPaise,
+      decision: l.decision,
+      confidence: l.confidence,
+      reasoning: l.reasoning,
+      skuId: l.skuId,
+      candidates: l.candidatesJson,
+      priceDeltaPaise: l.priceDeltaPaise,
+      proposedSellPaise: l.proposedSellPaise,
+      suggestedAliases: l.suggestedAliases,
+    })),
+  };
+}
