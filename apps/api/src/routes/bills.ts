@@ -6,6 +6,8 @@ import { prisma } from '@nukkad/db';
 import { parseBill } from '../services/bills/parse.js';
 import { suggestAliases } from '../services/bills/aliases.js';
 import { invalidateCatalog } from '../services/catalog/cache.js';
+import { syncAliasArray } from '../services/catalog/aliases.js';
+import { requireSession } from './auth.js';
 import { rupeesToPaise } from '@nukkad/shared';
 
 const MEDIA_DIR = join(process.cwd(), 'media');
@@ -28,8 +30,7 @@ export async function billRoutes(app: FastifyInstance) {
 
     if (!file) return reply.code(400).send({ error: 'no file' });
 
-    const { kiranaId } = (req.query as { kiranaId?: string });
-    if (!kiranaId) return reply.code(400).send({ error: 'kiranaId required' });
+    const { kiranaId } = requireSession(req);
 
     const buf = await file.toBuffer();
     await mkdir(MEDIA_DIR, { recursive: true });
@@ -87,8 +88,11 @@ export async function billRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const { markupPct = 15 } = (req.body ?? {}) as { markupPct?: number };
 
-    const bill = await prisma.supplierBill.findUnique({
-      where: { id }, include: { lines: true },
+    const { kiranaId } = requireSession(req);
+
+    // scoped to the session's shop, not just to the id
+    const bill = await prisma.supplierBill.findFirst({
+      where: { id, kiranaId }, include: { lines: true },
     });
     if (!bill) return reply.code(404).send({ error: 'no such bill' });
 
@@ -151,8 +155,7 @@ export async function billRoutes(app: FastifyInstance) {
   });
 
   app.get('/bills', async (req) => {
-    const { kiranaId } = req.query as { kiranaId?: string };
-    if (!kiranaId) return { bills: [] };
+    const { kiranaId } = requireSession(req);
     return {
       bills: await prisma.supplierBill.findMany({
         where: { kiranaId },
@@ -164,35 +167,33 @@ export async function billRoutes(app: FastifyInstance) {
   });
 
   /** Alias approval. One tap each, which is the whole point. */
-  app.post('/aliases/:id/approve', async (req) => {
+  app.post('/aliases/:id/approve', async (req, reply) => {
+    const { kiranaId } = requireSession(req);
     const { id } = req.params as { id: string };
-    const row = await prisma.skuAlias.update({
-      where: { id }, data: { approved: true },
+
+    const owned = await prisma.skuAlias.findFirst({
+      where: { id, sku: { kiranaId } },
     });
-    await syncAliasArray(row.skuId);
+    if (!owned) return reply.code(404).send({ error: 'no such alias' });
+
+    await prisma.skuAlias.update({ where: { id }, data: { approved: true } });
+    await syncAliasArray(owned.skuId);
     return { ok: true };
   });
 
-  app.delete('/aliases/:id', async (req) => {
+  app.delete('/aliases/:id', async (req, reply) => {
+    const { kiranaId } = requireSession(req);
     const { id } = req.params as { id: string };
-    const row = await prisma.skuAlias.delete({ where: { id } });
-    await syncAliasArray(row.skuId);
+
+    const owned = await prisma.skuAlias.findFirst({
+      where: { id, sku: { kiranaId } },
+    });
+    if (!owned) return reply.code(404).send({ error: 'no such alias' });
+
+    await prisma.skuAlias.delete({ where: { id } });
+    await syncAliasArray(owned.skuId);
     return { ok: true };
   });
 }
 
-/**
- * Sku.aliases is a denormalised string[] because the ranker reads it on
- * every message and must not do a join per SKU. SkuAlias is the source of
- * truth; this keeps the fast path in sync.
- */
-async function syncAliasArray(skuId: string): Promise<void> {
-  const rows = await prisma.skuAlias.findMany({
-    where: { skuId, approved: true }, select: { alias: true },
-  });
-  const sku = await prisma.sku.update({
-    where: { id: skuId },
-    data: { aliases: rows.map((r) => r.alias) },
-  });
-  invalidateCatalog(sku.kiranaId);
-}
+
