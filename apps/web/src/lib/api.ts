@@ -21,6 +21,7 @@ export const post = <T,>(path: string, body?: unknown) =>
   req<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined });
 export const patch = <T,>(path: string, body: unknown) =>
   req<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
+export const del = <T,>(path: string) => req<T>(path, { method: 'DELETE' });
 
 export const rupees = (paise: number) =>
   new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(paise / 100);

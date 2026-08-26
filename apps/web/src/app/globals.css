@@ -1279,3 +1279,93 @@ html, body {
   .skel { animation: none; background-image: none; }
   .load-in { animation: none; }
 }
+
+/* --- inventory --------------------------------------------------------
+   A list, not a grid of cards. Four hundred rows of boxes is unreadable,
+   and the earlier dashboard already proved that a cream card on a cream
+   page is just an outline.
+
+   So: one sand pane holding hairline-divided rows. The row lifts to cream
+   on hover, which makes the hit target obvious without drawing 400
+   borders.
+   --------------------------------------------------------------------- */
+
+.inv-row {
+  transition: background 0.14s ease;
+  border-radius: 10px;
+}
+.inv-row:hover { background: #fffdf9a6; }
+.inv-row[data-open='true'] {
+  background: var(--panel);
+  box-shadow: 0 0 0 2px var(--ink);
+}
+.inv-row[data-off='true'] { opacity: 0.45; }
+
+/* the local names. Approved ones are solid, parser suggestions are dashed
+   and read as an offer rather than a fact. */
+.chip {
+  border-radius: 999px;
+  border: 1.5px solid var(--ink);
+  background: var(--panel);
+  padding: 0.1rem 0.5rem;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.chip-x { cursor: pointer; }
+.chip-x:hover { background: var(--hot); color: var(--bg); }
+
+.chip-suggest {
+  border-radius: 999px;
+  border: 1.5px dashed var(--ink);
+  background: transparent;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+.chip-suggest:hover { background: var(--accent); border-style: solid; }
+
+/* fields inside the editor */
+.inv-field {
+  width: 100%;
+  background: var(--bg);
+  border: 1.5px solid var(--line-2);
+  border-radius: 9px;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.85rem;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+.inv-field:focus {
+  outline: none;
+  border-color: var(--ink);
+  box-shadow: 0 0 0 3px #ff6c4c2e;
+}
+.inv-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+  display: block;
+}
+
+/* stock badge, read before the number is */
+.stock-out { background: var(--hot); color: var(--bg); }
+.stock-low { background: var(--amber); }
+
+.inv-tab {
+  border-radius: 999px;
+  border: 2px solid var(--ink);
+  padding: 0.3rem 0.8rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+.inv-tab[data-on='true'] { background: var(--ink); color: var(--bg); }
+.inv-tab[data-on='false']:hover { background: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .inv-row, .chip, .chip-suggest, .inv-field { transition: none; }
+}

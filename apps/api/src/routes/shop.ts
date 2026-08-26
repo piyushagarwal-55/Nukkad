@@ -6,6 +6,7 @@ import { env } from '../config/env.js';
 import { requireSession } from './auth.js';
 import { toE164, maskPhone } from '../lib/phone.js';
 import { invalidateCatalog } from '../services/catalog/cache.js';
+import { syncAliasArray } from '../services/catalog/aliases.js';
 
 const newHousehold = z.object({
   name: z.string().min(2),
@@ -14,9 +15,27 @@ const newHousehold = z.object({
 });
 
 const patchSku = z.object({
+  name: z.string().min(1).max(120).optional(),
+  brand: z.string().max(80).nullable().optional(),
+  packSize: z.number().positive().optional(),
+  unit: z.string().min(1).max(12).optional(),
+  category: z.string().max(60).nullable().optional(),
   sellPaise: z.number().int().nonnegative().optional(),
+  costPaise: z.number().int().nonnegative().nullable().optional(),
   stock: z.number().nonnegative().optional(),
   active: z.boolean().optional(),
+});
+
+const newSku = z.object({
+  name: z.string().min(1).max(120),
+  brand: z.string().max(80).optional(),
+  packSize: z.number().positive().default(1),
+  unit: z.string().min(1).max(12).default('pc'),
+  category: z.string().max(60).optional(),
+  sellPaise: z.number().int().nonnegative(),
+  costPaise: z.number().int().nonnegative().optional(),
+  stock: z.number().nonnegative().default(0),
+  aliases: z.array(z.string().min(1).max(60)).max(12).default([]),
 });
 
 export async function shopRoutes(app: FastifyInstance) {
@@ -26,7 +45,11 @@ export async function shopRoutes(app: FastifyInstance) {
 
     const skus = await prisma.sku.findMany({
       where: { kiranaId },
-      include: { stock: true, aliasRows: { orderBy: { approved: 'desc' } } },
+      include: {
+        stock: true,
+        aliasRows: { orderBy: { approved: 'desc' } },
+        _count: { select: { orderLines: true } },
+      },
       orderBy: { name: 'asc' },
     });
 
@@ -35,10 +58,16 @@ export async function shopRoutes(app: FastifyInstance) {
         id: s.id,
         name: s.name,
         brand: s.brand,
+        packSize: s.packSize,
+        unit: s.unit,
+        category: s.category,
         sellPaise: s.sellPaise,
         costPaise: s.costPaise,
         stock: s.stock?.quantity ?? 0,
         active: s.active,
+        // how many order lines point at this SKU, so the dashboard can warn
+        // that deleting it detaches real history
+        orderCount: s._count.orderLines,
         aliases: s.aliasRows.filter((a) => a.approved).map((a) => ({ id: a.id, alias: a.alias })),
         suggested: s.aliasRows.filter((a) => !a.approved).map((a) => ({ id: a.id, alias: a.alias })),
       })),
@@ -54,15 +83,45 @@ export async function shopRoutes(app: FastifyInstance) {
     const sku = await prisma.sku.findFirst({ where: { id: skuId, kiranaId } });
     if (!sku) return reply.code(404).send({ error: 'no such sku' });
 
-    if (parsed.data.sellPaise !== undefined || parsed.data.active !== undefined) {
-      await prisma.sku.update({
-        where: { id: skuId },
-        data: {
-          ...(parsed.data.sellPaise !== undefined ? { sellPaise: parsed.data.sellPaise } : {}),
-          ...(parsed.data.active !== undefined ? { active: parsed.data.active } : {}),
-        },
-      });
+    /**
+     * Build the update from whichever keys were actually sent.
+     *
+     * Spreading each field conditionally rather than passing parsed.data
+     * wholesale matters twice over: `stock` is not a column on Sku and
+     * would throw, and an absent key must mean "leave it alone" while an
+     * explicit null must mean "clear it". Those are different, and brand
+     * and costPaise are both nullable, so collapsing them would wipe a
+     * cost price every time somebody edited a name.
+     */
+    const d = parsed.data;
+    const fields = {
+      ...(d.name !== undefined ? { name: d.name.trim() } : {}),
+      ...(d.brand !== undefined ? { brand: d.brand } : {}),
+      ...(d.packSize !== undefined ? { packSize: d.packSize } : {}),
+      ...(d.unit !== undefined ? { unit: d.unit } : {}),
+      ...(d.category !== undefined ? { category: d.category } : {}),
+      ...(d.sellPaise !== undefined ? { sellPaise: d.sellPaise } : {}),
+      ...(d.costPaise !== undefined ? { costPaise: d.costPaise } : {}),
+      ...(d.active !== undefined ? { active: d.active } : {}),
+    };
+
+    if (Object.keys(fields).length > 0) {
+      // a rename must not collide with another item in the same shop
+      if (d.name !== undefined) {
+        const clash = await prisma.sku.findFirst({
+          where: {
+            kiranaId,
+            name: { equals: d.name.trim(), mode: 'insensitive' },
+            id: { not: skuId },
+          },
+        });
+        if (clash) {
+          return reply.code(409).send({ error: `${d.name.trim()} is already in the catalogue.` });
+        }
+      }
+      await prisma.sku.update({ where: { id: skuId }, data: fields });
     }
+
     if (parsed.data.stock !== undefined) {
       await prisma.stock.upsert({
         where: { skuId },
@@ -72,6 +131,99 @@ export async function shopRoutes(app: FastifyInstance) {
     }
 
     invalidateCatalog(kiranaId);
+    return { ok: true };
+  });
+
+  /**
+   * Add one item by hand.
+   *
+   * The bill upload is the fast path and stays the fast path, but a shop
+   * always has the handful of things no supplier bill ever covers: loose
+   * items, a local brand, something bought cash from the mandi.
+   */
+  app.post('/catalogue', async (req, reply) => {
+    const { kiranaId } = requireSession(req);
+    const parsed = newSku.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? 'bad body' });
+    }
+    const d = parsed.data;
+
+    const clash = await prisma.sku.findFirst({
+      where: { kiranaId, name: { equals: d.name, mode: 'insensitive' } },
+    });
+    if (clash) return reply.code(409).send({ error: `${d.name} is already in the catalogue.` });
+
+    const sku = await prisma.sku.create({
+      data: {
+        kiranaId,
+        name: d.name,
+        brand: d.brand ?? null,
+        packSize: d.packSize,
+        unit: d.unit,
+        category: d.category ?? null,
+        sellPaise: d.sellPaise,
+        costPaise: d.costPaise ?? null,
+        // hand-added names are approved by definition: the owner typed them
+        aliases: d.aliases,
+        stock: { create: { quantity: d.stock } },
+        aliasRows: {
+          create: d.aliases.map((alias) => ({
+            alias,
+            source: 'OWNER' as const,
+            approved: true,
+          })),
+        },
+      },
+    });
+
+    invalidateCatalog(kiranaId);
+    return { ok: true, id: sku.id };
+  });
+
+  /**
+   * Remove an item.
+   *
+   * Order lines keep their own text and price and their skuId simply goes
+   * null, so history survives a delete. Burn rates cascade away with it,
+   * which is right: they are derived from a product that no longer exists.
+   */
+  app.delete('/catalogue/:skuId', async (req, reply) => {
+    const { kiranaId } = requireSession(req);
+    const { skuId } = req.params as { skuId: string };
+
+    const sku = await prisma.sku.findFirst({ where: { id: skuId, kiranaId } });
+    if (!sku) return reply.code(404).send({ error: 'no such item' });
+
+    await prisma.sku.delete({ where: { id: skuId } });
+    invalidateCatalog(kiranaId);
+    return { ok: true };
+  });
+
+  /** Add a local name by hand. Approved on arrival, because the owner typed it. */
+  app.post('/catalogue/:skuId/aliases', async (req, reply) => {
+    const { kiranaId } = requireSession(req);
+    const { skuId } = req.params as { skuId: string };
+    const parsed = z.object({ alias: z.string().min(1).max(60) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'alias required' });
+
+    const sku = await prisma.sku.findFirst({ where: { id: skuId, kiranaId } });
+    if (!sku) return reply.code(404).send({ error: 'no such item' });
+
+    const alias = parsed.data.alias.trim().toLowerCase();
+    const existing = await prisma.skuAlias.findUnique({
+      where: { skuId_alias: { skuId, alias } },
+    });
+    if (existing) {
+      // already suggested by the parser, so approving it is the same thing
+      await prisma.skuAlias.update({ where: { id: existing.id }, data: { approved: true } });
+    } else {
+      await prisma.skuAlias.create({
+        data: { skuId, alias, source: 'OWNER', approved: true },
+      });
+    }
+
+    await syncAliasArray(skuId);
     return { ok: true };
   });
 
