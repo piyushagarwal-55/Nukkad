@@ -1,0 +1,24 @@
+[
+  {
+    "id": "example-1",
+    "householdPhone": "+918979560165",
+    "audio": null,
+    "text": "bhaiya do kilo aashirvaad atta, ek litre fortune tel aur paanch kilo cheeni bhej dena",
+    "expected": [
+      { "skuName": "Aashirvaad Whole Wheat Atta 5kg", "quantity": 2 },
+      { "skuName": "Fortune Sunflower Oil 1L", "quantity": 1 },
+      { "skuName": "Sugar 1kg", "quantity": 5 }
+    ]
+  },
+  {
+    "id": "example-2",
+    "householdPhone": "+918979560165",
+    "audio": null,
+    "text": "adha kilo haldi aur dedh kilo chawal, aur wo peela wala tel bhi",
+    "expected": [
+      { "skuName": "Everest Haldi 500g", "quantity": 0.5 },
+      { "skuName": "India Gate Basmati Rice 1kg", "quantity": 1.5 },
+      { "skuName": "Fortune Sunflower Oil 1L", "quantity": 1 }
+    ]
+  }
+]
