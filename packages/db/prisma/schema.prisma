@@ -1,0 +1,547 @@
+// Nukkad schema
+//
+// Two connection strings on purpose. DATABASE_URL is the Supabase SESSION
+// POOLER, which answers on IPv4 and therefore survives venue wifi, ngrok
+// hosts and CI. DIRECT_URL is the IPv6-only direct host, which Prisma needs
+// for migrations. Do not swap them.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------- enums
+
+enum AutonomyTier {
+  MANUAL     // 0. household messages when it wants
+  SUGGESTED  // 1. agent proposes, household taps confirm. DEFAULT.
+  STANDING   // 2. agent places it, household has a veto window
+  SILENT     // 3. locked staples basket under a rupee cap
+}
+
+enum InputSource {
+  TEXT
+  VOICE
+  PHOTO
+  AUTO
+  MENU
+}
+
+enum OrderStatus {
+  DRAFT
+  AWAITING
+  CONFIRMED
+  CANCELLED
+  FULFILLED
+}
+
+enum InvoiceStatus {
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  EXPIRED
+  CANCELLED
+}
+
+// Recorded per line so the ablation table is DERIVABLE FROM PRODUCTION DATA
+// rather than hand-assembled the night before the demo.
+enum ResolutionMethod {
+  EXACT
+  FUZZY
+  PRIOR
+  EMBEDDING
+  LLM
+  DISAMBIGUATED
+  SUBSTITUTED
+  UNRESOLVED
+}
+
+enum ConversationState {
+  IDLE
+  MENU
+  AWAITING_ORDER_INPUT
+  AWAITING_CONFIRM
+  AWAITING_DISAMBIGUATION
+  AWAITING_VETO
+}
+
+enum Direction {
+  IN
+  OUT
+}
+enum BillStatus {
+  UPLOADED
+  PARSED
+  REVIEWED
+  COMMITTED
+  FAILED
+}
+enum AliasSource {
+  OWNER
+  LLM_SUGGESTED
+  LEARNED
+}
+enum PartyRole {
+  HOUSEHOLD
+  KIRANA
+}
+
+// ---------------------------------------------------------------- parties
+
+model Kirana {
+  id             String   @id @default(cuid())
+  name           String
+  ownerName      String?
+  phone          String   @unique
+  address        String?
+  createdAt      DateTime @default(now())
+
+  // --- per-shop WhatsApp connection, the multi-tenant boundary -------
+  // Every shop gets its OWN number, own bot, own catalogue. Inbound is
+  // routed by which number the customer messaged, never by the customer.
+  //
+  // Onboarding is Meta COEXISTENCE: the owner scans a QR from their
+  // WhatsApp Business App and the number keeps working in the app.
+  // Eligibility is gated by Meta on account tenure and message quality,
+  // so a brand new number will not qualify.
+  //
+  // NEVER onboard via Baileys / whatsapp-web.js QR pairing. Those
+  // reverse-engineer WhatsApp Web, breach ToS, and get numbers banned.
+  whatsappNumber String?  @unique
+  wabaId         String?
+  phoneNumberId  String?
+  // PENDING | QR_ISSUED | CONNECTED | FAILED
+  wabaStatus     String   @default("PENDING")
+  onboardedAt    DateTime?
+
+  households          Household[]
+  skus                Sku[]
+  orders              Order[]
+  invoices            Invoice[]
+  distributorInvoices DistributorInvoice[]
+  conversations       Conversation[]
+  users               ShopUser[]
+  bills               SupplierBill[]
+}
+
+model Household {
+  id          String       @id @default(cuid())
+  kiranaId    String
+  name        String
+  phone       String
+  memberCount Int          @default(4)
+  address     String?
+
+  autonomyTier AutonomyTier @default(SUGGESTED)
+  // consecutive correct predictions. Gates promotion to STANDING:
+  // autonomy is EARNED by measured accuracy, per household.
+  streak       Int          @default(0)
+  // tier 2 only: how long silence counts as consent
+  vetoWindowMins Int        @default(360)
+  // tier 3 only: hard rupee ceiling on a silent order
+  capPaise     Int?
+
+  createdAt DateTime @default(now())
+
+  kirana        Kirana         @relation(fields: [kiranaId], references: [id], onDelete: Cascade)
+  orders        Order[]
+  invoices      Invoice[]
+  burnRates     BurnRate[]
+  nudges        Nudge[]
+  conversations Conversation[]
+
+  @@unique([kiranaId, phone])
+  @@index([phone])
+}
+
+// ---------------------------------------------------------------- catalogue
+
+model Sku {
+  id       String  @id @default(cuid())
+  kiranaId String
+  name     String
+  brand    String?
+  packSize Float   @default(1)
+  unit     String  @default("pc")
+  mrpPaise Int?
+  sellPaise Int
+  category String?
+  // hand-added local names: "chakki atta", "peela tel". Feeds the matcher
+  // and is the single cheapest accuracy win in the whole system.
+  aliases  String[] @default([])
+  active   Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  kirana     Kirana      @relation(fields: [kiranaId], references: [id], onDelete: Cascade)
+  stock      Stock?
+  orderLines OrderLine[]
+  burnRates  BurnRate[]
+  aliasRows  SkuAlias[]
+  billLines  SupplierBillLine[]
+
+  // cost basis from the most recent supplier bill, so margin is computable
+  costPaise  Int?
+
+  @@index([kiranaId, active])
+}
+
+model Stock {
+  id        String   @id @default(cuid())
+  skuId     String   @unique
+  quantity  Float    @default(0)
+  updatedAt DateTime @updatedAt
+
+  sku Sku @relation(fields: [skuId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------- orders
+
+model Order {
+  id          String      @id @default(cuid())
+  kiranaId    String
+  householdId String
+  status      OrderStatus @default(DRAFT)
+  source      InputSource
+
+  // Everything needed to replay this order through the eval harness later.
+  rawText    String?
+  transcript String?
+  asrEngine  String?
+  mediaPath  String?
+  latencyMs  Int?
+
+  totalPaise Int @default(0)
+
+  createdAt   DateTime  @default(now())
+  confirmedAt DateTime?
+  cancelledAt DateTime?
+
+  kirana    Kirana      @relation(fields: [kiranaId], references: [id], onDelete: Cascade)
+  household Household   @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  lines     OrderLine[]
+  invoice   Invoice?
+
+  @@index([householdId, createdAt])
+  @@index([kiranaId, status])
+}
+
+model OrderLine {
+  id      String @id @default(cuid())
+  orderId String
+  skuId   String?
+
+  // verbatim span from the transcript. Never overwrite this, the eval
+  // harness diffs against it.
+  sourceText String
+  quantity   Float
+  unitHint   String?
+
+  unitPricePaise Int @default(0)
+  linePaise      Int @default(0)
+
+  method     ResolutionMethod @default(UNRESOLVED)
+  confidence Float            @default(0)
+
+  wasSubstituted       Boolean @default(false)
+  substitutedFromSkuId String?
+  // top-k alternates as offered, so a rejected suggestion is still analysable
+  alternatesJson Json?
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  sku   Sku?  @relation(fields: [skuId], references: [id])
+
+  @@index([orderId])
+}
+
+// ---------------------------------------------------------------- money
+
+model Invoice {
+  id          String        @id @default(cuid())
+  orderId     String        @unique
+  kiranaId    String
+  householdId String
+
+  amountPaise     Int
+  amountPaidPaise Int           @default(0)
+  status          InvoiceStatus @default(ISSUED)
+
+  razorpayLinkId   String?
+  razorpayShortUrl String?
+  // our own id, sent as Razorpay reference_id. Unique per link.
+  referenceId      String  @unique
+
+  // Partial payment IS the udhaar mechanic, and it needs no beta access.
+  acceptPartial       Boolean @default(true)
+  firstMinPartialPaise Int?
+
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+
+  order     Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  kirana    Kirana    @relation(fields: [kiranaId], references: [id], onDelete: Cascade)
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  payments  Payment[]
+
+  @@index([householdId, status])
+}
+
+model Payment {
+  id                String   @id @default(cuid())
+  invoiceId         String
+  razorpayPaymentId String   @unique
+  amountPaise       Int
+  method            String?
+  status            String
+  capturedAt        DateTime @default(now())
+  rawJson           Json?
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+// The kirana to distributor leg. This is where the Razorpay link is
+// genuinely WANTED: wholesale amounts, udhaar terms, invoice-linked
+// collection. At household order sizes a link is a tax, because direct
+// UPI has been 0% MDR by mandate since Jan 2020.
+model DistributorInvoice {
+  id              String        @id @default(cuid())
+  kiranaId        String
+  distributorName String
+  amountPaise     Int
+  amountPaidPaise Int           @default(0)
+  status          InvoiceStatus @default(ISSUED)
+
+  razorpayLinkId   String?
+  razorpayShortUrl String?
+  referenceId      String  @unique
+
+  dueAt     DateTime?
+  createdAt DateTime  @default(now())
+
+  kirana Kirana @relation(fields: [kiranaId], references: [id], onDelete: Cascade)
+
+  @@index([kiranaId, status])
+}
+
+// ---------------------------------------------------------------- prediction
+
+model BurnRate {
+  id          String @id @default(cuid())
+  householdId String
+  skuId       String
+
+  // the whole depletion model in one float
+  qtyPerDay Float
+
+  lastPurchaseAt       DateTime?
+  lastQty              Float?
+  predictedDepletionAt DateTime?
+
+  // how many real purchases back this. 0 means it is still the HCES seed.
+  observations Int     @default(0)
+  seeded       Boolean @default(true)
+
+  updatedAt DateTime @updatedAt
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  sku       Sku       @relation(fields: [skuId], references: [id], onDelete: Cascade)
+
+  @@unique([householdId, skuId])
+  @@index([predictedDepletionAt])
+}
+
+// One row per proactive knock. predictedBasketJson vs the order that
+// actually followed IS the depletion-accuracy row of the ablation table.
+model Nudge {
+  id          String @id @default(cuid())
+  householdId String
+
+  templateName String
+  sentAt       DateTime  @default(now())
+  respondedAt  DateTime?
+  // ACCEPTED | EDITED | DECLINED | IGNORED | VETOED
+  outcome      String?
+
+  predictedBasketJson Json?
+  resultingOrderId    String?
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@index([householdId, sentAt])
+}
+
+// ---------------------------------------------------------------- messaging
+
+model Conversation {
+  id        String    @id @default(cuid())
+  channel   String
+  peerPhone String
+  partyRole PartyRole
+
+  householdId String?
+  kiranaId    String?
+
+  state       ConversationState @default(IDLE)
+  contextJson Json?
+
+  lastInboundAt DateTime?
+  // Meta's 24h session window. Past this, only a pre-approved TEMPLATE may
+  // be sent. The scheduler MUST check this before composing anything.
+  windowExpiresAt DateTime?
+
+  updatedAt DateTime @updatedAt
+
+  household Household? @relation(fields: [householdId], references: [id])
+  kirana    Kirana?    @relation(fields: [kiranaId], references: [id])
+  messages  Message[]
+
+  @@unique([channel, peerPhone])
+}
+
+model Message {
+  id             String    @id @default(cuid())
+  conversationId String
+  direction      Direction
+  // transport message id, drives idempotency. Twilio and Meta both retry.
+  externalId     String?
+
+  body       String?
+  mediaPath  String?
+  mediaMime  String?
+  transcript String?
+
+  templateName String?
+  createdAt    DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, externalId])
+  @@index([conversationId, createdAt])
+}
+
+// Razorpay retries webhooks. Twilio retries webhooks. Store the raw event
+// keyed by its id and no-op on replay.
+model WebhookEvent {
+  id          String    @id @default(cuid())
+  source      String
+  externalId  String
+  eventType   String
+  payload     Json
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@unique([source, externalId])
+}
+
+
+// ---------------------------------------------------------------- module 1
+
+// The shop owner's account. Deliberately thin: phone plus OTP is how this
+// user logs into everything else in their life.
+model ShopUser {
+  id        String   @id @default(cuid())
+  kiranaId  String
+  phone     String   @unique
+  name      String?
+  otpHash   String?
+  otpSentAt DateTime?
+  lastLogin DateTime?
+  createdAt DateTime @default(now())
+
+  kirana Kirana @relation(fields: [kiranaId], references: [id], onDelete: Cascade)
+}
+
+/**
+ * THE ONBOARDING WALL, SOLVED.
+ *
+ * Typing 400 SKUs at ~20s each is over two hours of a shop owner's evening,
+ * and that wall is what kills every catalogue product in this segment.
+ * Uploading six supplier bills is five minutes.
+ *
+ * A bill also carries more than a product list: quantity is stock received,
+ * rate is COST price so margin becomes computable, and the date sequence is
+ * the shop's own restock cadence with its distributor.
+ *
+ * CAVEAT THE ALIAS LAYER EXISTS TO SOLVE: a bill carries the TRADE's name
+ * ("AASHIRVAAD ATTA 5KG"). A customer says "atta bhejo". That word is never
+ * on the bill.
+ */
+model SupplierBill {
+  id       String     @id @default(cuid())
+  kiranaId String
+  status   BillStatus @default(UPLOADED)
+
+  imagePath String
+  mime      String
+  bytes     Int
+
+  supplierName String?
+  billNo       String?
+  billDate     DateTime?
+  totalPaise   Int?
+
+  visionModel String?
+  parseMs     Int?
+  parseError  String?
+
+  createdAt   DateTime  @default(now())
+  committedAt DateTime?
+
+  kirana Kirana           @relation(fields: [kiranaId], references: [id], onDelete: Cascade)
+  lines  SupplierBillLine[]
+
+  @@index([kiranaId, status])
+}
+
+model SupplierBillLine {
+  id     String @id @default(cuid())
+  billId String
+
+  // verbatim from the bill. Never overwrite, the review screen diffs on it.
+  rawName  String
+  quantity Float
+  ratePaise   Int
+  amountPaise Int
+
+  // filled in at review time when the owner links this to a catalogue SKU,
+  // or when fuzzy matching finds an existing one above threshold
+  skuId       String?
+  createSku   Boolean @default(true)
+  matchScore  Float?
+
+  bill SupplierBill @relation(fields: [billId], references: [id], onDelete: Cascade)
+  sku  Sku?         @relation(fields: [skuId], references: [id])
+
+  @@index([billId])
+}
+
+/**
+ * The bridge between trade language and household language, and the single
+ * highest-leverage data in the system.
+ *
+ * Never typed from scratch. Either LLM_SUGGESTED at import and approved with
+ * one tap, or LEARNED: when the resolver is unsure and the buyer taps a
+ * disambiguation option, that is a labelled example and becomes an alias.
+ * The catalogue gets smarter every time it gets something wrong.
+ */
+model SkuAlias {
+  id     String      @id @default(cuid())
+  skuId  String
+  alias  String
+  source AliasSource @default(LLM_SUGGESTED)
+  approved Boolean   @default(false)
+  // how many orders this alias actually resolved. Cheap proof it earns its keep.
+  hitCount Int       @default(0)
+  createdAt DateTime @default(now())
+
+  sku Sku @relation(fields: [skuId], references: [id], onDelete: Cascade)
+
+  @@unique([skuId, alias])
+  @@index([skuId, approved])
+}
