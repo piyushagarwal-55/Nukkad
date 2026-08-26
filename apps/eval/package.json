@@ -1,0 +1,22 @@
+{
+  "name": "@nukkad/eval",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "eval": "tsx src/run.ts",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist out"
+  },
+  "dependencies": {
+    "@nukkad/api": "*",
+    "@nukkad/db": "*",
+    "@nukkad/shared": "*",
+    "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
