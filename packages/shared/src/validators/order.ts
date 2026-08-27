@@ -37,6 +37,12 @@ export const extractionSchema = z.object({
     'MODIFY',
     'CONFIRM',
     /**
+     * Done adding: "bas", "itna hi", "ho gaya", "that's all". Distinct
+     * from CONFIRM, which answers a question the shop asked. This one is
+     * the customer closing the basket unprompted.
+     */
+    'CHECKOUT',
+    /**
      * Rejecting something the SHOP proposed -- a substitute they do not
      * want, a product they did not mean. Split out from CANCEL because the
      * two need opposite responses: a cancel ends the order, a rejection

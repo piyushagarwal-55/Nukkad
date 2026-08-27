@@ -75,6 +75,25 @@ export interface PackAsk {
 export type Facts =
   | { kind: 'GREETING' }
   | { kind: 'ORDER_DRAFT'; substituted: Swap[]; packAsks: PackAsk[]; dropped: string[] }
+  /**
+   * Something went IN THE BAG and the conversation carries on.
+   *
+   * The counterpart to the basket in state.ts. Every add used to be a
+   * checkout -- "bhej dun?" after each item -- which is not how a counter
+   * works. Now the shop says what went in and asks what else, and the
+   * bill is added up once at the end.
+   */
+  | {
+      kind: 'BASKET_ADDED';
+      added: string[];
+      substituted: Swap[];
+      packAsks: PackAsk[];
+      dropped: string[];
+    }
+  /** the basket read back, waiting on a yes */
+  | { kind: 'BASKET_REVIEW' }
+  /** they said send it and there is nothing in the bag */
+  | { kind: 'BASKET_EMPTY' }
   | { kind: 'ORDER_AMENDED' }
   | { kind: 'ORDER_CONFIRMED'; ref: string }
   | { kind: 'ORDER_CANCELLED' }
@@ -176,6 +195,40 @@ function brief(f: Facts): string {
 
       return `Their order is ready to send. Ask if you should send it.${sub}${packs}${lost}`;
     }
+
+    case 'BASKET_ADDED': {
+      const sub = f.substituted
+        .map((sw) => ` ${sw.from} is out of stock so ${sw.to} was put in instead (${sw.why}). Say so and say WHY.`)
+        .join('');
+      const packs = f.packAsks
+        .map((a) =>
+          ` NOTE: they asked for ${a.asked} of ${a.name}, but the shop only` +
+          ` sells it in a ${a.sold} packet. Tell them BOTH amounts and ask` +
+          ` if that is alright. Write the amounts, never a count of packets.`)
+        .join('');
+      const lost = f.dropped.length
+        ? ` NOTE: they also asked for "${f.dropped.join('", "')}" and the shop sells nothing like it. Say it is NOT on the list. Do not guess.`
+        : '';
+
+      return [
+        `${f.added.join(' and ')} went into their basket.`,
+        'Say so briefly and ask if they want anything else.',
+        'Do NOT ask whether to send the order -- they will say when they',
+        'are done. The running list is attached below your reply.',
+      ].join(' ') + sub + packs + lost;
+    }
+
+    case 'BASKET_REVIEW':
+      return [
+        'They are done adding. The full basket is attached below your',
+        'reply. Ask them to confirm you should send it.',
+      ].join(' ');
+
+    case 'BASKET_EMPTY':
+      return [
+        'They asked you to send the order but nothing is in the basket',
+        'yet. Say so lightly and ask what they need.',
+      ].join(' ');
 
     case 'ORDER_AMENDED':
       return 'They added to or changed the order. Acknowledge the change and ask if you should send it now.';
@@ -324,8 +377,11 @@ const SYSTEM = [
   'HOW TO WRITE',
   '- Short. One or two sentences. This is WhatsApp, not email.',
   '- Warm and ordinary, the way a shopkeeper talks to a regular.',
-  '- Mirror their language AND their script exactly. Roman Hinglish gets',
-  '  Roman Hinglish. Devanagari gets Devanagari. English gets English.',
+  '- Mirror their SCRIPT exactly, and this matters more than it sounds.',
+  '  If they typed in the Roman alphabet, reply in the Roman alphabet --',
+  '  even when the language is Hindi. Someone who writes "daal kaunsi'
+  + ' kaunsi h" cannot necessarily READ Devanagari.',
+  '  Devanagari in, Devanagari out. English in, English out.',
   '- Never use numbered menus, option lists, or "reply 1 for".',
   '- Do not repeat a sentence you have already sent them. The recent',
   '  messages are shown to you. Say it a different way, or say something',
@@ -427,6 +483,10 @@ function allowedDigits(f: Facts): Set<string> {
    * of the catalogue and the customer's own message; anything the model
    * invents still fails.
    */
+  if (f.kind === 'BASKET_ADDED') {
+    for (const a of f.packAsks) source.push(a.asked, a.sold, String(a.units));
+    source.push(...f.dropped, ...f.added);
+  }
   if (f.kind === 'ORDER_DRAFT') {
     for (const a of f.packAsks) source.push(a.asked, a.sold, String(a.units));
     source.push(...f.dropped);

@@ -84,6 +84,17 @@ export const NO_PREVIOUS_ORDER =
  * sentence is built here, from the same facts, and the model's version is
  * an improvement on it rather than the only source of it.
  */
+export const BASKET_EMPTY =
+  'Abhi basket khali hai. Bataiye kya chahiye?';
+
+/** what went in the bag, and the invitation to keep going */
+export const addedToBasket = (added: string[], packAsks: PackAsk[] = []): string => {
+  const what = added.join(' aur ');
+  if (!packAsks.length) return `${what} daal diya. Aur kuch chahiye?`;
+  const a = packAsks[0]!;
+  return `Aapne ${a.asked} kaha, ye ${a.sold} ke packet mein aata hai. Daal diya. Aur kuch chahiye?`;
+};
+
 export const readyToSend = (packAsks: PackAsk[] = []): string => {
   if (!packAsks.length) return 'Ye lijiye. Bhej dun?';
   const a = packAsks[0]!;

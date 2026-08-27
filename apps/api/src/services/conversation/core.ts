@@ -13,7 +13,7 @@ import { fuzzyScore } from '../resolver/fuzzy.js';
 import { fitPack, displayNames, withoutPack } from '../resolver/pack.js';
 import { findSubstitutes } from '../substitution/substitute.js';
 import { hasVision } from '../../config/env.js';
-import { readAnswer, namesLine } from './reply.js';
+import { readAnswer, namesLine, isPointer } from './reply.js';
 import { compose, type Facts, type Swap, type PackAsk } from './compose.js';
 import { retrieveKb } from '../kb/retrieve.js';
 import type { Prior } from '../resolver/prior.js';
@@ -117,7 +117,12 @@ function label(f: Facts): { intent: string; goal: string } {
         goal: 'ORDERING',
       };
     case 'ORDER_AMENDED':
+    case 'BASKET_ADDED':
       return { intent: 'RECOMMEND', goal: 'ORDERING' };
+    case 'BASKET_REVIEW':
+      return { intent: 'CLARIFICATION_QUESTION', goal: 'ORDERING' };
+    case 'BASKET_EMPTY':
+      return { intent: 'OTHER', goal: 'ORDERING' };
     case 'ORDER_CONFIRMED':
       return { intent: 'POSITIVE_FEEDBACK', goal: 'ORDERING' };
     case 'ORDER_CANCELLED':
@@ -203,7 +208,7 @@ export async function handle(msg: InboundMessage): Promise<OutboundMessage[]> {
     // No conversation row for an unknown number, so this one reply is
     // composed without any history to draw on.
     return speak(
-      { convo: { id: '', pending: null, recent: [] }, buyerName: 'ji', shopName: kirana.name, said: msg.text ?? '' },
+      { convo: { id: '', pending: null, recent: [], basket: [], lastNamed: [] }, buyerName: 'ji', shopName: kirana.name, said: msg.text ?? '' },
       { kind: 'NOT_REGISTERED' },
       copy.NOT_REGISTERED,
     );
@@ -310,7 +315,7 @@ async function turn(ctx: Ctx, msg: InboundMessage): Promise<OutboundMessage[]> {
   if (pending && isStale(pending)) {
     // Six hours on, this is not an answer to anything. Retire it rather
     // than leave the order sitting in the shop's pending count forever.
-    await expire(pending);
+    expire(ctx);
     pending = ctx.convo.pending = null;
   }
 
@@ -321,12 +326,6 @@ async function turn(ctx: Ctx, msg: InboundMessage): Promise<OutboundMessage[]> {
     return speak(ctx, { kind: 'GREETING' }, copy.GREETING);
   }
 
-  /**
-   * Lines carried over from an order the customer is amending rather than
-   * replacing. Empty in every other case.
-   */
-  let carried: PendingLine[] = [];
-
   if (pending) {
     const answered = await answer(ctx, pending);
     // null means "this was not an answer" -- fall through and read it as
@@ -334,41 +333,21 @@ async function turn(ctx: Ctx, msg: InboundMessage): Promise<OutboundMessage[]> {
     if (answered) return answered;
 
     /**
-     * AMENDING, NOT STARTING OVER.
+     * NOT AN ANSWER, SO IT IS A NEW INSTRUCTION -- and nothing is at risk.
      *
-     * A customer looking at a card that says "2 x atta" who types "aur ek
-     * kilo chini bhi" has said ALSO. Reading that as a fresh order gives
-     * them two orders -- one holding the atta they still want, one holding
-     * the sugar -- and leaves the first sitting in the shop's pending list
-     * as work nobody will ever pack. Measured, that is exactly what
-     * happened before this block existed.
+     * This used to be twenty lines of rescue: cancel the AWAITING order,
+     * carry its lines forward, merge them back in. All of that existed
+     * because an unrecognised reply would otherwise have thrown away an
+     * order the customer had already agreed to.
      *
-     * So the old order is superseded and its lines come forward. Removal
-     * is NOT handled here on purpose: "chini hata do" contains hata, which
-     * ./reply.ts reads as CHANGE, and that path cancels and asks for the
-     * whole list again. Adding is common and cheap to get right; removing
-     * by natural language is neither.
+     * The basket removes the problem rather than handling it. It is
+     * conversation state, it is not touched by falling through, and
+     * whatever they said next simply adds to it.
      */
-    if (pending.kind === 'CONFIRM') carried = await supersede(pending.orderId);
-
-    /**
-     * The same courtesy for an unanswered QUESTION. A reply the matcher
-     * cannot read is usually the customer adding something, not throwing
-     * their list away -- and when it was read wrongly, as it was above,
-     * the cost of discarding was four lines of a five line order.
-     *
-     * Only the SETTLED lines come forward. The one still under question
-     * is dropped, because carrying an unanswered question into a fresh
-     * turn would ask it again forever.
-     */
-    if (pending.kind === 'DISAMBIGUATE') {
-      carried = pending.lines.filter((l) => l.skuId && !l.needsDisambiguation);
-    }
-
     ctx.convo.pending = null;
   }
 
-  return act(ctx, carried);
+  return act(ctx);
 }
 
 /**
@@ -406,7 +385,7 @@ async function photo(ctx: Ctx, path: string): Promise<OutboundMessage[]> {
   }
 
   ctx.meta = { ...ctx.meta, source: 'PHOTO', mediaPath: path };
-  return act(ctx, [], list.items);
+  return act(ctx, list.items);
 }
 
 // ---------------------------------------------------------------- intents
@@ -419,7 +398,6 @@ async function photo(ctx: Ctx, path: string): Promise<OutboundMessage[]> {
  */
 async function act(
   ctx: Ctx,
-  carried: PendingLine[],
   /**
    * Items already read off a photographed list. When present the text
    * extractor is skipped -- there is no text to extract from, and the
@@ -427,6 +405,35 @@ async function act(
    */
   fromPhoto?: Extraction['items'],
 ): Promise<OutboundMessage[]> {
+  /**
+   * A NO WITH A BASKET OPEN MEANS SOMETHING, whatever the label says.
+   *
+   * Rejection used to live only inside the checkout answer, because that
+   * was the only moment an order existed to reject. With a basket the
+   * customer can take something out at any point, and they do:
+   *
+   *   sugar nahi chahiye  -> "Sugar hai. Kitna bhejun?"  (a stock answer)
+   *   nahi rehne do       -> the whole category list, basket untouched
+   *
+   * Checked before the extractor is even consulted, because this is
+   * precisely the case where its label is least reliable and least
+   * needed. Long sentences do not reach here -- readAnswer returns
+   * UNKNOWN past three words -- so "nahi teen kilo chini karo" stays a
+   * correction rather than becoming a refusal.
+   */
+  if (!fromPhoto && ctx.convo.basket.length) {
+    const said = readAnswer(ctx.said, 0);
+    if (said.kind === 'NO') {
+      ctx.annotation = { intent: 'NEGATIVE_FEEDBACK', goal: 'ORDERING' };
+      const dropped = dropFromBasket(ctx);
+      if (dropped) return dropped;
+
+      ctx.convo.basket = [];
+      ctx.convo.pending = null;
+      return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
+    }
+  }
+
   const extraction: Extraction = fromPhoto
     ? { items: fromPhoto, intent: 'ORDER', goal: 'ORDERING' }
     : await extractOrder(ctx.said);
@@ -439,11 +446,19 @@ async function act(
 
   switch (extraction.intent) {
     case 'CANCEL':
-      if (carried.length) {
-        // they were mid-order and changed their mind about all of it
-        return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
-      }
+      // everything in the bag goes back on the shelf
+      ctx.convo.basket = [];
+      ctx.convo.pending = null;
       return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
+
+    case 'CHECKOUT':
+      return checkout(ctx);
+
+    case 'REJECT': {
+      const dropped = dropFromBasket(ctx);
+      if (dropped) return dropped;
+      break;
+    }
 
     case 'REPEAT':
       return repeatLast(ctx);
@@ -452,29 +467,69 @@ async function act(
       return account(ctx);
 
     case 'GREETING':
-      if (carried.length) return placeOrder(ctx, carried, true);
       return speak(ctx, { kind: 'GREETING' }, copy.GREETING);
 
     case 'QUESTION':
-      return question(ctx, extraction.items.map((i) => i.text), carried);
+      return question(ctx, extraction.items.map((i) => i.text));
 
     default:
       break;
   }
 
   if (!extraction.items.length) {
-    // Anything carried from a superseded order is put back rather than
-    // dropped: failing to parse the amendment is no reason to lose what
-    // the customer had already agreed to.
-    if (carried.length) return placeOrder(ctx, carried, true);
     /**
-     * "ghar ka rashan chahiye" is a real request that names no product.
-     * Answering it with "samajh nahi aaya" is true and useless; the shop
-     * knows exactly what it sells and can just say so.
+     * NO ITEMS IS NOT THE SAME AS NOTHING TO SAY.
+     *
+     * Measured, three runs of the same sentence:
+     *
+     *   moong dal ka price kitna h -> QUESTION[moong dal]
+     *                              -> UNKNOWN[]
+     *                              -> QUESTION[moong dal]
+     *
+     * One run in three the extractor found no span, this branch fired,
+     * and the shop read out its category list instead of a price -- for a
+     * question it had answered correctly moments earlier. Routing on a
+     * label that changes between identical inputs means every fix to one
+     * path leaves the other untouched and the symptom just moves.
+     *
+     * So the product search does not depend on the label. question()
+     * matches against the raw sentence and ends at the catalogue only if
+     * genuinely nothing was named, which is what this branch wanted to be
+     * all along.
      */
-    const [cat, st] = await Promise.all([getCatalog(ctx.kiranaId), getStockMap(ctx.kiranaId)]);
-    const categories = categoriesOf(cat, st);
-    return speak(ctx, { kind: 'CATALOGUE', categories }, copy.catalogue(categories));
+    return question(ctx, []);
+  }
+
+  /**
+   * "yeh" MEANS WHAT THE SHOP JUST NAMED.
+   *
+   * A customer told the price of moong dal replies "1 kg yeh pack kar
+   * do". Ranking the word yeh against a national product list returned
+   * DRY YEAST, and the shop apologised for not stocking it. Substituting
+   * the referent before ranking is the whole fix; if there is no single
+   * referent the pointer is left alone and falls through to the ordinary
+   * "samajh nahi aaya", which is honest.
+   */
+  const named = ctx.convo.lastNamed;
+  const pointing = extraction.items.filter((i) => isPointer(i.text));
+
+  if (pointing.length && named.length === 1) {
+    for (const item of pointing) item.text = named[0]!.name;
+  } else if (pointing.length) {
+    /**
+     * They pointed and there is nothing to point at, or several things.
+     * ASK. The alternative is what shipped: "yeh" went to the knowledge
+     * base as a product name, came back DRY YEAST, and the shop
+     * apologised for not stocking it.
+     */
+    const options = displayNames(named.map((n) => n.name));
+    return speak(
+      ctx,
+      options.length
+        ? { kind: 'ASK_WHICH', sourceText: pointing[0]!.text, options }
+        : { kind: 'NOT_UNDERSTOOD' },
+      options.length ? copy.askWhich(pointing[0]!.text, options) : copy.NOT_UNDERSTOOD,
+    );
   }
 
   // ---- rank against THIS shop's catalogue, with THIS household's prior
@@ -571,7 +626,7 @@ async function act(
     }
   }
 
-  const lines = merge(carried, resolved.map(flatten));
+  const lines = resolved.map(flatten);
   if (elicitedCategory && lost) {
     /**
      * Marked on the LINE rather than held in a module-level map, because
@@ -582,7 +637,7 @@ async function act(
     if (at) at.elicitedCategory = elicitedCategory;
   }
 
-  return advance(ctx, lines, carried.length > 0, substituted, mismatched);
+  return advance(ctx, lines, false, substituted, mismatched);
 }
 
 /**
@@ -715,12 +770,13 @@ const NEARBY_FLOOR = 0.5;
  * useless. Anything NOT about a stocked product still deflects, honestly,
  * rather than inventing shop timings.
  */
-async function question(
-  ctx: Ctx,
-  spans: string[],
-  carried: PendingLine[],
-): Promise<OutboundMessage[]> {
-  const card = carried.length ? copy.orderCard(carried) : undefined;
+async function question(ctx: Ctx, spans: string[]): Promise<OutboundMessage[]> {
+  /**
+   * A question does not disturb the basket, but it should not hide it
+   * either -- someone who asks what sugar costs mid-shop still wants to
+   * see what is already in the bag.
+   */
+  const card = ctx.convo.basket.length ? copy.orderCard(ctx.convo.basket) : undefined;
 
   const [catalog, stock, prior] = await Promise.all([
     getCatalog(ctx.kiranaId),
@@ -728,39 +784,47 @@ async function question(
     buildPrior(ctx.householdId),
   ]);
 
-  if (spans.length) {
-    const line = rankLine(spans[0]!, 1, null, catalog, prior, DEFAULT_RANK);
+  /**
+   * Fall back to the WHOLE SENTENCE when no span came out.
+   *
+   * The extractor returns a product span most of the time and not always,
+   * and when it did not the shop said "mujhe abhi pata nahi hai" to
+   * "moong dal ka price kitna h" -- with moong dal sitting in the
+   * catalogue and its name sitting in the question. Matching is robust to
+   * the extra words; having nothing to match is not.
+   */
+  const asked = spans[0] ?? ctx.said;
 
-    if (line.chosen && !line.needsDisambiguation) {
-      const sku = line.chosen.sku;
-      return speak(ctx, {
-        kind: 'STOCK_ANSWER',
-        name: sku.name,
-        inStock: (stock.get(sku.id) ?? 0) > 0,
-        price: rupeeLabel(sku.sellPaise),
-      }, copy.stockAnswer(sku.name, (stock.get(sku.id) ?? 0) > 0), card);
-    }
+  if (asked.trim()) {
+    const found = matching(asked, catalog, stock);
 
     /**
-     * AMBIGUITY IS THE ANSWER TO A LISTING QUESTION.
+     * ONE MATCH IS A PRICE, SEVERAL IS A LIST, and both come out of the
+     * same search. "moong dal ka price" finds one dal and gets a price;
+     * "daal kaunsi kaunsi hai" finds three and gets their names.
      *
-     * The old shape here was `if (confident) answer; else deflect`, which
-     * got it exactly backwards. Asked "daal kaunsi kaunsi hai" the ranker
-     * matched four dals, could not choose between them, and the shop
-     * replied "main confirm kar leta hoon" -- about a question whose whole
-     * answer was those four names, sitting in the catalogue it had just
-     * searched.
-     *
-     * MG-ShopDial names this a LISTING question and files it under QA
-     * alongside factoid and yes/no. It is the one of the three this shop
-     * could not do.
+     * Splitting these across two different searches -- rankLine for the
+     * confident case, matching for the rest -- is what let "moong dal ka
+     * price kitna h" fall between them and be answered with a category
+     * list.
      */
-    const found = matching(spans[0]!, catalog, stock);
-    if (found.length) {
+    if (found.length === 1) {
+      const sku = found[0]!;
+      remember(ctx, [sku]);
+      return speak(ctx, {
+        kind: 'STOCK_ANSWER',
+        name: withoutPack(sku.name),
+        inStock: (stock.get(sku.id) ?? 0) > 0,
+        price: rupeeLabel(sku.sellPaise),
+      }, copy.stockAnswer(withoutPack(sku.name), true), card);
+    }
+
+    if (found.length > 1) {
+      remember(ctx, found);
       return speak(
         ctx,
-        { kind: 'LISTING', asked: spans[0]!, options: displayNames(found.map((s) => s.name)) },
-        copy.listing(displayNames(found.map((s) => s.name))),
+        { kind: 'LISTING', asked, options: displayNames(found.map((x) => x.name)) },
+        copy.listing(displayNames(found.map((x) => x.name))),
         card,
       );
     }
@@ -788,17 +852,65 @@ async function question(
  */
 function matching(span: string, catalog: Sku[], stock: Map<string, number>): Sku[] {
   const q = stripQuantity(span);
-  return catalog
+
+  /**
+   * SCORED NAME-INTO-SENTENCE, not sentence-into-names.
+   *
+   * fuzzyScore measures how much of its FIRST argument is accounted for
+   * by its second, and the direction decides everything here. Asking how
+   * much of "moong dal ka price kitna h" is covered by a product punishes
+   * the question for being a question: four of its six words are grammar,
+   * Moong Dal scored 0.33, nothing cleared the floor, and the shop read
+   * out its category list instead of a price.
+   *
+   * The question worth asking is the other one -- does this product's
+   * name appear IN what they said. Each name and alias is scored
+   * separately and the best one wins, because "moong dal" matching
+   * perfectly should not be dragged down by nine other aliases that do
+   * not appear.
+   */
+  const scored = catalog
     .filter((s) => (stock.get(s.id) ?? 0) > 0)
-    .map((s) => ({ s, score: fuzzyScore(q, [s.name, s.brand ?? '', ...s.aliases].join(' ')) }))
+    .map((s) => {
+      const names = [s.name, ...s.aliases].filter(Boolean);
+      let score = 0;
+      let specific = 0;
+      for (const n of names) {
+        const hit = fuzzyScore(n, q);
+        if (hit < LISTING_FLOOR) continue;
+        const words = n.split(/\s+/).filter((w) => w.length >= 3).length;
+        // a longer name that still matches is a more particular claim
+        if (hit > score || (hit === score && words > specific)) {
+          score = Math.max(score, hit);
+          specific = Math.max(specific, words);
+        }
+      }
+      return { s, score, specific };
+    })
     .filter((x) => x.score >= LISTING_FLOOR)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 8)
-    .map((x) => x.s);
+    .sort((a, b) => b.specific - a.specific || b.score - a.score);
+
+  /**
+   * THE MOST PARTICULAR MATCH WINS OUTRIGHT.
+   *
+   * Every dal in the catalogue carries the alias "dal", so "moong dal ka
+   * price kitna h" matched Moong, Toor and Chana equally at 1.00 and the
+   * shop answered a price question by listing three dals. "moong dal" is
+   * two words and both are in the sentence; "dal" is one. The longer
+   * name is a stronger claim on what they meant, and when exactly one
+   * SKU makes it, that is the answer rather than the shortlist.
+   */
+  const best = scored[0];
+  if (best && (!scored[1] || scored[1].specific < best.specific)) return [best.s];
+
+  return scored.slice(0, 8).map((x) => x.s);
 }
 
 /** high, because a list is a claim about everything the shop has */
 const LISTING_FLOOR = 0.45;
+
+/** how many times the shop may ask about one line before deciding */
+const MAX_ASKS = 2;
 
 /**
  * What the shop sells, in words a customer would use.
@@ -864,26 +976,6 @@ async function account(ctx: Ctx): Promise<OutboundMessage[]> {
 // ---------------------------------------------------------------- ordering
 
 /**
- * Fold an amendment into the order it amends, keyed by SKU.
- *
- * A restated item REPLACES rather than stacks: someone who says "nahi teen
- * kilo atta" while two kilos are on the card means three, not five. A new
- * item is appended. Carried lines keep their position so the card does not
- * reshuffle under the customer between one message and the next.
- */
-function merge(carried: PendingLine[], fresh: PendingLine[]): PendingLine[] {
-  if (!carried.length) return fresh;
-
-  const out = [...carried];
-  for (const line of fresh) {
-    const at = line.skuId ? out.findIndex((c) => c.skuId === line.skuId) : -1;
-    if (at >= 0) out[at] = line;
-    else out.push(line);
-  }
-  return out;
-}
-
-/**
  * Ask about the next unsettled line, or write the order if there are none.
  *
  * This replaced a one-liner that found the FIRST uncertain line, asked
@@ -903,6 +995,25 @@ async function advance(
 
   if (index >= 0) {
     const line = lines[index]!;
+
+    /**
+     * GIVE UP ASKING BEFORE THE CUSTOMER GIVES UP ANSWERING.
+     *
+     * Two attempts, then take the best candidate and carry on. A question
+     * nobody can answer, asked forever, is worse than a reasonable guess
+     * -- and a guess is safe now, because rejecting an item works at any
+     * point rather than only at checkout.
+     */
+    line.asks = (line.asks ?? 0) + 1;
+    if (line.asks > MAX_ASKS) {
+      line.needsDisambiguation = false;
+      if (!line.skuId && line.alternates[0]) {
+        line.skuId = line.alternates[0].skuId;
+        line.name = line.alternates[0].name;
+      }
+      return advance(ctx, lines, amended, substituted, packAsks);
+    }
+
     /**
      * DEDUPED, and it is not tidiness.
      *
@@ -919,6 +1030,19 @@ async function advance(
       ...(line.skuId ? [{ skuId: line.skuId, name: line.name }] : []),
       ...line.alternates.map((a) => ({ skuId: a.skuId, name: a.name })),
     ].filter((o) => !seen.has(o.skuId) && seen.add(o.skuId));
+
+    /**
+     * ONE OPTION IS NOT A CHOICE.
+     *
+     * "Moong Dal 1kg mein se kaunsa? Moong Dal" is a question with a
+     * single answer, and asking it makes the shop look broken in a way
+     * that no customer can help with. If the shortlist came down to one
+     * thing, that is the answer.
+     */
+    if (options.length === 1 && line.skuId) {
+      line.needsDisambiguation = false;
+      return advance(ctx, lines, amended, substituted, packAsks);
+    }
 
     // Nothing to offer means nothing to ask. Drop the line rather than
     // send a question with an empty option list.
@@ -940,6 +1064,7 @@ async function advance(
      * shortened. See displayNames in resolver/pack.ts.
      */
     const names = displayNames(options.map((o) => o.name));
+    remember(ctx, options.map((o) => ({ id: o.skuId, name: o.name })));
 
     /**
      * TWO DIFFERENT QUESTIONS, and they should not sound alike.
@@ -993,18 +1118,99 @@ async function placeOrder(
    */
   const dropped = lines.filter((l) => !l.skuId).map((l) => l.sourceText);
 
-  if (!kept.length) {
+  if (!kept.length && !ctx.convo.basket.length) {
     ctx.convo.pending = null;
     return speak(ctx, { kind: 'NOT_UNDERSTOOD' }, copy.NOT_UNDERSTOOD);
   }
 
-  const total = kept.reduce((sum, l) => sum + l.unitPricePaise * l.quantity, 0);
+  /**
+   * INTO THE BASKET, NOT INTO THE DATABASE.
+   *
+   * This used to write an Order row here and immediately ask "bhej dun?",
+   * which turned every single item into a checkout. Adding a second thing
+   * then CANCELLED that order and wrote another, so a three item
+   * conversation left two cancelled rows behind and the shopkeeper's
+   * dashboard filled with orders nobody had placed.
+   *
+   * A counter does not work like that. Things go in the bag, the customer
+   * asks what sugar costs, more things go in the bag, and the bill is
+   * added up once at the end. Nothing is written until they say send it.
+   */
+  ctx.convo.basket = mergeBasket(ctx.convo.basket, kept);
+  ctx.convo.pending = null;
+
+  const added = kept.map((l) => withoutPack(l.name));
+
+  return speak(
+    ctx,
+    { kind: 'BASKET_ADDED', added, substituted, packAsks, dropped },
+    copy.addedToBasket(added, packAsks),
+    copy.orderCard(ctx.convo.basket),
+  );
+}
+
+/**
+ * Fold new lines into the basket, keyed by SKU.
+ *
+ * A restated item REPLACES rather than stacks: someone who already has
+ * two kilos of sugar in the bag and says "teen kilo chini" means three,
+ * not five. Position is kept so the card does not reshuffle between
+ * messages.
+ */
+function mergeBasket(basket: PendingLine[], fresh: PendingLine[]): PendingLine[] {
+  const out = [...basket];
+  for (const line of fresh) {
+    const at = line.skuId ? out.findIndex((b) => b.skuId === line.skuId) : -1;
+    if (at >= 0) out[at] = line;
+    else out.push(line);
+  }
+  return out;
+}
+
+/**
+ * Read the basket back and ask for the word that writes it down.
+ *
+ * The Order row still does not exist at this point. It is written in
+ * `writeOrder`, once, after they say yes -- so an abandoned conversation
+ * leaves nothing behind at all, rather than an AWAITING row the
+ * shopkeeper has to guess about.
+ */
+async function checkout(ctx: Ctx): Promise<OutboundMessage[]> {
+  if (!ctx.convo.basket.length) {
+    return speak(ctx, { kind: 'BASKET_EMPTY' }, copy.BASKET_EMPTY);
+  }
+
+  ctx.convo.pending = { kind: 'CHECKOUT', askedAt: new Date().toISOString() };
+  return speak(
+    ctx,
+    { kind: 'BASKET_REVIEW' },
+    copy.readyToSend(),
+    copy.orderCard(ctx.convo.basket),
+  );
+}
+
+/**
+ * Note what the shop just put in front of the customer, so a pointer in
+ * their next message has something to point AT. Overwritten every time,
+ * never accumulated -- see lastNamed in state.ts.
+ */
+function remember(ctx: Ctx, skus: Array<{ id: string; name: string }>): void {
+  ctx.convo.lastNamed = skus.slice(0, 4).map((s) => ({ skuId: s.id, name: s.name }));
+}
+
+/** the one write, at the end, with everything in it */
+async function writeOrder(ctx: Ctx): Promise<OutboundMessage[]> {
+  const lines = ctx.convo.basket;
+  const total = lines.reduce((sum, l) => sum + l.unitPricePaise * l.quantity, 0);
 
   const order = await prisma.order.create({
     data: {
       kiranaId: ctx.kiranaId,
       householdId: ctx.householdId,
-      status: 'AWAITING',
+      // straight to CONFIRMED: the customer just said so, and there is no
+      // intermediate state left for an AWAITING row to represent
+      status: 'CONFIRMED',
+      confirmedAt: new Date(),
       source: ctx.meta.source,
       rawText: ctx.meta.rawText,
       transcript: ctx.meta.transcript,
@@ -1013,7 +1219,7 @@ async function placeOrder(
       latencyMs: Date.now() - ctx.meta.startedAt,
       totalPaise: Math.round(total),
       lines: {
-        create: kept.map((l) => ({
+        create: lines.map((l) => ({
           skuId: l.skuId,
           sourceText: l.sourceText,
           quantity: l.quantity,
@@ -1029,24 +1235,13 @@ async function placeOrder(
     },
   });
 
-  ctx.convo.pending = {
-    kind: 'CONFIRM', orderId: order.id, askedAt: new Date().toISOString(),
-  };
-
-  /**
-   * The card is rendered by code and appended AFTER whatever the voice
-   * says. Quantities, prices and the total never pass through a model,
-   * here or anywhere else.
-   */
-  const card = `${copy.orderCard(kept)}\n(#${order.id.slice(-6)})`;
+  ctx.convo.basket = [];
+  ctx.convo.pending = null;
 
   return speak(
     ctx,
-    amended
-      ? { kind: 'ORDER_AMENDED' }
-      : { kind: 'ORDER_DRAFT', substituted, packAsks, dropped },
-    copy.readyToSend(packAsks),
-    card,
+    { kind: 'ORDER_CONFIRMED', ref: order.id.slice(-6) },
+    copy.confirmed(order.totalPaise, order.id.slice(-6)),
   );
 }
 
@@ -1061,7 +1256,7 @@ async function placeOrder(
  * short.
  */
 async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | null> {
-  if (pending.kind === 'CONFIRM') {
+  if (pending.kind === 'CHECKOUT') {
     const a = readAnswer(ctx.said, 3);
 
     /**
@@ -1088,59 +1283,43 @@ async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | n
     const change = a.kind === 'CHANGE' || (a.kind === 'CHOICE' && a.index === 1);
     const no = a.kind === 'NO' || (a.kind === 'CHOICE' && a.index === 2);
 
-    if (yes) {
-      const order = await prisma.order.update({
-        where: { id: pending.orderId },
-        data: { status: 'CONFIRMED', confirmedAt: new Date() },
-      });
-      ctx.convo.pending = null;
-      return speak(
-        ctx,
-        { kind: 'ORDER_CONFIRMED', ref: order.id.slice(-6) },
-        copy.confirmed(order.totalPaise, order.id.slice(-6)),
-      );
-    }
+    if (yes) return writeOrder(ctx);
 
     if (no) {
       /**
        * A NO THAT NAMES A PRODUCT IS A REJECTION, NOT A CANCELLATION.
        *
-       * "dhara nahi chahiye" and "nahi rehne do" both contain nahi, and
-       * until now both wiped the entire order. MG-ShopDial keeps Negative
+       * "chini nahi chahiye" and "nahi rehne do" both contain nahi, and
+       * both used to wipe the whole basket. MG-ShopDial keeps Negative
        * feedback separate from ending the conversation for exactly this
        * reason, and reports it as the highest-agreement intent in the
        * schema -- people are unambiguous when they reject a suggestion.
        *
-       * The test is whether they named something on the card. If they did,
-       * that line is reopened and everything else survives. If they did
-       * not, they meant the order.
+       * The test is whether they named something in the basket. If they
+       * did, that item comes out and the rest stays.
        */
-      const rejected = await rejectLine(ctx, pending.orderId);
-      if (rejected) return rejected;
+      const dropped = dropFromBasket(ctx);
+      if (dropped) return dropped;
 
-      await prisma.order.update({
-        where: { id: pending.orderId },
-        data: { status: 'CANCELLED', cancelledAt: new Date() },
-      });
+      ctx.convo.basket = [];
       ctx.convo.pending = null;
       return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
     }
 
     if (change) {
       /**
-       * The pending order is cancelled rather than held open.
-       *
-       * Holding it would be friendlier and is the wrong trade here: an
-       * AWAITING order nobody ever returns to is indistinguishable, in the
-       * shop's dashboard, from one the shopkeeper still has to pack. A
-       * cancelled one is honest about what happened.
+       * They want to change something but have not said what. The basket
+       * is KEPT -- that is the whole difference from before, when there
+       * was an order row to cancel and cancelling it was the only option.
+       * Now the shop can simply ask, and nothing is lost either way.
        */
-      await prisma.order.update({
-        where: { id: pending.orderId },
-        data: { status: 'CANCELLED', cancelledAt: new Date() },
-      });
       ctx.convo.pending = null;
-      return speak(ctx, { kind: 'ORDER_REPLACED' }, copy.SEND_AGAIN);
+      return speak(
+        ctx,
+        { kind: 'ORDER_REPLACED' },
+        copy.SEND_AGAIN,
+        copy.orderCard(ctx.convo.basket),
+      );
     }
 
     return null;
@@ -1192,152 +1371,47 @@ async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | n
 // ---------------------------------------------------------------- upkeep
 
 /**
- * Reopen one line of a pending order, if that is what they rejected.
+ * Take out of the basket whatever they just refused.
  *
- * Returns null when no product on the card was named, which means the no
- * was about the order and the caller should cancel it.
+ * Returns null when no item in the basket was named, which means the no
+ * was about the whole thing and the caller should empty it.
+ *
+ * Much smaller than it used to be. When an Order row existed at this
+ * point the same job meant cancelling that row, rebuilding every
+ * surviving line by hand and writing a replacement; with a basket it is
+ * a splice.
  */
-async function rejectLine(ctx: Ctx, orderId: string): Promise<OutboundMessage[] | null> {
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
-    include: { lines: { include: { sku: true } } },
-  });
-  if (!order || order.status !== 'AWAITING') return null;
-
-  const named = order.lines.filter((l) => l.sku);
-  const at = namesLine(ctx.said, named.map((l) => l.sku!.name));
+function dropFromBasket(ctx: Ctx): Promise<OutboundMessage[]> | null {
+  const basket = ctx.convo.basket;
+  const at = namesLine(ctx.said, basket.map((l) => l.name));
   if (at === null) return null;
 
-  const target = named[at]!;
-  const [catalog, stock, prior] = await Promise.all([
-    getCatalog(ctx.kiranaId),
-    getStockMap(ctx.kiranaId),
-    buildPrior(ctx.householdId),
-  ]);
-
-  // what else the shop could give them instead of the thing they refused
-  const options = findSubstitutes(target.sku!, catalog, stock, prior)
-    .map((c) => c.sku)
-    .filter((s) => s.id !== target.skuId)
-    .slice(0, 3);
-
-  // the rest of the basket is untouched, which is the whole point
-  const survivors: PendingLine[] = named
-    .filter((l) => l.id !== target.id)
-    .map((l) => ({
-      sourceText: l.sourceText,
-      quantity: l.quantity,
-      unitHint: l.unitHint,
-      skuId: l.skuId,
-      name: l.sku!.name,
-      unitPricePaise: l.unitPricePaise,
-      method: l.method,
-      confidence: l.confidence,
-      wasSubstituted: l.wasSubstituted,
-      alternates: [],
-      needsDisambiguation: false,
-    }));
-
-  if (options.length) {
-    survivors.push({
-      sourceText: target.sourceText,
-      quantity: target.quantity,
-      unitHint: target.unitHint,
-      skuId: null,
-      name: target.sourceText,
-      unitPricePaise: 0,
-      method: 'UNRESOLVED',
-      confidence: 0,
-      wasSubstituted: false,
-      alternates: options.map((s) => ({ skuId: s.id, name: s.name, score: 0 })),
-      needsDisambiguation: true,
-    });
-  }
-
-  // the order as quoted no longer exists, so it is retired and rebuilt
-  await prisma.order.update({
-    where: { id: orderId },
-    data: { status: 'CANCELLED', cancelledAt: new Date() },
-  });
+  const [gone] = basket.splice(at, 1);
   ctx.convo.pending = null;
 
-  if (!options.length) {
-    // nothing to offer: drop the line and re-quote what is left
-    if (!survivors.length) {
-      return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
-    }
-    return placeOrder(ctx, survivors, true);
+  if (!basket.length) {
+    return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
   }
 
-  ctx.meta = { ...ctx.meta, startedAt: Date.now() };
-  const reply = await speak(
+  return speak(
     ctx,
-    {
-      kind: 'REJECTED',
-      rejected: withoutPack(target.sku!.name),
-      options: displayNames(options.map((s) => s.name)),
-    },
-    copy.rejected(target.sku!.name),
+    { kind: 'REJECTED', rejected: withoutPack(gone!.name), options: [] },
+    copy.rejected(withoutPack(gone!.name)),
+    copy.orderCard(basket),
   );
-
-  // hold the question so the answer lands, carrying the survivors with it
-  ctx.convo.pending = {
-    kind: 'DISAMBIGUATE',
-    lines: survivors,
-    index: survivors.length - 1,
-    options: options.map((s) => ({ skuId: s.id, name: s.name })),
-    meta: ctx.meta,
-    askedAt: new Date().toISOString(),
-  };
-  return reply;
 }
 
 /**
- * Cancel an order the customer is replacing, and hand back its lines.
+ * Retire a question nobody answered, and the basket it belonged to.
  *
- * Cancelled rather than deleted: the row is the only record that the
- * customer once agreed to this exact basket, and the eval harness reads
- * order history. Prices are carried as they were quoted, not re-read from
- * today's catalogue, because the customer is amending the basket they were
- * shown and repricing it underneath them would be a different order.
+ * There is no order row to cancel any more -- that is the point of the
+ * basket, and it used to be the whole body of this function. What is
+ * left is emptying a bag somebody walked away from six hours ago, so
+ * tomorrow's "bhej do" does not send yesterday's shopping.
  */
-async function supersede(orderId: string): Promise<PendingLine[]> {
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
-    include: { lines: { include: { sku: true } } },
-  });
-  if (!order || order.status !== 'AWAITING') return [];
-
-  await prisma.order.update({
-    where: { id: orderId },
-    data: { status: 'CANCELLED', cancelledAt: new Date() },
-  });
-
-  return order.lines
-    .filter((l) => l.sku)
-    .map((l) => ({
-      sourceText: l.sourceText,
-      quantity: l.quantity,
-      unitHint: l.unitHint,
-      skuId: l.skuId,
-      name: l.sku!.name,
-      unitPricePaise: l.unitPricePaise,
-      method: l.method,
-      confidence: l.confidence,
-      wasSubstituted: l.wasSubstituted,
-      alternates: [],
-      needsDisambiguation: false,
-    }));
-}
-
-/** retire a question nobody answered, and any order hanging off it */
-async function expire(pending: Pending): Promise<void> {
-  if (pending.kind === 'CONFIRM') {
-    await prisma.order.updateMany({
-      where: { id: pending.orderId, status: 'AWAITING' },
-      data: { status: 'CANCELLED', cancelledAt: new Date() },
-    });
-  }
+function expire(ctx: Ctx): void {
+  ctx.convo.pending = null;
+  ctx.convo.basket = [];
 }
 
 function reAsk(ctx: Ctx, pending: Pending): Promise<OutboundMessage[]> {

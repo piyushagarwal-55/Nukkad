@@ -176,6 +176,7 @@ export function rankLine(
     if (score > 0.05) scored.push({ sku, score, fuzzy, method });
   }
 
+  const exactCount = scored.filter((c) => c.method === 'EXACT').length;
   scored.sort((a, b) => b.score - a.score);
   const top = scored.slice(0, opts.topK);
   const chosen = top[0] ?? null;
@@ -220,6 +221,30 @@ export function rankLine(
     chosen,
     alternates: rivals,
     confidence,
-    needsDisambiguation: !chosen || confidence < opts.confidenceFloor,
+    /**
+     * AN EXACT NAME IS NOT A QUESTION.
+     *
+     * Confidence is the MARGIN over the runner-up, which is the right
+     * measure nearly everywhere and wrong here. A shop with three dals
+     * has three close scores, so "Moong Dal 1kg" -- word for word the
+     * product's own name -- scored a thin margin and got asked about:
+     *
+     *     "Moong Dal 1kg" mein se kaunsa? Moong Dal
+     *
+     * There is nothing to clarify when the customer has used the exact
+     * name. The margin is small because the shop stocks similar things,
+     * not because the request was unclear.
+     *
+     * ONLY WHEN EXACTLY ONE CANDIDATE IS EXACT, though, and the first
+     * version of this missed that. Local names are shared: every rice in
+     * the catalogue answers to "chawal", so "do kilo chawal" matched
+     * three SKUs exactly, the rule fired, and the shop silently picked
+     * whichever sorted first instead of asking which rice. An exact match
+     * settles a question only when it is the sole exact match.
+     */
+    needsDisambiguation:
+      !chosen ||
+      (!(chosen.method === 'EXACT' && exactCount === 1) &&
+        confidence < opts.confidenceFloor),
   };
 }

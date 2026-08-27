@@ -114,6 +114,22 @@ export function readAnswer(
  * is not an answer, it is the same ambiguity restated, so it stays
  * unresolved and gets asked again.
  */
+/**
+ * Words that point at something already mentioned instead of naming it.
+ * "yeh", "wo", "isko" -- what a customer says the moment the shop has
+ * just told them a price.
+ */
+const POINTERS = new Set([
+  'yeh', 'ye', 'yah', 'wo', 'woh', 'vo', 'ise', 'isko', 'iske', 'usko',
+  'uske', 'usi', 'isi', 'this', 'that', 'it', 'same', 'wahi',
+]);
+
+/** true when a span points at something rather than naming it */
+export function isPointer(text: string): boolean {
+  const ws = words(text);
+  return ws.length > 0 && ws.every((w) => POINTERS.has(w));
+}
+
 const NAME_FLOOR = 0.5;
 const NAME_GAP = 0.15;
 
@@ -158,6 +174,21 @@ export function namesLine(text: string, lineNames: string[]): number | null {
 
 export function readChoiceByName(text: string, optionNames: string[]): number | null {
   if (!optionNames.length) return null;
+
+  /**
+   * AN EXACT NAME WINS OUTRIGHT, gap check or no gap check.
+   *
+   * "Basmati Rice 5kg" is a SUBSTRING of "India Gate Basmati Rice 5kg",
+   * so both scored high, the margin was under the floor, the matcher
+   * called it ambiguous and the shop asked the same question again --
+   * and again, five times, because nothing about the answer was ever
+   * going to change. Naming an option exactly is not ambiguous, it is
+   * the clearest possible answer.
+   */
+  const flat = (t: string) => t.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const exact = optionNames.findIndex((n) => flat(n) === flat(text));
+  if (exact >= 0) return exact;
+
 
   const scored = optionNames
     .map((name, index) => ({ index, score: fuzzyScore(text, name) }))

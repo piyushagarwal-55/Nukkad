@@ -59,6 +59,8 @@ async function main() {
       data: { state: 'IDLE', contextJson: Prisma.DbNull },
     });
 
+    // anything older belongs to the previous fixture
+    const startedAt = new Date();
     const path = resolve(ROOT, 'media', fx.file);
     console.log(`\n${fx.file}`);
     console.log(`  on paper : ${fx.want.join(', ')}`);
@@ -106,8 +108,23 @@ async function main() {
       show('shop', next.map((r) => r.text).join('\n'));
     }
 
+    /**
+     * Close the basket. Nothing reaches the database until this happens
+     * -- see the `basket` note in conversation/state.ts -- so a harness
+     * that looked for an order row straight after the photo would find
+     * the PREVIOUS fixture's order and score itself against that.
+     */
+    for (const closing of ['bas itna hi bhej do', 'haan']) {
+      const done = await handle({
+        channel: 'sim', senderId: HOUSEHOLD, recipientId: SHOP,
+        text: closing, media: [], externalId: `photo_${++seq}`, receivedAt: new Date(),
+      });
+      console.log(`  buyer    : ${closing}`);
+      show('shop', done.map((r) => r.text).join('\n'));
+    }
+
     const order = await prisma.order.findFirst({
-      where: { householdId: hh.id },
+      where: { householdId: hh.id, createdAt: { gte: startedAt } },
       orderBy: { createdAt: 'desc' },
       include: { lines: { include: { sku: true } } },
     });

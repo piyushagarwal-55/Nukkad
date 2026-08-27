@@ -31,7 +31,13 @@ import type { ChannelId, ResolvedLine } from '@nukkad/shared';
 
 /** what the bot is currently waiting to hear back */
 export type Pending =
-  | { kind: 'CONFIRM'; orderId: string; askedAt: string }
+  /**
+   * The basket has been read back and the shop is waiting on a yes.
+   *
+   * Carries no orderId because NO ORDER EXISTS YET. That is the point of
+   * the basket: a row is written once, when the customer says send it.
+   */
+  | { kind: 'CHECKOUT'; askedAt: string }
   | {
       kind: 'DISAMBIGUATE';
       /** every line of the order, including the ones already settled */
@@ -66,6 +72,15 @@ export interface PendingLine {
    * different questions and get different copy.
    */
   elicitedCategory?: string;
+  /**
+   * How many times the shop has asked about this line.
+   *
+   * A guard against the worst live failure there is: the same question,
+   * forever. Observed five times in a row when an option name was a
+   * substring of another and no answer could break the tie. Whatever the
+   * cause, a customer must always be able to get past a question.
+   */
+  asks?: number;
 }
 
 /** the provenance an Order row needs, held while questions are outstanding */
@@ -127,6 +142,38 @@ export interface Convo {
    */
   pending: Pending | null;
   recent: Turn[];
+  /**
+   * THE BASKET, and it is what makes this a shop rather than a form.
+   *
+   * Items accumulate here across the whole conversation. A customer adds
+   * a kilo of dal, asks what sugar costs, adds sugar, asks about tea, and
+   * only then says send it -- one basket, one order, the way it works at
+   * a counter.
+   *
+   * Before this existed every request wrote its own Order row at AWAITING
+   * and asked "bhej dun?" immediately. Adding a second item CANCELLED the
+   * first order and wrote a third, so a three item conversation left two
+   * cancelled rows behind and the shopkeeper's dashboard filled up with
+   * orders nobody ever placed.
+   *
+   * Nothing is written to the database until checkout.
+   */
+  basket: PendingLine[];
+  /**
+   * The products the shop named in its LAST reply.
+   *
+   * Exists so "1 kg yeh pack kar do" means something. A customer who has
+   * just been told the price of moong dal says "yeh", not "moong dal" --
+   * and without a referent that pronoun went to the knowledge base as a
+   * product name and came back as DRY YEAST, which the shop then
+   * apologised for not stocking.
+   *
+   * Only the last turn, deliberately. A referent that survives three
+   * turns is more likely to be wrong than useful, and the shop asking
+   * "kaunsa?" is a much cheaper mistake than silently ordering a thing
+   * mentioned two minutes ago.
+   */
+  lastNamed: Array<{ skuId: string; name: string }>;
 }
 
 /**
@@ -143,6 +190,8 @@ const RECENT_MAX = 8;
 interface Stored {
   pending: Pending | null;
   recent: Turn[];
+  basket: PendingLine[];
+  lastNamed: Array<{ skuId: string; name: string }>;
 }
 
 /**
@@ -171,6 +220,8 @@ export async function loadConvo(
     id: row.id,
     pending: stored?.pending ?? null,
     recent: stored?.recent ?? [],
+    basket: stored?.basket ?? [],
+    lastNamed: stored?.lastNamed ?? [],
   };
 }
 
@@ -179,7 +230,7 @@ type StateName =
   | 'AWAITING_CONFIRM' | 'AWAITING_DISAMBIGUATION' | 'AWAITING_VETO';
 
 const STATE_OF: Record<Pending['kind'], StateName> = {
-  CONFIRM: 'AWAITING_CONFIRM',
+  CHECKOUT: 'AWAITING_CONFIRM',
   DISAMBIGUATE: 'AWAITING_DISAMBIGUATION',
 };
 
@@ -193,6 +244,8 @@ export async function save(convo: Convo): Promise<void> {
   const stored: Stored = {
     pending: convo.pending,
     recent: convo.recent.slice(-RECENT_MAX),
+    basket: convo.basket,
+    lastNamed: convo.lastNamed,
   };
   await prisma.conversation.update({
     where: { id: convo.id },

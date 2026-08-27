@@ -50,9 +50,17 @@ interface Turn {
   expect?: string;
   /** substring the reply must NOT contain */
   reject?: string;
-  /** checked against the order the conversation is currently holding */
+  /** the newest order row must be a FRESH one in this state */
   orderStatus?: string;
-  /** how many lines that order must have. Catches merge bugs. */
+  /** nothing may have been written to the database yet */
+  noOrder?: boolean;
+  /**
+   * How many lines the BASKET must hold, counted off the attached card.
+   *
+   * Off the card rather than the database, because until checkout there
+   * is no database row -- that is the point of the basket. See the
+   * `basket` note in conversation/state.ts.
+   */
   lines?: number;
 }
 
@@ -81,19 +89,27 @@ const CASES: Case[] = [
     ],
   },
   {
-    name: 'order and confirm',
-    why: 'the tap that used to do nothing at all',
+    name: 'the basket becomes ONE order at the end',
+    why:
+      'every add used to write its own Order row and ask "bhej dun?". ' +
+      'Adding a second item cancelled the first and wrote a third, so a ' +
+      'three item chat left two cancelled rows in the shop dashboard',
     turns: [
-      { say: 'do kilo atta bhej dena', expect: 'Atta' },
-      { say: 'haan bhej do', orderStatus: 'CONFIRMED' },
+      { say: 'do kilo atta bhej dena', expect: 'Atta', noOrder: true },
+      { say: 'ek kilo chini bhi', lines: 2, noOrder: true },
+      { say: 'bas itna hi bhej do', lines: 2, noOrder: true },
+      { say: 'haan', orderStatus: 'CONFIRMED' },
     ],
   },
   {
-    name: 'cancel moves the row',
-    why: 'a nice message that leaves the row at AWAITING is not a cancel',
+    name: 'a cancelled basket leaves nothing behind',
+    why:
+      'the old flow had a row to cancel, so an abandoned chat left a ' +
+      'CANCELLED order the shopkeeper had to read past. Nothing is ' +
+      'written until checkout now, so there is nothing to clean up',
     turns: [
-      { say: 'do kilo atta bhej dena', expect: 'Total' },
-      { say: 'nahi rehne do', orderStatus: 'CANCELLED' },
+      { say: 'do kilo atta bhej dena', expect: 'Total', noOrder: true },
+      { say: 'nahi rehne do', noOrder: true },
     ],
   },
   {
@@ -103,8 +119,9 @@ const CASES: Case[] = [
       'forever, so the shop sees work nobody will ever pack',
     turns: [
       { say: 'do kilo atta bhej dena', expect: 'Atta' },
-      { say: 'aur ek kilo chini bhi bhej dena', expect: 'Sugar' },
-      { say: 'haan', orderStatus: 'CONFIRMED', lines: 2 },
+      { say: 'aur ek kilo chini bhi bhej dena', expect: 'Sugar', lines: 2 },
+      { say: 'bas bhej do', lines: 2 },
+      { say: 'haan', orderStatus: 'CONFIRMED' },
     ],
   },
   {
@@ -148,7 +165,7 @@ const CASES: Case[] = [
       'Masoori?" the way a person would -- and a person answers "basmati"',
     turns: [
       { say: 'do kilo chawal aur do kilo atta' },
-      { say: 'sona masoori wala', expect: 'Sona Masoori', lines: 2 },
+      { say: 'sona masoori wala', expect: 'Sona Masoori', lines: 2, noOrder: true },
     ],
   },
   {
@@ -183,17 +200,17 @@ const CASES: Case[] = [
       'until the paper split negative feedback from cancellation, both ' +
       'wiped the whole basket',
     turns: [
-      { say: 'do kilo atta aur ek kilo chini bhej do', expect: 'Total' },
+      { say: 'do kilo atta aur ek kilo chini bhej do', expect: 'Total', lines: 2 },
       // names a product, so only that line goes -- the atta survives
-      { say: 'sugar nahi chahiye', reject: 'cancel kar diya' },
+      { say: 'sugar nahi chahiye', lines: 1 },
     ],
   },
   {
-    name: 'a bare no still cancels',
+    name: 'a bare no empties the basket',
     why: 'the other half of that split, and the easier one to break',
     turns: [
       { say: 'do kilo atta bhej dena', expect: 'Total' },
-      { say: 'nahi rehne do', orderStatus: 'CANCELLED' },
+      { say: 'nahi rehne do', reject: 'Total', noOrder: true },
     ],
   },
   {
@@ -266,7 +283,8 @@ async function run() {
     console.log(`\n${c.name}`);
     console.log(`  why: ${c.why}`);
 
-    let lastOrderId: string | null = null;
+    // anything older than this belongs to a previous case
+    const startedAt = new Date();
     let ok = true;
     const saidByShop: string[] = [];
     /**
@@ -286,11 +304,6 @@ async function run() {
 
       console.log(`  >  ${turn.say}`);
       console.log(`  <  ${text.replace(/\n/g, '\n     ')}`);
-
-      // the reference the ledger prints, so the assertion can find the row
-      // without guessing which order was just made
-      const ref = /\(#([a-z0-9]{6})\)/.exec(text)?.[1];
-      if (ref) lastOrderId = ref;
 
       // ---- properties that hold for EVERY reply ----------------------
       if (MENU.test(text)) {
@@ -326,28 +339,39 @@ async function run() {
         ok = false;
       }
 
-      if (turn.orderStatus || turn.lines !== undefined) {
-        const order = lastOrderId
-          ? await prisma.order.findFirst({
-              where: { id: { endsWith: lastOrderId } },
-              orderBy: { createdAt: 'desc' },
-              include: { lines: true },
-            })
-          : null;
-
-        if (!order) {
-          console.log('     FAIL no order row to check');
+      if (turn.lines !== undefined) {
+        const onCard = (text.match(/^\s+[\d.]+ x /gm) ?? []).length;
+        if (onCard !== turn.lines) {
+          console.log(`     FAIL basket shows ${onCard} line(s), expected ${turn.lines}`);
           ok = false;
         } else {
-          if (turn.orderStatus && order.status !== turn.orderStatus) {
-            console.log(`     FAIL order is ${order.status}, expected ${turn.orderStatus}`);
-            ok = false;
-          }
-          if (turn.lines !== undefined && order.lines.length !== turn.lines) {
-            console.log(`     FAIL order has ${order.lines.length} lines, expected ${turn.lines}`);
-            ok = false;
-          }
-          console.log(`     db   order ${lastOrderId} ${order.status}, ${order.lines.length} line(s)`);
+          console.log(`     card ${onCard} line(s)`);
+        }
+      }
+
+      if (turn.orderStatus) {
+        const order = await prisma.order.findFirst({
+          where: { household: { phone: HOUSEHOLD } },
+          orderBy: { createdAt: 'desc' },
+          include: { lines: true },
+        });
+        if (order?.status !== turn.orderStatus || order.createdAt < startedAt) {
+          console.log(`     FAIL latest order is ${order?.status ?? 'missing'}, expected a fresh ${turn.orderStatus}`);
+          ok = false;
+        } else {
+          console.log(`     db   ${order.status}, ${order.lines.length} line(s)`);
+        }
+      }
+
+      if (turn.noOrder) {
+        const fresh = await prisma.order.count({
+          where: { household: { phone: HOUSEHOLD }, createdAt: { gte: startedAt } },
+        });
+        if (fresh) {
+          console.log(`     FAIL ${fresh} order row(s) written before checkout`);
+          ok = false;
+        } else {
+          console.log('     db   nothing written yet, as it should be');
         }
       }
     }
