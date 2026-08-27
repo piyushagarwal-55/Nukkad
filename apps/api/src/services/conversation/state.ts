@@ -70,7 +70,7 @@ export interface PendingLine {
 
 /** the provenance an Order row needs, held while questions are outstanding */
 export interface OrderMeta {
-  source: 'TEXT' | 'VOICE';
+  source: 'TEXT' | 'VOICE' | 'PHOTO';
   rawText: string | null;
   transcript: string | null;
   asrEngine: string | null;

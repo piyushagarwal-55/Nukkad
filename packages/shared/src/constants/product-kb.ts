@@ -30,7 +30,10 @@ export interface KbEntry {
 const BASE_KB: KbEntry[] = [
   // ---------------------------------------------------------- flour
   { canonical: 'Whole Wheat Atta', category: 'flour', unit: 'kg',
-    subnames: ['atta', 'aata', 'ata', 'gehu ka atta', 'gehun atta', 'chakki atta', 'chakki wala atta', 'wheat flour'] },
+    // 'flour' unqualified: on an Indian shopping list that is atta, and
+    // without it the bare word tied with 'bajra flour' and 'makki flour'
+    // on trigrams and lost the coin toss to a specialty flour
+    subnames: ['atta', 'aata', 'ata', 'gehu ka atta', 'gehun atta', 'chakki atta', 'chakki wala atta', 'wheat flour', 'flour'] },
   { canonical: 'Whole Wheat Atta', brand: 'Aashirvaad', category: 'flour', unit: 'kg',
     subnames: ['aashirvaad atta', 'ashirwad atta', 'ashirvad ka atta', 'atta', 'aata'] },
   { canonical: 'Maida', category: 'flour', unit: 'kg',

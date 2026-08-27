@@ -14,6 +14,7 @@
     "smoke": "dotenv -e ../../.env -- tsx src/scripts/smoke.ts",
     "asr:bench": "dotenv -e ../../.env -- tsx src/scripts/asr-bench.ts",
     "dialogue": "dotenv -e ../../.env -- tsx src/scripts/dialogue.ts",
+    "photo": "dotenv -e ../../.env -- tsx src/scripts/photo.ts",
     "backfill:subnames": "dotenv -e ../../.env -- tsx src/scripts/backfill-subnames.ts",
     "backfill:transcripts": "dotenv -e ../../.env -- tsx src/scripts/backfill-transcripts.ts"
   },

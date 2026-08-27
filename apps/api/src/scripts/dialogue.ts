@@ -109,10 +109,26 @@ const CASES: Case[] = [
   },
   {
     name: 'a restated quantity replaces, not stacks',
-    why: 'someone correcting two kilos to three means three, not five',
+    why:
+      'someone correcting two kilos to three means three, not five. Sugar ' +
+      'on purpose: it is sold in 1kg packs, so kilos map to packets one ' +
+      'for one and the assertion is about the MERGE rather than about pack ' +
+      'arithmetic. The atta this used to use is a 5kg bag, where two kilos ' +
+      'and three kilos are both one bag -- the test could not have failed',
     turns: [
-      { say: 'do kilo atta bhej dena', expect: '2 x' },
-      { say: 'nahi teen kilo atta karo', expect: '3 x', lines: 1 },
+      { say: 'do kilo chini bhej dena', expect: '2 x' },
+      { say: 'nahi teen kilo chini karo', expect: '3 x', lines: 1 },
+    ],
+  },
+  {
+    name: 'kilos are not packets',
+    why:
+      'the bug a photographed list exposed. "Tea 500 g" ordered 250 packets ' +
+      'of 500g, and "do kilo atta" meant two FIVE-KILO bags. Two kilos of an ' +
+      'atta sold in 5kg bags is one bag, and the shop must say so rather ' +
+      'than quietly hand over five kilos',
+    turns: [
+      { say: 'do kilo atta bhej dena', expect: '1 x' },
     ],
   },
   {
@@ -195,17 +211,42 @@ const CASES: Case[] = [
 const MENU = /^\s*\d\s*=/m;
 
 /**
- * When a ledger is attached, the sentence above it must contain NO digits.
+ * A digit in the prose must have come from somewhere real.
  *
  * This is the assertion that catches an invented quantity, and it exists
  * because one got through: asked to confirm two kilos of atta, the shop
  * wrote "Ji, 1 kilo atta bhej dena?" while the list underneath said 2 x.
  * A wrong number in front of a customer is the worst thing this system can
- * do. It is not catchable by reading prose for meaning -- but as a SHAPE
- * it is trivial, which is the whole reason the composer is now blinded to
- * the ledger rather than merely told to ignore it.
+ * do, and it is not catchable by reading prose for meaning.
+ *
+ * The rule started as "no digits at all above the ledger", which held
+ * until the shop had something true to say about numbers: when a customer
+ * asks for two kilos of an atta sold in five-kilo bags, the whole point is
+ * to tell them BOTH amounts. A blanket ban silenced exactly the sentence
+ * that had just been added.
+ *
+ * So the test is now provenance, not absence. Every digit in the prose
+ * must appear either in the ledger below it or in what the customer just
+ * said. An invented quantity still fails, because an invented quantity has
+ * nowhere to have come from.
  */
-const HAS_DIGIT = /\d/;
+const digitsIn = (s: string) => new Set(s.match(/\d+/g) ?? []);
+
+/**
+ * "do kilo" and "2 kilo" are the same request, and the shop is right to
+ * write the digit when the customer wrote the word. Without this the
+ * provenance check flagged its own correct behaviour.
+ */
+const HINGLISH_NUMBERS: Record<string, string> = {
+  adha: '0.5', ek: '1', do: '2', teen: '3', chaar: '4', char: '4',
+  paanch: '5', panch: '5', chhe: '6', saat: '7', aath: '8', nau: '9', das: '10',
+};
+
+function spokenDigits(said: string): string[] {
+  return said.toLowerCase().split(/\W+/)
+    .map((w) => HINGLISH_NUMBERS[w])
+    .filter((d): d is string => Boolean(d));
+}
 
 async function reset() {
   await prisma.conversation.updateMany({
@@ -228,8 +269,18 @@ async function run() {
     let lastOrderId: string | null = null;
     let ok = true;
     const saidByShop: string[] = [];
+    /**
+     * Every number the customer has mentioned SO FAR, not just this turn.
+     * The shop legitimately refers back -- answering "sona masoori wala"
+     * it still says "aapne 2 kilo kaha", from two turns earlier, and a
+     * per-turn check called that an invention.
+     */
+    const saidNumbers = new Set<string>();
 
     for (const turn of c.turns) {
+      for (const d of digitsIn(turn.say)) saidNumbers.add(d);
+      for (const d of spokenDigits(turn.say)) saidNumbers.add(d);
+
       const replies = await handle(inbound(turn.say));
       const text = replies.map((r) => r.text).join('\n');
 
@@ -250,9 +301,14 @@ async function run() {
       // repeats itself when an order is restated
       const prose = text.split('\n')[0]!;
 
-      if (text.includes('Total:') && HAS_DIGIT.test(prose)) {
-        console.log('     FAIL a digit in the prose above the ledger');
-        ok = false;
+      if (text.includes('Total:')) {
+        const ledger = text.slice(text.indexOf('\n'));
+        const allowed = new Set([...digitsIn(ledger), ...saidNumbers]);
+        const invented = [...digitsIn(prose)].filter((d) => !allowed.has(d));
+        if (invented.length) {
+          console.log(`     FAIL prose has digits from nowhere: ${invented.join(', ')}`);
+          ok = false;
+        }
       }
 
       if (saidByShop.some((prev) => squash(prev) === squash(prose))) {

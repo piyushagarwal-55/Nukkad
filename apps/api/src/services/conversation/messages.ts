@@ -1,5 +1,6 @@
 import { rupeeLabel } from '@nukkad/shared';
 import type { PendingLine } from './state.js';
+import type { PackAsk } from './compose.js';
 
 /**
  * TWO KINDS OF TEXT LIVE HERE, and they are not the same kind of thing.
@@ -48,6 +49,15 @@ export const NOT_REGISTERED =
 export const NO_PHOTO =
   'Abhi photo nahi padh sakte. Bol kar ya likh kar bhej dijiye.';
 
+export const PHOTO_NOT_A_LIST =
+  'Is photo mein list nahi dikh rahi. List bhej dijiye ya likh dijiye.';
+
+export const PHOTO_EMPTY =
+  'Photo saaf nahi hai, padha nahi gaya. Thoda paas se ek aur bhej dijiye.';
+
+export const PHOTO_FAILED =
+  'Photo khul nahi payi. Dobara bhej dijiye ya likh dijiye.';
+
 export const NOT_UNDERSTOOD =
   'Maaf kijiye, samajh nahi aaya. Naam aur maatra likh dijiye, jaise "2 kilo atta".';
 
@@ -63,7 +73,24 @@ export const STILL_WAITING = 'Order abhi bheja nahi hai. Bhej dun?';
 export const NO_PREVIOUS_ORDER =
   'Abhi tak koi purana order nahi hai. Likh kar bata dijiye kya chahiye.';
 
-export const readyToSend = (): string => 'Ye lijiye. Bhej dun?';
+/**
+ * The confirm prompt, and the ONE fallback that is not merely a duller
+ * version of what the composer would have said.
+ *
+ * A pack mismatch has to reach the customer. Measured over four runs of
+ * "do kilo atta" against a shop selling 5kg bags, the composer said so
+ * three times and fell back to a generic line once -- a 25% chance of
+ * quietly handing someone five kilos when they asked for two. So the
+ * sentence is built here, from the same facts, and the model's version is
+ * an improvement on it rather than the only source of it.
+ */
+export const readyToSend = (packAsks: PackAsk[] = []): string => {
+  if (!packAsks.length) return 'Ye lijiye. Bhej dun?';
+  const a = packAsks[0]!;
+  // the product name is on the card below and usually carries the pack
+  // size already, so repeating both reads as "Atta 5kg 5 kg ke packet"
+  return `Aapne ${a.asked} kaha, ye ${a.sold} ke packet mein aata hai. Bhej dun?`;
+};
 
 export const confirmed = (totalPaise: number, ref: string): string =>
   `Order confirm ho gaya. Total ${rupeeLabel(totalPaise)}. (#${ref})`;
@@ -76,6 +103,12 @@ export const notStocked = (product: string): string =>
 
 export const rejected = (name: string): string =>
   `Theek hai, ${name} nahi. Aur kya dekhun?`;
+
+export const listing = (names: string[]): string =>
+  `${names.join(', ')} hai. Kaun sa chahiye?`;
+
+export const catalogue = (categories: string[]): string =>
+  `Humare paas ${categories.join(', ')} sab hai. Bataiye kya chahiye?`;
 
 export const askWhich = (sourceText: string, names: string[]): string =>
   `"${sourceText}" mein se kaunsa? ${names.join(', ')}`;

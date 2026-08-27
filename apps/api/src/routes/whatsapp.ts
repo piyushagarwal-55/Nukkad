@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nukkad/db';
 import { twilioAdapter } from '../channels/index.js';
 import { handle } from '../services/conversation/core.js';
+import { coalesce } from '../services/conversation/coalesce.js';
+import type { InboundMessage } from '@nukkad/shared';
 import { maskPhone } from '../lib/phone.js';
 
 /**
@@ -87,15 +89,34 @@ export async function whatsappRoutes(app: FastifyInstance) {
         'inbound whatsapp',
       );
 
-      const replies = await handle(inbound);
+      /**
+       * Wait for them to stop typing before answering. See coalesce.ts:
+       * a typo correction sent a second later used to get its own reply,
+       * and "price*" with no product in it read out the whole catalogue.
+       *
+       * Everything above this line still runs per MESSAGE -- the row is
+       * written and the duplicate check happens for each one, because
+       * Twilio retries individual messages and the batch is not what it
+       * retries.
+       */
+      coalesce(inbound, (batch) => respond(batch, conversation.id));
+    } catch (err) {
+      app.log.error({ err }, 'whatsapp handler failed');
+    }
+  });
+
+  /** run the brain on a settled batch and send whatever comes back */
+  async function respond(batch: InboundMessage, conversationId: string) {
+    try {
+      const replies = await handle(batch);
 
       for (const r of replies) {
-        await twilioAdapter.send(inbound.senderId, r);
+        await twilioAdapter.send(batch.senderId, r);
         // recorded so the thread can be read back, and so a template sent
         // outside the window is auditable after the fact
         await prisma.message.create({
           data: {
-            conversationId: conversation.id,
+            conversationId,
             direction: 'OUT',
             body: r.text ?? null,
             templateName: r.templateName ?? null,
@@ -106,7 +127,9 @@ export async function whatsappRoutes(app: FastifyInstance) {
         });
       }
     } catch (err) {
-      app.log.error({ err }, 'whatsapp handler failed');
+      // nothing is awaiting this -- it runs from a debounce timer -- so an
+      // unlogged rejection here would vanish completely
+      app.log.error({ err }, 'whatsapp reply failed');
     }
-  });
+  }
 }

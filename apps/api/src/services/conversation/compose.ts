@@ -52,10 +52,29 @@ export interface Swap {
   why: string;
 }
 
+/**
+ * A requested amount that does not divide into whole packets.
+ *
+ * Two kilos of atta from a shop selling five-kilo bags is not an order,
+ * it is a question -- and it is the question a customer asked for by name:
+ * do not quietly hand them a different size, say what you have and let
+ * them decide. Same rule the ranker follows for an uncertain product,
+ * applied to an uncertain amount.
+ */
+export interface PackAsk {
+  /** "2 kg" */
+  asked: string;
+  /** "5 kg" */
+  sold: string;
+  name: string;
+  /** how many packets went on the card, rounded up */
+  units: number;
+}
+
 /** one thing that is true, which the reply must be built out of */
 export type Facts =
   | { kind: 'GREETING' }
-  | { kind: 'ORDER_DRAFT'; substituted: Swap[] }
+  | { kind: 'ORDER_DRAFT'; substituted: Swap[]; packAsks: PackAsk[]; dropped: string[] }
   | { kind: 'ORDER_AMENDED' }
   | { kind: 'ORDER_CONFIRMED'; ref: string }
   | { kind: 'ORDER_CANCELLED' }
@@ -94,10 +113,25 @@ export type Facts =
   | { kind: 'NOT_UNDERSTOOD' }
   | { kind: 'ACCOUNT'; orders: number; spent: string }
   | { kind: 'NO_PREVIOUS_ORDER' }
+  /**
+   * A LISTING question, which MG-ShopDial files under QA next to factoid
+   * and yes/no. It was the one of the three this shop could not answer:
+   * "daal kaunsi kaunsi hai" got "main confirm kar leta hoon" while four
+   * dals sat in the catalogue it had just searched.
+   */
+  | { kind: 'LISTING'; asked: string; options: string[] }
+  /** what the shop sells at all, for "kya kya hai" */
+  | { kind: 'CATALOGUE'; categories: string[] }
   | { kind: 'QUESTION' }
   | { kind: 'STOCK_ANSWER'; name: string; inStock: boolean; price: string }
   | { kind: 'NOT_REGISTERED' }
-  | { kind: 'NO_PHOTO' };
+  | { kind: 'NO_PHOTO' }
+  /** the picture was not a shopping list */
+  | { kind: 'PHOTO_NOT_A_LIST' }
+  /** it was a list and nothing legible came off it */
+  | { kind: 'PHOTO_EMPTY' }
+  /** the vision call itself failed */
+  | { kind: 'PHOTO_FAILED' };
 
 /**
  * What each fact means, in the imperative, because the model is being told
@@ -117,7 +151,30 @@ function brief(f: Facts): string {
       const sub = f.substituted
         .map((sw) => ` ${sw.from} is out of stock so ${sw.to} was put in instead (${sw.why}). Say this plainly and say WHY, do not just say it was changed.`)
         .join('');
-      return `Their order is ready to send. Ask if you should send it.${sub}`;
+      /**
+       * The pack question. Phrased as "you asked for X, it comes in Y" so
+       * the customer can see the arithmetic rather than being told a
+       * number they did not choose.
+       */
+      const packs = f.packAsks
+        .map((a) =>
+          ` NOTE: they asked for ${a.asked} of ${a.name}, but the shop only` +
+          ` sells it in a ${a.sold} packet. Tell them BOTH of those amounts,` +
+          ` the way a shopkeeper would -- "aapne ${a.asked} kaha, ye ${a.sold}` +
+          ` ke packet mein aata hai" -- and ask if that is alright. Write the` +
+          ` amounts, never the words "pack(s)" or a count of packets.`)
+        .join('');
+
+      /**
+       * What was on the paper and is not on the card. Said out loud,
+       * because the alternative is the customer discovering it when the
+       * bag arrives without it.
+       */
+      const lost = f.dropped.length
+        ? ` NOTE: they also asked for "${f.dropped.join('", "')}" and the shop could not match that to anything it sells. Tell them it is NOT on the list and ask what they meant. Do not guess.`
+        : '';
+
+      return `Their order is ready to send. Ask if you should send it.${sub}${packs}${lost}`;
     }
 
     case 'ORDER_AMENDED':
@@ -198,6 +255,25 @@ function brief(f: Facts): string {
             'Tell them plainly. Do not promise a date.',
           ].join(' ');
 
+    case 'LISTING':
+      return [
+        `They asked what the shop has for "${f.asked}".`,
+        `It stocks: ${f.options.join(', ')}.`,
+        'Name them all. This is the answer to their question, not a menu,',
+        'so do NOT number them and do not ask them to pick yet -- though',
+        'you may add that they can just say which one.',
+      ].join(' ');
+
+    case 'CATALOGUE':
+      return [
+        'They asked what the shop sells, or asked for something too broad',
+        'to pick from.',
+        `The shop stocks: ${f.categories.join(', ')}.`,
+        'Tell them, in a natural sentence rather than a list, and ask what',
+        'they need. Do NOT number anything and do NOT invent a category',
+        'that is not in that list.',
+      ].join(' ');
+
     case 'QUESTION':
       return [
         'They asked the shop something you do not have the answer to --',
@@ -215,6 +291,27 @@ function brief(f: Facts): string {
 
     case 'NO_PHOTO':
       return 'They sent a photo and photos cannot be read yet. Ask them to type it or send a voice note.';
+
+    case 'PHOTO_NOT_A_LIST':
+      return [
+        'They sent a photo that is not a shopping list. Do NOT guess what',
+        'was in it. Say you could not see a list in it and ask them to',
+        'send the list, or just type what they need.',
+      ].join(' ');
+
+    case 'PHOTO_EMPTY':
+      return [
+        'They sent a photo of a list but none of it could be read --',
+        'blurry, or too dark. Ask for a clearer picture, or for them to',
+        'type it. Do NOT pretend to have read any of it.',
+      ].join(' ');
+
+    case 'PHOTO_FAILED':
+      return [
+        'The photo could not be opened at all, which is the fault of the',
+        'shop and not theirs. Apologise once, briefly, and ask them to',
+        'send it again or type the list.',
+      ].join(' ');
   }
 }
 
@@ -260,9 +357,11 @@ const NO_NUMBERS = [
   '',
   'A list of the items and the total is attached under your reply.',
   'You cannot see it and you do not need to.',
-  'Write NO digits and NO quantities at all -- not how many items, not',
-  'weights, not pack sizes, not prices. Say "ye" or "aapka order" and let',
-  'the list speak for itself.',
+  'Write NO digits and NO quantities of your own -- not how many items,',
+  'not weights, not pack sizes, not prices. Say "ye" or "aapka order" and',
+  'let the list speak for itself.',
+  'The ONE exception is a pack-size NOTE in the fact above: those numbers',
+  'were given to you and you must repeat them exactly as written.',
 ].join('\n');
 
 const schema = z.object({ reply: z.string().min(1).max(600) });
@@ -318,10 +417,26 @@ function sanitise(raw: string): string {
  */
 function allowedDigits(f: Facts): Set<string> {
   const source: string[] = [];
+  /**
+   * A pack question NEEDS its numbers -- "aapne 250g maanga, packet 500g
+   * ka aata hai" is the whole point, and the blanket no-digits rule for
+   * carded replies would have silenced it. Measured: the shop rounded
+   * 250g up to a 500g packet and said nothing at all about having done so.
+   *
+   * The whitelist is what makes this safe to allow. These digits came out
+   * of the catalogue and the customer's own message; anything the model
+   * invents still fails.
+   */
+  if (f.kind === 'ORDER_DRAFT') {
+    for (const a of f.packAsks) source.push(a.asked, a.sold, String(a.units));
+    source.push(...f.dropped);
+  }
   if (f.kind === 'ASK_WHICH') source.push(...f.options, f.sourceText);
   if (f.kind === 'ELICIT') source.push(...f.options, f.sourceText);
   if (f.kind === 'REJECTED') source.push(...f.options, f.rejected);
   if (f.kind === 'NOT_STOCKED') source.push(f.product);
+  if (f.kind === 'LISTING') source.push(...f.options, f.asked);
+  if (f.kind === 'CATALOGUE') source.push(...f.categories);
   if (f.kind === 'STOCK_ANSWER') source.push(f.name, f.price);
   if (f.kind === 'ACCOUNT') source.push(String(f.orders), f.spent);
   if (f.kind === 'ORDER_CONFIRMED') source.push(f.ref);

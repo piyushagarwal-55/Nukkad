@@ -4,13 +4,17 @@ import type { InboundMessage, OutboundMessage, ResolvedLine, Sku } from '@nukkad
 import { transcribe } from '../asr/index.js';
 import { isAudio, isImage } from '../asr/audio.js';
 import { extractOrder } from '../extraction/extract.js';
+import { parseList } from '../vision/list.js';
+import type { Extraction } from '@nukkad/shared';
 import { getCatalog, getStockMap } from '../catalog/cache.js';
 import { buildPrior } from '../resolver/prior.js';
-import { rankLine, DEFAULT_RANK } from '../resolver/rank.js';
+import { rankLine, DEFAULT_RANK, stripQuantity } from '../resolver/rank.js';
+import { fuzzyScore } from '../resolver/fuzzy.js';
+import { fitPack } from '../resolver/pack.js';
 import { findSubstitutes } from '../substitution/substitute.js';
 import { hasVision } from '../../config/env.js';
 import { readAnswer, namesLine } from './reply.js';
-import { compose, type Facts, type Swap } from './compose.js';
+import { compose, type Facts, type Swap, type PackAsk } from './compose.js';
 import { retrieveKb } from '../kb/retrieve.js';
 import type { Prior } from '../resolver/prior.js';
 import {
@@ -128,6 +132,8 @@ function label(f: Facts): { intent: string; goal: string } {
     case 'STILL_WAITING':
       return { intent: 'CLARIFICATION_QUESTION', goal: 'ORDERING' };
     case 'STOCK_ANSWER':
+    case 'LISTING':
+    case 'CATALOGUE':
       return { intent: 'ANSWER', goal: 'QA' };
     case 'ACCOUNT':
       return { intent: 'ANSWER', goal: 'QA' };
@@ -139,6 +145,9 @@ function label(f: Facts): { intent: string; goal: string } {
     case 'NO_PREVIOUS_ORDER':
     case 'NOT_REGISTERED':
     case 'NO_PHOTO':
+    case 'PHOTO_NOT_A_LIST':
+    case 'PHOTO_EMPTY':
+    case 'PHOTO_FAILED':
       return { intent: 'OTHER', goal: 'META' };
   }
 }
@@ -270,10 +279,29 @@ export async function handle(msg: InboundMessage): Promise<OutboundMessage[]> {
 
 async function turn(ctx: Ctx, msg: InboundMessage): Promise<OutboundMessage[]> {
   const image = msg.media.find((m) => isImage(m.mime));
+
   if (image && !hasVision) {
-    // No multimodal model exists on this Groq account, so photo input is
-    // out of scope rather than silently broken. Say so plainly.
+    // No multimodal model on this Groq account, so photo input is out of
+    // scope rather than silently broken. Say so plainly.
     return speak(ctx, { kind: 'NO_PHOTO' }, copy.NO_PHOTO);
+  }
+
+  /**
+   * A PHOTO OF A SHOPPING LIST IS AN ORDER.
+   *
+   * There used to be no branch here at all. The check above asked whether
+   * vision was UNAVAILABLE, found it available, and fell through -- so the
+   * image was dropped, the text stayed empty, and the message landed on
+   * the empty-message path and was answered with a greeting. Someone sent
+   * a picture of their grocery list and the shop said "kya haal hai".
+   *
+   * Photos jump the queue past any outstanding question on purpose. A
+   * customer who was asked which rice they wanted and replies with a
+   * photograph of their whole list has moved on, and holding them to the
+   * old question would be pedantic.
+   */
+  if (image) {
+    return photo(ctx, image.localPath);
   }
 
   // ---- is an answer outstanding? --------------------------------------
@@ -322,10 +350,63 @@ async function turn(ctx: Ctx, msg: InboundMessage): Promise<OutboundMessage[]> {
      * by natural language is neither.
      */
     if (pending.kind === 'CONFIRM') carried = await supersede(pending.orderId);
+
+    /**
+     * The same courtesy for an unanswered QUESTION. A reply the matcher
+     * cannot read is usually the customer adding something, not throwing
+     * their list away -- and when it was read wrongly, as it was above,
+     * the cost of discarding was four lines of a five line order.
+     *
+     * Only the SETTLED lines come forward. The one still under question
+     * is dropped, because carrying an unanswered question into a fresh
+     * turn would ask it again forever.
+     */
+    if (pending.kind === 'DISAMBIGUATE') {
+      carried = pending.lines.filter((l) => l.skuId && !l.needsDisambiguation);
+    }
+
     ctx.convo.pending = null;
   }
 
   return act(ctx, carried);
+}
+
+/**
+ * Read the picture, then hand the words to the ordinary ranker.
+ *
+ * Nothing below the extraction is photo-specific, and that is the point:
+ * the catalogue constraint does not care which sense the words arrived by,
+ * so a handwritten "Cooking oil 1L" is ranked exactly as a spoken one is.
+ */
+async function photo(ctx: Ctx, path: string): Promise<OutboundMessage[]> {
+  let result;
+  try {
+    result = await parseList(path);
+  } catch {
+    // a vision outage is not the customer's problem to decode
+    ctx.annotation = { intent: 'OTHER', goal: 'META' };
+    return speak(ctx, { kind: 'PHOTO_FAILED' }, copy.PHOTO_FAILED);
+  }
+
+  const { list } = result;
+
+  if (!list.isList) {
+    /**
+     * Not a list. Say so rather than ordering whatever the model imagined
+     * it saw -- a model asked to find groceries in a picture of a dog will
+     * find groceries in a picture of a dog.
+     */
+    ctx.annotation = { intent: 'OTHER', goal: 'META' };
+    return speak(ctx, { kind: 'PHOTO_NOT_A_LIST' }, copy.PHOTO_NOT_A_LIST);
+  }
+
+  if (!list.items.length) {
+    ctx.annotation = { intent: 'OTHER', goal: 'META' };
+    return speak(ctx, { kind: 'PHOTO_EMPTY' }, copy.PHOTO_EMPTY);
+  }
+
+  ctx.meta = { ...ctx.meta, source: 'PHOTO', mediaPath: path };
+  return act(ctx, [], list.items);
 }
 
 // ---------------------------------------------------------------- intents
@@ -336,9 +417,25 @@ async function turn(ctx: Ctx, msg: InboundMessage): Promise<OutboundMessage[]> {
  * This is where the four-item menu used to be. Every branch below was
  * previously a number the customer had to find and type.
  */
-async function act(ctx: Ctx, carried: PendingLine[]): Promise<OutboundMessage[]> {
-  const extraction = await extractOrder(ctx.said);
-  ctx.annotation = { intent: extraction.intent, goal: extraction.goal };
+async function act(
+  ctx: Ctx,
+  carried: PendingLine[],
+  /**
+   * Items already read off a photographed list. When present the text
+   * extractor is skipped -- there is no text to extract from, and the
+   * picture has already said what it says.
+   */
+  fromPhoto?: Extraction['items'],
+): Promise<OutboundMessage[]> {
+  const extraction: Extraction = fromPhoto
+    ? { items: fromPhoto, intent: 'ORDER', goal: 'ORDERING' }
+    : await extractOrder(ctx.said);
+  ctx.annotation = {
+    // DISCLOSE is the paper's name for a customer stating what they want,
+    // and a photographed list is the purest form of it
+    intent: fromPhoto ? 'DISCLOSE' : extraction.intent,
+    goal: extraction.goal,
+  };
 
   switch (extraction.intent) {
     case 'CANCEL':
@@ -370,7 +467,14 @@ async function act(ctx: Ctx, carried: PendingLine[]): Promise<OutboundMessage[]>
     // dropped: failing to parse the amendment is no reason to lose what
     // the customer had already agreed to.
     if (carried.length) return placeOrder(ctx, carried, true);
-    return speak(ctx, { kind: 'NOT_UNDERSTOOD' }, copy.NOT_UNDERSTOOD);
+    /**
+     * "ghar ka rashan chahiye" is a real request that names no product.
+     * Answering it with "samajh nahi aaya" is true and useless; the shop
+     * knows exactly what it sells and can just say so.
+     */
+    const [cat, st] = await Promise.all([getCatalog(ctx.kiranaId), getStockMap(ctx.kiranaId)]);
+    const categories = categoriesOf(cat, st);
+    return speak(ctx, { kind: 'CATALOGUE', categories }, copy.catalogue(categories));
   }
 
   // ---- rank against THIS shop's catalogue, with THIS household's prior
@@ -383,6 +487,32 @@ async function act(ctx: Ctx, carried: PendingLine[]): Promise<OutboundMessage[]>
   const resolved: ResolvedLine[] = extraction.items.map((it) =>
     rankLine(it.text, it.quantity, it.unit, catalog, prior, DEFAULT_RANK),
   );
+
+  /**
+   * WHAT THEY ASKED FOR IS NOT ALWAYS HOW IT IS SOLD.
+   *
+   * Until this ran, every quantity was treated as a count of packets
+   * whatever unit the customer used, so "Tea 500 g" ordered 250 packets of
+   * 500g. See resolver/pack.ts. A request that does not divide into whole
+   * packets is not rounded silently -- it is collected here and asked
+   * about on the card.
+   */
+  const mismatched: PackAsk[] = [];
+  for (const line of resolved) {
+    /**
+     * Fitted only when the SKU is FINAL. A line still going to the buyer
+     * as a question has no pack size yet -- "Rice 5 kg" could become a 5kg
+     * bag or a 1kg one, and fitting against a guess then re-fitting against
+     * the answer double-converts: 5 kg became 1 packet became 1 kg. It
+     * shipped as "5 x Basmati Rice 5kg", twenty-five kilos of rice.
+     *
+     * So each line is fitted exactly once, at the moment its SKU settles.
+     * See the disambiguation branch of answer() for the other half.
+     */
+    if (!line.chosen || line.needsDisambiguation) continue;
+    const ask = applyPack(line, line.chosen.sku);
+    if (ask) mismatched.push(ask);
+  }
 
   // ---- stock check and substitution BEFORE the card, never after ------
   const substituted: Swap[] = [];
@@ -452,7 +582,25 @@ async function act(ctx: Ctx, carried: PendingLine[]): Promise<OutboundMessage[]>
     if (at) at.elicitedCategory = elicitedCategory;
   }
 
-  return advance(ctx, lines, carried.length > 0, substituted);
+  return advance(ctx, lines, carried.length > 0, substituted, mismatched);
+}
+
+/**
+ * Convert a requested amount into packets, on the line, once.
+ *
+ * Returns the question to ask when it does not divide, or null when it
+ * does. Mutating here rather than at the call sites is deliberate: there
+ * are two places a SKU becomes final and both must convert identically.
+ */
+function applyPack(
+  line: { quantity: number; unitHint: string | null },
+  sku: Sku,
+): PackAsk | null {
+  const fit = fitPack(line.quantity, line.unitHint, sku);
+  line.quantity = fit.units;
+  return fit.exact
+    ? null
+    : { asked: fit.asked, sold: fit.sold, name: sku.name, units: fit.units };
 }
 
 /**
@@ -487,7 +635,21 @@ async function openCategory(
   catalog: Sku[],
   stock: Map<string, number>,
 ): Promise<{ category: string; options: Sku[] } | null> {
-  const hits = await retrieveKb(sourceText, 3);
+  /**
+   * WIDE RECALL FROM THE KB, PRECISION FROM THE SHOP.
+   *
+   * Eight, not three, and the reason is that word-level trigram matching
+   * saturates: "flour" scores a perfect 1.00 against bajra, makki, kuttu,
+   * besan and wheat alike, and which three of those come back first is
+   * arbitrary. Nothing lexical distinguishes them, and nothing should --
+   * the KB is a national list of everything called flour, and the question
+   * is which of them THIS shop sells.
+   *
+   * So the KB casts wide and the catalogue does the deciding. A shop
+   * stocking only wheat atta gets wheat atta, without anyone writing down
+   * that plain "flour" means atta.
+   */
+  const hits = await retrieveKb(sourceText, 8);
   if (!hits.length) return null;
 
   /**
@@ -512,7 +674,21 @@ async function openCategory(
 
   for (const hit of hits) {
     const line = rankLine(hit.canonical, 1, null, catalog, none, DEFAULT_RANK);
-    if (!line.chosen || line.confidence < NEARBY_FLOOR) continue;
+
+    /**
+     * Scored on `fuzzy`, NOT on `confidence`, and the first version had
+     * this wrong. Confidence is the MARGIN over the runner-up, which is
+     * the right question when picking one SKU and precisely the wrong one
+     * here: a shop with three attas has three near-identical scores, so
+     * the margin collapses and the confidence is low exactly when the
+     * shop is best able to help. "Flour" found nothing for that reason
+     * alone -- the KB knew it meant atta, the shop had three, and the
+     * margin between them vetoed all of it.
+     *
+     * The question this asks is "does the shop stock anything that
+     * matches these words", which is lexical strength and nothing else.
+     */
+    if (!line.chosen || line.chosen.fuzzy < NEARBY_FLOOR) continue;
     if ((stock.get(line.chosen.sku.id) ?? 0) <= 0) continue;
     found.set(line.chosen.sku.id, line.chosen.sku);
   }
@@ -546,12 +722,13 @@ async function question(
 ): Promise<OutboundMessage[]> {
   const card = carried.length ? copy.orderCard(carried) : undefined;
 
+  const [catalog, stock, prior] = await Promise.all([
+    getCatalog(ctx.kiranaId),
+    getStockMap(ctx.kiranaId),
+    buildPrior(ctx.householdId),
+  ]);
+
   if (spans.length) {
-    const [catalog, stock, prior] = await Promise.all([
-      getCatalog(ctx.kiranaId),
-      getStockMap(ctx.kiranaId),
-      buildPrior(ctx.householdId),
-    ]);
     const line = rankLine(spans[0]!, 1, null, catalog, prior, DEFAULT_RANK);
 
     if (line.chosen && !line.needsDisambiguation) {
@@ -563,9 +740,80 @@ async function question(
         price: rupeeLabel(sku.sellPaise),
       }, copy.stockAnswer(sku.name, (stock.get(sku.id) ?? 0) > 0), card);
     }
+
+    /**
+     * AMBIGUITY IS THE ANSWER TO A LISTING QUESTION.
+     *
+     * The old shape here was `if (confident) answer; else deflect`, which
+     * got it exactly backwards. Asked "daal kaunsi kaunsi hai" the ranker
+     * matched four dals, could not choose between them, and the shop
+     * replied "main confirm kar leta hoon" -- about a question whose whole
+     * answer was those four names, sitting in the catalogue it had just
+     * searched.
+     *
+     * MG-ShopDial names this a LISTING question and files it under QA
+     * alongside factoid and yes/no. It is the one of the three this shop
+     * could not do.
+     */
+    const found = matching(spans[0]!, catalog, stock);
+    if (found.length) {
+      return speak(
+        ctx,
+        { kind: 'LISTING', asked: spans[0]!, options: found.map((s) => s.name) },
+        copy.listing(found.map((s) => s.name)),
+        card,
+      );
+    }
   }
 
-  return speak(ctx, { kind: 'QUESTION' }, copy.QUESTION, card);
+  /**
+   * No product in the question at all -- "show categories", "kya kya hai".
+   * The shop knows exactly what it sells, so saying "I will check" is a
+   * strange thing for it to do.
+   */
+  return speak(
+    ctx,
+    { kind: 'CATALOGUE', categories: categoriesOf(catalog, stock) },
+    copy.catalogue(categoriesOf(catalog, stock)),
+    card,
+  );
+}
+
+/**
+ * Everything in stock that plausibly answers a phrase, with no top-k cap.
+ *
+ * `rankLine` is the wrong tool for a listing question: it exists to pick
+ * ONE thing and caps its shortlist at three, so "daal kaunsi kaunsi hai"
+ * would drop the fourth dal for no reason a customer could understand.
+ */
+function matching(span: string, catalog: Sku[], stock: Map<string, number>): Sku[] {
+  const q = stripQuantity(span);
+  return catalog
+    .filter((s) => (stock.get(s.id) ?? 0) > 0)
+    .map((s) => ({ s, score: fuzzyScore(q, [s.name, s.brand ?? '', ...s.aliases].join(' ')) }))
+    .filter((x) => x.score >= LISTING_FLOOR)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8)
+    .map((x) => x.s);
+}
+
+/** high, because a list is a claim about everything the shop has */
+const LISTING_FLOOR = 0.45;
+
+/**
+ * What the shop sells, in words a customer would use.
+ *
+ * Derived from the catalogue's own category slugs rather than a written
+ * list, so a shop that adds a category gets it here without anyone
+ * remembering to update a constant.
+ */
+function categoriesOf(catalog: Sku[], stock: Map<string, number>): string[] {
+  const seen = new Set<string>();
+  for (const s of catalog) {
+    if ((stock.get(s.id) ?? 0) <= 0 || !s.category) continue;
+    seen.add(s.category.replace(/[_-]+/g, ' '));
+  }
+  return [...seen].slice(0, 14);
 }
 
 async function repeatLast(ctx: Ctx): Promise<OutboundMessage[]> {
@@ -649,22 +897,35 @@ async function advance(
   lines: PendingLine[],
   amended: boolean,
   substituted: Swap[] = [],
+  packAsks: PackAsk[] = [],
 ): Promise<OutboundMessage[]> {
   const index = lines.findIndex((l) => l.needsDisambiguation);
 
   if (index >= 0) {
     const line = lines[index]!;
+    /**
+     * DEDUPED, and it is not tidiness.
+     *
+     * The stock-out swap moves the original into `alternates` while the
+     * substitute may already be sitting there, so the list came out as
+     * "Dhara Mustard Oil 1L, Fortune Sunflower Oil 1L, Dhara Mustard Oil
+     * 1L". Two identical names have a score gap of zero, the name matcher
+     * calls that ambiguous and returns nothing, the reply falls through as
+     * a NEW ORDER -- and a five item shopping list became one bottle of
+     * mustard oil. One duplicate, four lines gone.
+     */
+    const seen = new Set<string>();
     const options = [
       ...(line.skuId ? [{ skuId: line.skuId, name: line.name }] : []),
       ...line.alternates.map((a) => ({ skuId: a.skuId, name: a.name })),
-    ];
+    ].filter((o) => !seen.has(o.skuId) && seen.add(o.skuId));
 
     // Nothing to offer means nothing to ask. Drop the line rather than
     // send a question with an empty option list.
     if (!options.length) {
       line.needsDisambiguation = false;
       line.skuId = null;
-      return advance(ctx, lines, amended, substituted);
+      return advance(ctx, lines, amended, substituted, packAsks);
     }
 
     ctx.convo.pending = {
@@ -698,7 +959,7 @@ async function advance(
     );
   }
 
-  return placeOrder(ctx, lines, amended, substituted);
+  return placeOrder(ctx, lines, amended, substituted, packAsks);
 }
 
 /**
@@ -713,8 +974,20 @@ async function placeOrder(
   lines: PendingLine[],
   amended: boolean,
   substituted: Swap[] = [],
+  packAsks: PackAsk[] = [],
 ): Promise<OutboundMessage[]> {
   const kept = lines.filter((l) => l.skuId);
+
+  /**
+   * SAY WHAT DID NOT MAKE IT.
+   *
+   * A line the shop could not match was dropped in silence: a five item
+   * list came back as a four item card and nothing anywhere mentioned the
+   * fifth. The customer wrote it down, so they will notice it missing when
+   * the bag arrives, which is the worst possible moment.
+   */
+  const dropped = lines.filter((l) => !l.skuId).map((l) => l.sourceText);
+
   if (!kept.length) {
     ctx.convo.pending = null;
     return speak(ctx, { kind: 'NOT_UNDERSTOOD' }, copy.NOT_UNDERSTOOD);
@@ -766,8 +1039,8 @@ async function placeOrder(
     ctx,
     amended
       ? { kind: 'ORDER_AMENDED' }
-      : { kind: 'ORDER_DRAFT', substituted },
-    copy.readyToSend(),
+      : { kind: 'ORDER_DRAFT', substituted, packAsks, dropped },
+    copy.readyToSend(packAsks),
     card,
   );
 }
@@ -883,6 +1156,7 @@ async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | n
 
   const lines = pending.lines;
   const line = lines[pending.index]!;
+  const packAsks: PackAsk[] = [];
 
   if (a.kind === 'CHOICE') {
     const picked = pending.options[a.index]!;
@@ -894,6 +1168,11 @@ async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | n
     // the buyer chose it, so the confidence is theirs and not the ranker's
     line.method = 'DISAMBIGUATED';
     line.confidence = 1;
+    // the SKU is final now, so the amount can finally be turned into packs
+    if (sku) {
+      const ask = applyPack(line, sku);
+      if (ask) packAsks.push(ask);
+    }
   } else {
     line.skuId = null;
   }
@@ -902,7 +1181,7 @@ async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | n
   // meta comes from the pending context, not from this turn: the order
   // belongs to the voice note that started it, not to the word "basmati"
   ctx.meta = pending.meta;
-  return advance(ctx, lines, false);
+  return advance(ctx, lines, false, [], packAsks);
 }
 
 // ---------------------------------------------------------------- upkeep

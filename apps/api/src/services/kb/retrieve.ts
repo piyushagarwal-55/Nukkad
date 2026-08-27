@@ -105,12 +105,43 @@ export async function retrieveKb(rawName: string, k = 4): Promise<KbHit[]> {
   const q = normaliseBillName(rawName);
   if (!q) return [];
 
+  /**
+   * SCORED ON THE BETTER OF TWO TRIGRAM MEASURES, and the second one is
+   * there to undo a penalty the first one puts on our own best work.
+   *
+   * `similarity(a, b)` is shared trigrams over the UNION of trigrams, so a
+   * long `searchText` scores low no matter how well the query matches part
+   * of it. Every local subname added to a product therefore made that
+   * product HARDER to retrieve -- the exact opposite of the intent, and it
+   * showed: "atta" against a knowledge base with a wheat atta entry
+   * carrying nine subnames returned Maida, Bajra Atta and Makki Atta, and
+   * never surfaced Whole Wheat Atta at all.
+   *
+   * `word_similarity(a, b)` finds the extent WITHIN b most similar to a,
+   * so it is indifferent to how much else is in there. "atta" scores 1.00
+   * against the wheat entry. It saturates on short queries -- five flours
+   * all score 1.00 -- which is why `similarity` stays as the tie-break and
+   * why the caller is expected to re-rank against a real catalogue.
+   *
+   * Measured on the long strings the bill agent sends, where this matters
+   * most and where a regression would be expensive:
+   *
+   *   AASHIRVAAD SELECT ATTA 5KG      0.33 -> 0.58   Whole Wheat Atta
+   *   TATA TEA GOLD 500 GM            0.22 -> 0.42   Tea Leaves
+   *   SURF EXCEL ... DETERGENT 1 KG   0.46 -> 0.71   Detergent Powder
+   *
+   * The threshold stays at 0.08 deliberately. GREATEST is never less than
+   * similarity, so this returns a strict SUPERSET of what it used to --
+   * the ordering improves and nothing that used to be found is lost.
+   */
   return prisma.$queryRawUnsafe<KbHit[]>(
     `SELECT id, canonical, brand, category, unit, subnames,
-            similarity("searchText", $1) AS score
+            GREATEST(similarity("searchText", $1),
+                     word_similarity($1, "searchText")) AS score
        FROM "ProductKb"
-      WHERE similarity("searchText", $1) > 0.08
-      ORDER BY score DESC
+      WHERE GREATEST(similarity("searchText", $1),
+                     word_similarity($1, "searchText")) > 0.08
+      ORDER BY score DESC, similarity("searchText", $1) DESC
       LIMIT $2`,
     q,
     k,

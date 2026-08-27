@@ -69,6 +69,34 @@ const MIN_LEXICAL_FOR_PRIOR = 0.2;
  */
 const ALT_BAND = 0.6;
 
+/**
+ * Words that state an amount rather than name a product. Hinglish number
+ * words included, because "do kilo" is written as often as "2 kilo".
+ */
+const QUANTITY_WORDS = new Set([
+  'kilo', 'kilos', 'kg', 'kgs', 'gram', 'grams', 'g', 'gm', 'gms',
+  'litre', 'litres', 'liter', 'liters', 'l', 'ltr', 'ml',
+  'packet', 'packets', 'pkt', 'pack', 'packs', 'piece', 'pieces', 'pc', 'pcs',
+  'bottle', 'bottles', 'box', 'boxes', 'dozen',
+  'ek', 'do', 'teen', 'char', 'chaar', 'panch', 'paanch', 'chhe', 'saat',
+  'aath', 'nau', 'das', 'adha', 'aadha', 'dedh', 'dhai', 'sava',
+]);
+
+/**
+ * Drop the amount, keep the product. Returns the input unchanged when
+ * stripping would leave nothing -- "do kilo" with no product named is
+ * better ranked badly than ranked against an empty string, which matches
+ * the same wrong SKU every time.
+ */
+export function stripQuantity(text: string): string {
+  const kept = text.split(/\s+/).filter((w) => {
+    const t = w.toLowerCase().replace(/[^a-z]/g, '');
+    if (!t) return false;
+    return !QUANTITY_WORDS.has(t);
+  });
+  return kept.length ? kept.join(' ') : text;
+}
+
 const W_FUZZY = 0.7;
 const W_PRIOR = 0.3;
 
@@ -82,7 +110,23 @@ export function rankLine(
 ): ResolvedLine {
   const scored: Candidate[] = [];
 
-  const query = normalise(sourceText);
+  /**
+   * RANK THE PRODUCT, NOT THE QUANTITY.
+   *
+   * The extractor is asked for the product span alone and mostly obliges,
+   * but "ek kilo chini" comes back whole often enough to matter. Ranking
+   * that string puts "kilo" in play against every pack size in the
+   * catalogue, and the damage is not to the winner but to the shortlist:
+   * asked for a kilo of chini the shop offered "Sugar 1kg ya Aashirvaad
+   * Whole Wheat Atta 10kg", because the atta matched on the word kilo.
+   *
+   * Stripping is safe here in a way it would not be on the target side.
+   * A SKU is called "Toothpaste 150g" and that 150g is identifying; a
+   * REQUEST for 150g of it is not, the amount is carried separately in
+   * `quantity` and `unitHint`, and pack fitting reads it from there.
+   */
+  const spoken = stripQuantity(sourceText);
+  const query = normalise(spoken);
 
   for (const sku of catalog) {
     const names = opts.useAliases
@@ -98,7 +142,7 @@ export function rankLine(
       fuzzy = 1;
       method = 'EXACT';
     } else if (opts.useFuzzy) {
-      fuzzy = fuzzyScore(sourceText, haystack);
+      fuzzy = fuzzyScore(spoken, haystack);
       method = 'FUZZY';
     }
 
