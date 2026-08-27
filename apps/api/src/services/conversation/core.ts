@@ -1,6 +1,6 @@
 import { prisma } from '@nukkad/db';
 import type { InboundMessage, OutboundMessage, ResolvedLine } from '@nukkad/shared';
-import { transcribeGroq } from '../asr/index.js';
+import { transcribe } from '../asr/index.js';
 import { isAudio, isImage } from '../asr/audio.js';
 import { extractOrder } from '../extraction/extract.js';
 import { getCatalog, getStockMap } from '../catalog/cache.js';
@@ -78,7 +78,7 @@ export async function handle(msg: InboundMessage): Promise<OutboundMessage[]> {
 
   const audio = msg.media.find((m) => isAudio(m.mime));
   if (audio) {
-    const t = await transcribeGroq(audio.localPath);
+    const t = await transcribe(audio.localPath);
     transcript = t.text;
     asrEngine = t.engine;
     text = t.text;

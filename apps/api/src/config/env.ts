@@ -39,6 +39,13 @@ const schema = z.object({
   GROQ_VISION_MODEL_FAST: z.string().optional(),
 
   // Optional second ASR, purely to add a row to the ablation table.
+  SHUNYA_API_KEY: z.string().optional(),
+  SHUNYA_AUTH_URL: z.string().default('https://app.shunyalabs.ai'),
+  SHUNYA_BASE_URL: z.string().default('https://asrv2prod.shunyalabs.ai'),
+  SHUNYA_MODEL: z.string().default('zero-indic'),
+  /// en, not hi. hi returns Devanagari, which the resolver strips to nothing.
+  SHUNYA_LANGUAGE: z.string().default('en'),
+
   SARVAM_API_KEY: z.string().optional(),
   SARVAM_BASE_URL: z.string().default('https://api.sarvam.ai'),
   SARVAM_MODEL: z.string().default('saaras:v3'),
@@ -78,3 +85,4 @@ export const env = parsed.data;
 
 export const hasVision = Boolean(env.GROQ_VISION_MODEL);
 export const hasSarvam = Boolean(env.SARVAM_API_KEY);
+export const hasShunya = Boolean(env.SHUNYA_API_KEY);

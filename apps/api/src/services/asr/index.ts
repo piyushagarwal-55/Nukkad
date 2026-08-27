@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs';
 import { groq } from '../../lib/groq.js';
 import { env, hasSarvam } from '../../config/env.js';
 import { romanise, isRoman } from '../lang/romanise.js';
+import { transcribeShunya } from './shunya.js';
 
 export interface Transcription {
   /** Roman, ready for the resolver */
@@ -20,6 +21,19 @@ export interface Transcription {
  * A noisier transcript makes the catalogue-constraint row of the ablation
  * table jump HIGHER, not lower. The delta is the product.
  */
+/**
+ * The one call everything else should make.
+ *
+ * Shunya first when it is configured, because it returns Roman directly
+ * and saves the transliteration hop -- measured at 1588ms against 2292ms
+ * for Whisper plus romanise, both finding all three items. It returns null
+ * rather than throwing on any failure, so Whisper is a real fallback and
+ * not a theoretical one.
+ */
+export async function transcribe(path: string, fast = false): Promise<Transcription> {
+  return (await transcribeShunya(path)) ?? (await transcribeGroq(path, fast));
+}
+
 export async function transcribeGroq(path: string, fast = false): Promise<Transcription> {
   const model = fast ? env.GROQ_ASR_MODEL_FAST : env.GROQ_ASR_MODEL;
   const t0 = Date.now();
