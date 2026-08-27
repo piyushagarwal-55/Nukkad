@@ -75,8 +75,10 @@ at once.
 
 ### The product knowledge base
 
-`packages/shared/src/constants/product-kb.ts` is the retrieval corpus: 178
-products and 670 local names, North and South Indian, seeded with
+`packages/shared/src/constants/product-kb.ts` is the retrieval corpus: 426
+products and 1,664 local names -- North and South Indian, plus a brand
+lexicon, because at a counter people ask for "colgate" and "nirma" far
+more often than for toothpaste or detergent. Seeded with
 
 ```bash
 npm run db:seed:kb
