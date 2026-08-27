@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { prisma } from '@nukkad/db';
+import { prisma, Prisma } from '@nukkad/db';
 import { handle } from '../services/conversation/core.js';
 import { getCatalog, getStockMap } from '../services/catalog/cache.js';
 import { buildPrior } from '../services/resolver/prior.js';
@@ -63,6 +63,18 @@ function inbound(text: string): InboundMessage {
 async function conversation() {
   console.log('\n=== FULL PIPELINE ===\n');
   for (const { text } of CASES) {
+    /**
+     * Reset between cases, because handle() is a state machine now.
+     * Without this, case 2 arrives while case 1's confirm card is still
+     * outstanding and gets MERGED into it as an amendment -- correct
+     * behaviour, wrong test: every case after the first would be scored
+     * against a basket the previous case built.
+     */
+    await prisma.conversation.updateMany({
+      where: { channel: 'sim', peerPhone: HOUSEHOLD },
+      data: { state: 'IDLE', contextJson: Prisma.DbNull },
+    });
+
     const t0 = Date.now();
     const replies = await handle(inbound(text));
     console.log(`IN  : ${text}`);
