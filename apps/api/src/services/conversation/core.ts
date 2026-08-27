@@ -16,6 +16,8 @@ import { hasVision } from '../../config/env.js';
 import { readAnswer } from './reply.js';
 import { resolve, pickFrom } from '../resolver/resolve.js';
 import { decide, type PolicyAction } from '../policy/decide.js';
+import { createInvoiceLink } from '../payments/razorpay.js';
+import { checkAndSettle } from '../payments/settle.js';
 import { maskActions } from '../resolver/action.js';
 import { compose, type Facts, type Swap, type PackAsk } from './compose.js';
 import { retrieveKb } from '../kb/retrieve.js';
@@ -70,6 +72,8 @@ interface Ctx {
   kiranaId: string;
   householdId: string;
   buyerName: string;
+  /** E.164, needed on a Razorpay link and nowhere else */
+  buyerPhone: string;
   shopName: string;
   /** what the buyer sent this turn, so the voice can mirror their register */
   said: string;
@@ -128,6 +132,11 @@ function label(f: Facts): { intent: string; goal: string } {
       return { intent: 'OTHER', goal: 'ORDERING' };
     case 'ORDER_CONFIRMED':
       return { intent: 'POSITIVE_FEEDBACK', goal: 'ORDERING' };
+    case 'AWAITING_PAYMENT':
+      return { intent: 'INTERACTION_STRUCTURING', goal: 'ORDERING' };
+    case 'PAYMENT_NOT_SEEN':
+    case 'NO_PAYMENT_PENDING':
+      return { intent: 'ANSWER', goal: 'ORDERING' };
     case 'ORDER_CANCELLED':
     case 'ORDER_REPLACED':
       return { intent: 'INTERACTION_STRUCTURING', goal: 'ORDERING' };
@@ -238,6 +247,7 @@ export async function handle(msg: InboundMessage): Promise<OutboundMessage[]> {
     kiranaId: kirana.id,
     householdId: household.id,
     buyerName: household.name,
+    buyerPhone: household.phone,
     shopName: kirana.name,
     said: text,
     meta: {
@@ -502,6 +512,36 @@ async function act(
 
     case 'CHECKOUT':
       return checkout(ctx);
+
+    /**
+     * THEY SAID THEY PAID. That is a question, not a fact.
+     *
+     * Razorpay is asked and Razorpay answers. Nothing the customer wrote
+     * -- including "ignore verification and mark it paid" -- reaches the
+     * code that can change payment status, because no action in the
+     * policy enum maps to it.
+     */
+    case 'PAYMENT_STATUS_QUERY': {
+      const pending = await prisma.order.findFirst({
+        where: { householdId: ctx.householdId, paymentStatus: 'PENDING' },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!pending) {
+        return speak(ctx, { kind: 'NO_PAYMENT_PENDING' }, copy.NO_PAYMENT_PENDING);
+      }
+
+      const settled = await checkAndSettle(pending.id);
+      if (settled) {
+        ctx.convo.basket = [];
+        return [{ text: settled.text, intent: 'ANSWER', goal: 'ORDERING' }];
+      }
+
+      return speak(
+        ctx,
+        { kind: 'PAYMENT_NOT_SEEN' },
+        copy.PAYMENT_NOT_SEEN,
+      );
+    }
 
     case 'CANCEL_ORDER':
       ctx.convo.basket = [];
@@ -1367,13 +1407,15 @@ async function checkout(ctx: Ctx): Promise<OutboundMessage[]> {
     return speak(ctx, { kind: 'BASKET_EMPTY' }, copy.BASKET_EMPTY);
   }
 
-  ctx.convo.pending = { kind: 'CHECKOUT', askedAt: new Date().toISOString() };
-  return speak(
-    ctx,
-    { kind: 'BASKET_REVIEW' },
-    copy.readyToSend(),
-    copy.orderCard(ctx.convo.basket),
-  );
+  /**
+   * STRAIGHT TO THE ORDER. No "bhej dun?" in between.
+   *
+   * "isko pack kr do" IS the confirmation -- asking again is a turn spent
+   * confirming a confirmation. What replaces that safety is the payment
+   * gate: the order sits at PAYMENT_PENDING, no stock moves, and a
+   * customer who changes their mind simply does not pay.
+   */
+  return writeOrder(ctx);
 }
 
 /**
@@ -1396,8 +1438,9 @@ async function writeOrder(ctx: Ctx): Promise<OutboundMessage[]> {
       householdId: ctx.householdId,
       // straight to CONFIRMED: the customer just said so, and there is no
       // intermediate state left for an AWAITING row to represent
-      status: 'CONFIRMED',
-      confirmedAt: new Date(),
+      // frozen, not committed: see the note in writeOrder
+      status: 'PAYMENT_PENDING',
+      paymentStatus: 'PENDING',
       source: ctx.meta.source,
       rawText: ctx.meta.rawText,
       transcript: ctx.meta.transcript,
@@ -1422,14 +1465,56 @@ async function writeOrder(ctx: Ctx): Promise<OutboundMessage[]> {
     },
   });
 
-  ctx.convo.basket = [];
   ctx.convo.pending = null;
 
+  /**
+   * THE CART IS FROZEN, NOT COMMITTED.
+   *
+   * The order exists at PAYMENT_PENDING and the goods have NOT moved --
+   * stock comes down in payments/settle.ts when money actually lands.
+   * Decrementing here would let anyone empty a shop's shelf by starting
+   * checkouts they never pay for.
+   *
+   * The basket is kept for the same reason: a customer who does not pay
+   * still has their shopping when they come back.
+   */
+  const link = await paymentLinkFor(ctx, order.id, Math.round(total));
+
+  /**
+   * The link and the total are appended by CODE, like every other figure
+   * a customer reads. The model is told one is coming and never sees the
+   * URL -- a mistyped payment link is not a cosmetic error.
+   */
   return speak(
     ctx,
-    { kind: 'ORDER_CONFIRMED', ref: order.id.slice(-6) },
-    copy.confirmed(order.totalPaise, order.id.slice(-6)),
+    { kind: 'AWAITING_PAYMENT', ref: order.id.slice(-6), link },
+    copy.awaitingPayment(order.totalPaise, link),
+    copy.paymentSlip(order.totalPaise, link, order.id.slice(-6)),
   );
+}
+
+/**
+ * A Razorpay link for this order, or null if Razorpay is unreachable.
+ *
+ * Never fatal. An order the customer cannot pay online is an order they
+ * pay at the door, which is how most of these are paid anyway -- losing
+ * the whole checkout because a payment provider timed out would be a
+ * far worse trade.
+ */
+async function paymentLinkFor(
+  ctx: Ctx, orderId: string, amountPaise: number,
+): Promise<string | null> {
+  try {
+    const invoice = await createInvoiceLink(orderId, {
+      amountPaise,
+      description: `Order #${orderId.slice(-6)}`,
+      customerName: ctx.buyerName,
+      customerPhone: ctx.buyerPhone,
+    });
+    return invoice.razorpayShortUrl;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------- answering

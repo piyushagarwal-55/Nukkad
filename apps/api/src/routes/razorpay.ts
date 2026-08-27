@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { verifySignature, handleRazorpayEvent } from '../services/payments/webhook.js';
+import { twilioAdapter } from '../channels/index.js';
 
 /**
  * Razorpay signs the RAW body with HMAC-SHA256. If Fastify parses the JSON
@@ -35,8 +36,26 @@ export async function razorpayRoutes(app: FastifyInstance) {
     const body = req.body as { event?: string; [k: string]: unknown };
     const eventId = (req.headers['x-razorpay-event-id'] as string) ?? `${body.event}_${Date.now()}`;
 
-    const result = await handleRazorpayEvent(eventId, body.event ?? 'unknown', body);
-    app.log.info({ event: body.event, result }, 'razorpay webhook');
+    const { result, settled } = await handleRazorpayEvent(
+      eventId, body.event ?? 'unknown', body,
+    );
+    app.log.info({ event: body.event, result, billed: Boolean(settled) }, 'razorpay webhook');
+
+    /**
+     * The bill goes out from HERE rather than from the settlement, so the
+     * payment layer never imports a transport and cannot message anyone
+     * on its own. settle() returns a bill exactly once per order, so this
+     * cannot double-send however many times Razorpay retries.
+     *
+     * Sent after the response is decided, and failures are logged rather
+     * than thrown: Razorpay must get its 200 or it retries forever, and a
+     * WhatsApp outage is not a reason to replay a payment event.
+     */
+    if (settled) {
+      twilioAdapter
+        .send(settled.to, { text: settled.text })
+        .catch((err) => app.log.error({ err }, 'bill delivery failed'));
+    }
 
     return { ok: true, result };
   });

@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { prisma } from '@nukkad/db';
+import { settle, type Settlement } from './settle.js';
 import { env } from '../../config/env.js';
 
 /**
@@ -31,13 +32,15 @@ interface PaymentLinkEntity {
  */
 export async function handleRazorpayEvent(
   eventId: string, eventType: string, payload: Record<string, unknown>,
-): Promise<'processed' | 'duplicate'> {
+): Promise<{ result: 'processed' | 'duplicate'; settled?: Settlement }> {
+  let settled: Settlement | undefined;
+
   try {
     await prisma.webhookEvent.create({
       data: { source: 'razorpay', externalId: eventId, eventType, payload: payload as never },
     });
   } catch {
-    return 'duplicate';
+    return { result: 'duplicate' };
   }
 
   const body = payload as {
@@ -74,6 +77,19 @@ export async function handleRazorpayEvent(
         data: { amountPaidPaise: paid, status: status as never },
       });
 
+      /**
+       * A VERIFIED PAYMENT IS THE ONE THING THAT MAY CONFIRM AN ORDER.
+       *
+       * The signature was checked before this function was called, so
+       * this is Razorpay speaking and not a customer. settle() is
+       * idempotent -- a status read may have got here first -- and it
+       * returns the bill only to whoever actually made the transition.
+       */
+      if (status === 'PAID') {
+        const done = await settle(invoice.orderId, paid);
+        if (done) settled = done;
+      }
+
       if (paymentEntity?.id) {
         await prisma.payment.upsert({
           where: { razorpayPaymentId: paymentEntity.id },
@@ -96,5 +112,5 @@ export async function handleRazorpayEvent(
     data: { processedAt: new Date() },
   });
 
-  return 'processed';
+  return { result: 'processed', settled };
 }

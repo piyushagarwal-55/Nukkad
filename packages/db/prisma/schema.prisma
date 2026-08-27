@@ -32,12 +32,38 @@ enum InputSource {
   MENU
 }
 
+/**
+ * WHERE THE GOODS ARE. Kept separate from where the MONEY is, below.
+ *
+ * Folding them into one field reads fine until an order is paid and
+ * still being packed, or packed and unpaid on udhaar -- both of which
+ * are ordinary days in a kirana. One enum cannot say both.
+ */
 enum OrderStatus {
   DRAFT
   AWAITING
+  /** checked out, link sent, nothing committed until the money lands */
+  PAYMENT_PENDING
   CONFIRMED
   CANCELLED
   FULFILLED
+}
+
+/**
+ * WHERE THE MONEY IS, and it moves for exactly one reason.
+ *
+ * SUCCESS is reachable only from a signature-verified Razorpay webhook
+ * or a direct status read from Razorpay's API. It is NOT reachable from
+ * anything a customer types, and the policy model has no action that
+ * could request it -- see services/policy/decide.ts, where the absence
+ * is deliberate. A customer saying "payment ho gaya" is a claim about
+ * the world, and the world is asked rather than believed.
+ */
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  EXPIRED
 }
 
 enum InvoiceStatus {
@@ -105,6 +131,7 @@ enum AliasSource {
 enum PartyRole {
   HOUSEHOLD
   KIRANA
+  SUPPLIER
 }
 
 // ---------------------------------------------------------------- parties
@@ -143,6 +170,7 @@ model Kirana {
   conversations       Conversation[]
   users               ShopUser[]
   bills               SupplierBill[]
+  suppliers Supplier[]
 }
 
 model Household {
@@ -215,6 +243,34 @@ model Stock {
   sku Sku @relation(fields: [skuId], references: [id], onDelete: Cascade)
 }
 
+/**
+ * The other end of the shop's WhatsApp.
+ *
+ * A supplier already existed here as a BILL SOURCE -- see SupplierBill --
+ * but not as someone the shop can message, which is a different thing
+ * and needs a phone number and a conversation.
+ *
+ * The relationship is deliberately not a catalogue: no mapping of which
+ * supplier stocks which SKU. A kirana with two distributors knows which
+ * one to call and does not need to be asked to encode it, and getting
+ * that mapping wrong would send an order to the wrong shop.
+ */
+model Supplier {
+  id       String @id @default(cuid())
+  kiranaId String
+  name     String
+  /** E.164, and it must have joined the sandbox to receive anything */
+  phone    String
+
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  kirana Kirana @relation(fields: [kiranaId], references: [id], onDelete: Cascade)
+
+  @@unique([kiranaId, phone])
+  @@index([kiranaId, active])
+}
+
 // ---------------------------------------------------------------- orders
 
 model Order {
@@ -233,9 +289,13 @@ model Order {
 
   totalPaise Int @default(0)
 
+  paymentStatus PaymentStatus @default(PENDING)
+
   createdAt   DateTime  @default(now())
   confirmedAt DateTime?
   cancelledAt DateTime?
+  /** when a VERIFIED payment landed. Never set from a message. */
+  paidAt      DateTime?
 
   kirana    Kirana      @relation(fields: [kiranaId], references: [id], onDelete: Cascade)
   household Household   @relation(fields: [householdId], references: [id], onDelete: Cascade)

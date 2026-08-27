@@ -96,6 +96,15 @@ export type Facts =
   | { kind: 'BASKET_EMPTY' }
   | { kind: 'ORDER_AMENDED' }
   | { kind: 'ORDER_CONFIRMED'; ref: string }
+  /**
+   * Checked out, link sent, waiting on money. NOT confirmed -- the goods
+   * have not moved and will not until Razorpay says so.
+   */
+  | { kind: 'AWAITING_PAYMENT'; ref: string; link: string | null }
+  /** they asked about a payment and Razorpay has not seen it */
+  | { kind: 'PAYMENT_NOT_SEEN' }
+  /** they asked about a payment and there is no order waiting on one */
+  | { kind: 'NO_PAYMENT_PENDING' }
   | { kind: 'ORDER_CANCELLED' }
   | { kind: 'ORDER_REPLACED' }
   | { kind: 'ASK_WHICH'; sourceText: string; options: string[] }
@@ -244,6 +253,34 @@ function brief(f: Facts): string {
 
     case 'ORDER_CONFIRMED':
       return `The order is confirmed and going out. Reference ${f.ref}. Reassure them briefly.`;
+
+    case 'AWAITING_PAYMENT':
+      return [
+        `Their order is placed and waiting on payment. Reference ${f.ref}.`,
+        f.link
+          ? 'The payment link is attached below your reply -- do NOT write'
+            + ' it out yourself, and do not say the order is confirmed,'
+            + ' because it is not until they pay.'
+          : 'Online payment is not available right now, so tell them they'
+            + ' can pay when the goods arrive.',
+        'Keep it short.',
+      ].join(' ');
+
+    case 'PAYMENT_NOT_SEEN':
+      return [
+        'They say they have paid and the payment has NOT arrived yet.',
+        'Do NOT agree that it is done and do NOT promise it will be fine.',
+        'Say plainly that it has not shown up yet, that it sometimes takes',
+        'a minute, and that the order goes through by itself the moment it',
+        'does. Be warm about it -- they are probably telling the truth and',
+        'the bank is slow.',
+      ].join(' ');
+
+    case 'NO_PAYMENT_PENDING':
+      return [
+        'They asked about a payment but nothing is waiting to be paid.',
+        'Say so and ask if they want to order something.',
+      ].join(' ');
 
     case 'ORDER_CANCELLED':
       return 'The order is cancelled. Say so without fuss and leave the door open.';
@@ -521,6 +558,7 @@ function allowedDigits(f: Facts): Set<string> {
   if (f.kind === 'STOCK_ANSWER') source.push(f.name, f.price);
   if (f.kind === 'ACCOUNT') source.push(String(f.orders), f.spent);
   if (f.kind === 'ORDER_CONFIRMED') source.push(f.ref);
+  if (f.kind === 'AWAITING_PAYMENT') source.push(f.ref);
 
   const out = new Set<string>();
   for (const s of source) for (const d of s.match(/\d+/g) ?? []) out.add(d);

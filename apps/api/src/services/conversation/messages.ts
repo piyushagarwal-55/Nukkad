@@ -103,6 +103,35 @@ export const readyToSend = (packAsks: PackAsk[] = []): string => {
   return `Aapne ${a.asked} kaha, ye ${a.sold} ke packet mein aata hai. Bhej dun?`;
 };
 
+/**
+ * Checked out, link sent. Careful with the wording: this order is NOT
+ * confirmed, and telling someone it is before their money has arrived is
+ * the one thing the whole payment path exists to avoid.
+ */
+export const awaitingPayment = (totalPaise: number, link: string | null): string =>
+  link
+    ? `Total ${rupeeLabel(totalPaise)}. Pay karne ke liye: ${link}
+Paise aate hi order pakka ho jayega.`
+    : `Total ${rupeeLabel(totalPaise)}. Online link abhi nahi ban paya, saamaan aane par de dijiye.`;
+
+/**
+ * The slip that follows the reply: total, link, reference. Code-rendered
+ * for the same reason the order card is -- a model that paraphrases a
+ * URL sends the customer nowhere.
+ */
+export const paymentSlip = (totalPaise: number, link: string | null, ref: string): string =>
+  [
+    `Total: ${rupeeLabel(totalPaise)}`,
+    link ? `Pay: ${link}` : 'Saamaan aane par de dijiye.',
+    `(#${ref})`,
+  ].join('\n');
+
+export const PAYMENT_NOT_SEEN =
+  'Abhi tak payment nahi dikha. Ek minute lagta hai kabhi kabhi -- aate hi order apne aap chala jayega.';
+
+export const NO_PAYMENT_PENDING =
+  'Abhi koi payment baaki nahi hai. Kuch chahiye to bataiye.';
+
 export const confirmed = (totalPaise: number, ref: string): string =>
   `Order confirm ho gaya. Total ${rupeeLabel(totalPaise)}. (#${ref})`;
 
