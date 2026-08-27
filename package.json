@@ -18,6 +18,7 @@
     "db:seed": "npm run seed --workspace=@nukkad/db",
     "db:seed:kb": "npm run seed:kb --workspace=@nukkad/db",
     "backfill:subnames": "npm run backfill:subnames --workspace=@nukkad/api",
+    "backfill:transcripts": "npm run backfill:transcripts --workspace=@nukkad/api",
     "db:studio": "npm run studio --workspace=@nukkad/db",
     "eval": "npm run eval --workspace=@nukkad/eval",
     "eval:bill": "npm run eval:bill --workspace=@nukkad/eval",

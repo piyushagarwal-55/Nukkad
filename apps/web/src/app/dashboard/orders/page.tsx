@@ -1,105 +1,286 @@
 'use client';
 
-import { Fragment, useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { get, rupees } from '@/lib/api';
 import { RowsSkeleton } from '@/components/Loading';
 
+/**
+ * The audit surface.
+ *
+ * Every other screen shows what the shop HAS. This one shows how it got
+ * there: the words a customer actually said, what those words were matched
+ * to, and by which route. A resolver nobody can inspect is a resolver
+ * nobody should let write a price, so the transcript and the method are
+ * the point of the page rather than a footnote on it.
+ */
+
 interface Line {
-  name: string; quantity: number; linePaise: number;
-  method: string; confidence: number; wasSubstituted: boolean; sourceText: string;
+  name: string;
+  quantity: number;
+  linePaise: number;
+  method: string;
+  confidence: number;
+  wasSubstituted: boolean;
+  sourceText: string;
 }
 interface Order {
-  id: string; household: string; status: string; source: string;
-  totalPaise: number; createdAt: string; transcript: string | null;
-  latencyMs: number | null; lines: Line[]; outstandingPaise: number;
+  id: string;
+  household: string;
+  status: string;
+  source: string;
+  totalPaise: number;
+  createdAt: string;
+  transcript: string | null;
+  latencyMs: number | null;
+  lines: Line[];
+  outstandingPaise: number;
 }
 
 /**
- * Flat list, no dashboard chrome. The one non-obvious column is `method`:
- * it records HOW each line was matched, which is both useful to the owner
- * and the place the ablation numbers come from.
+ * What each matching route means, in words an owner would use.
+ *
+ * These are the same routes the ablation ladder measures, so the page and
+ * the accuracy claim are describing one mechanism rather than two.
  */
+const METHOD: Record<string, { cls: string; label: string; why: string }> = {
+  EXACT: { cls: 'm-exact', label: 'exact', why: 'the name matched a product outright' },
+  FUZZY: { cls: 'm-fuzzy', label: 'spelling', why: 'spelled differently, same product' },
+  PRIOR: { cls: 'm-prior', label: 'their usual', why: 'chosen from what this household always buys' },
+  EMBEDDING: { cls: 'm-fuzzy', label: 'meaning', why: 'matched on meaning rather than spelling' },
+  LLM: { cls: 'm-llm', label: 'judged', why: 'sent to the adjudicator to decide' },
+  DISAMBIGUATED: { cls: 'm-llm', label: 'you chose', why: 'the customer picked from options we offered' },
+  SUBSTITUTED: { cls: 'm-substituted', label: 'swapped', why: 'first choice was out of stock' },
+  UNRESOLVED: { cls: 'm-unresolved', label: 'not matched', why: 'nothing in the catalogue fit' },
+};
+
+const STATUS: Record<string, string> = {
+  FULFILLED: 'ost-fulfilled', CONFIRMED: 'ost-confirmed',
+  AWAITING: 'ost-awaiting', CANCELLED: 'ost-cancelled', DRAFT: 'ost-draft',
+};
+
+const SOURCE: Record<string, string> = {
+  VOICE: 'said out loud', TEXT: 'typed on WhatsApp', PHOTO: 'sent a photo',
+  AUTO: 'placed by the agent', MENU: 'tapped the menu',
+};
+
+const TABS = [
+  { key: 'all', label: 'All' },
+  { key: 'AWAITING', label: 'Waiting on them' },
+  { key: 'CONFIRMED', label: 'Confirmed' },
+  { key: 'FULFILLED', label: 'Fulfilled' },
+  { key: 'owed', label: 'Money owed' },
+] as const;
+
+function when(iso: string) {
+  const d = new Date(iso);
+  const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+  const time = d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+  if (days === 0) return `today, ${time}`;
+  if (days === 1) return `yesterday, ${time}`;
+  if (days < 7) return `${days} days ago`;
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' });
+}
+
+/* ------------------------------------------------------- one order row */
+function OrderRow({ o, open, onToggle }: { o: Order; open: boolean; onToggle: () => void }) {
+  const st = STATUS[o.status] ?? 'ost-draft';
+  const weak = o.lines.filter((l) => l.method === 'UNRESOLVED' || l.confidence < 0.55).length;
+
+  return (
+    <div
+      data-open={open}
+      className="inv-row cursor-pointer px-3 py-3.5"
+      onClick={onToggle}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <div className="min-w-0 flex-1">
+          <p className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            <span className="font-medium">{o.household}</span>
+            <span className={`ost ${st}`}>{o.status.toLowerCase()}</span>
+          </p>
+          <p className="muted mt-0.5 text-xs">
+            {when(o.createdAt)} &middot; {SOURCE[o.source] ?? o.source.toLowerCase()} &middot;{' '}
+            {o.lines.length} item{o.lines.length === 1 ? '' : 's'}
+            {o.latencyMs ? <> &middot; understood in {(o.latencyMs / 1000).toFixed(1)}s</> : null}
+          </p>
+
+          {/* the words themselves, not hidden behind a click */}
+          {o.transcript && !open && (
+            <p className="muted mt-1.5 truncate text-[13px] italic">
+              &ldquo;{o.transcript}&rdquo;
+            </p>
+          )}
+        </div>
+
+        <div className="text-right">
+          <p className="tabular-nums">&#8377;{rupees(o.totalPaise)}</p>
+          {o.outstandingPaise > 0 ? (
+            <p className="text-xs font-semibold text-[var(--warn)] tabular-nums">
+              &#8377;{rupees(o.outstandingPaise)} owed
+            </p>
+          ) : (
+            <p className="muted text-xs">settled</p>
+          )}
+        </div>
+      </div>
+
+      {weak > 0 && !open && (
+        <p className="mt-1.5 text-[11px] text-[var(--warn)]">
+          {weak} line{weak === 1 ? '' : 's'} the shop was unsure about
+        </p>
+      )}
+
+      {open && (
+        <div className="mt-4 border-t border-[var(--line)] pt-4" onClick={(e) => e.stopPropagation()}>
+          {o.transcript && (
+            <>
+              <p className="muted text-[11px] font-semibold">What they said</p>
+              <p className="said display mt-1.5 text-[17px] leading-snug">
+                &ldquo;{o.transcript}&rdquo;
+              </p>
+            </>
+          )}
+
+          <p className="muted mt-5 text-[11px] font-semibold">What the shop understood</p>
+          <ul className="mt-2 divide-y divide-[#1a1a1a12]">
+            {o.lines.map((l, i) => {
+              const m = METHOD[l.method] ?? { cls: 'm-llm', label: l.method.toLowerCase(), why: '' };
+              return (
+                <li key={i} className="py-2.5">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="muted text-[13px] italic">&ldquo;{l.sourceText}&rdquo;</span>
+                    <span className="became">&rarr;</span>
+                    <span className="text-[13px] font-medium">
+                      {l.quantity} &times; {l.name}
+                    </span>
+                    <span className={`method ${m.cls}`}>{m.label}</span>
+                    {l.wasSubstituted && (
+                      <span className="method m-substituted">was out of stock</span>
+                    )}
+                    <span className="ml-auto text-[13px] tabular-nums">
+                      &#8377;{rupees(l.linePaise)}
+                    </span>
+                  </div>
+
+                  <div className="mt-1.5 flex items-center gap-2.5">
+                    <span className="conf-rail w-14 shrink-0">
+                      <span
+                        className="conf-fill block"
+                        style={{
+                          width: `${Math.round(l.confidence * 100)}%`,
+                          background: l.confidence < 0.55 ? 'var(--hot)' : 'var(--ink)',
+                        }}
+                      />
+                    </span>
+                    <span className="muted text-[11px]">{m.why}</span>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------- page */
 export default function Orders() {
   const [orders, setOrders] = useState<Order[] | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  const [tab, setTab] = useState<(typeof TABS)[number]['key']>('all');
+  const [q, setQ] = useState('');
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    get<{ orders: Order[] }>('/orders').then((d) => setOrders(d.orders)).catch((e) => setErr(e.message));
+    get<{ orders: Order[] }>('/orders')
+      .then((d) => setOrders(d.orders))
+      .catch((e) => setErr(e.message));
   }, []);
+
+  const stats = useMemo(() => {
+    const o = orders ?? [];
+    return {
+      total: o.length,
+      owed: o.reduce((n, x) => n + x.outstandingPaise, 0),
+      awaiting: o.filter((x) => x.status === 'AWAITING').length,
+      voice: o.filter((x) => x.source === 'VOICE').length,
+    };
+  }, [orders]);
+
+  const shown = useMemo(() => {
+    let list = orders ?? [];
+    if (tab === 'owed') list = list.filter((o) => o.outstandingPaise > 0);
+    else if (tab !== 'all') list = list.filter((o) => o.status === tab);
+    if (q.trim()) {
+      const n = q.toLowerCase();
+      list = list.filter((o) =>
+        `${o.household} ${o.transcript ?? ''} ${o.lines.map((l) => l.name).join(' ')}`
+          .toLowerCase()
+          .includes(n),
+      );
+    }
+    return list;
+  }, [orders, tab, q]);
 
   if (err) return <p className="text-[var(--warn)]">{err}</p>;
   if (!orders) return <RowsSkeleton rows={8} />;
 
   return (
     <>
-      <h1 className="text-2xl font-semibold">Orders</h1>
-      <p className="muted mt-1 text-sm">{orders.length} orders. Kisi par tap karke detail dekhiye.</p>
+      <h1 className="display text-[clamp(2rem,4vw,2.75rem)]">Orders</h1>
+      <p className="muted mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm">
+        <span>{stats.total} orders</span>
+        {stats.awaiting > 0 && <span>{stats.awaiting} waiting on the customer</span>}
+        {stats.owed > 0 && (
+          <span className="text-[var(--warn)]">&#8377;{rupees(stats.owed)} outstanding</span>
+        )}
+      </p>
 
-      <div className="panel mt-6 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="muted border-b border-[var(--line)] text-left">
-            <tr>
-              <th className="p-3 font-normal">Ghar</th>
-              <th className="p-3 font-normal">Items</th>
-              <th className="p-3 font-normal">Total</th>
-              <th className="p-3 font-normal">Baaki</th>
-              <th className="p-3 font-normal">Kaise</th>
-              <th className="p-3 font-normal">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {orders.map((o) => (
-              <Fragment key={o.id}>
-                <tr
-                  onClick={() => setOpen(open === o.id ? null : o.id)}
-                  className="cursor-pointer border-b border-[var(--line)] last:border-0 hover:bg-black/[0.04]">
-                  <td className="p-3">{o.household}</td>
-                  <td className="p-3">{o.lines.length}</td>
-                  <td className="p-3">Rs {rupees(o.totalPaise)}</td>
-                  <td className={'p-3 ' + (o.outstandingPaise > 0 ? 'text-[var(--warn)]' : 'muted')}>
-                    {o.outstandingPaise > 0 ? `Rs ${rupees(o.outstandingPaise)}` : '-'}
-                  </td>
-                  <td className="muted p-3 text-xs">{o.source}</td>
-                  <td className="p-3 text-xs">{o.status}</td>
-                </tr>
-                {open === o.id && (
-                  <tr className="border-b border-[var(--line)]">
-                    <td colSpan={6} className="bg-[var(--sand)]/60 p-4">
-                      {o.transcript && (
-                        <p className="muted mb-3 text-xs">
-                          Transcript: <span className="text-[var(--ink)]">{o.transcript}</span>
-                          {o.latencyMs ? ` (${o.latencyMs}ms)` : ''}
-                        </p>
-                      )}
-                      <table className="w-full text-xs">
-                        <tbody>
-                          {o.lines.map((l, i) => (
-                            <tr key={i}>
-                              <td className="py-1 pr-4">{l.quantity} x {l.name}</td>
-                              <td className="muted py-1 pr-4">said &quot;{l.sourceText}&quot;</td>
-                              <td className="py-1 pr-4">
-                                <span className="rounded border border-[var(--line)] px-1.5 py-0.5">
-                                  {l.method}
-                                </span>
-                                {l.wasSubstituted && (
-                                  <span className="ml-1 text-[var(--warn)]">badla gaya</span>
-                                )}
-                              </td>
-                              <td className="muted py-1">conf {l.confidence.toFixed(2)}</td>
-                              <td className="py-1 text-right">Rs {rupees(l.linePaise)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </td>
-                  </tr>
-                )}
-              </Fragment>
-            ))}
-          </tbody>
-        </table>
+      <div className="mt-6 flex flex-wrap items-center gap-2.5">
+        {TABS.map((t) => (
+          <button key={t.key} onClick={() => setTab(t.key)} data-on={tab === t.key} className="inv-tab">
+            {t.label}
+          </button>
+        ))}
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search a customer, a word they said, an item"
+          className="inv-field ml-auto !w-auto min-w-[240px] flex-1 sm:flex-none"
+        />
       </div>
+
+      {orders.length === 0 ? (
+        <div className="pane mt-6 p-10 text-center">
+          <h2 className="display text-2xl">No orders yet</h2>
+          <p className="muted mx-auto mt-3 max-w-md text-sm leading-relaxed">
+            Once a customer is registered and messages the shop, everything they
+            say and everything the shop makes of it shows up here.
+          </p>
+        </div>
+      ) : (
+        <div className="pane mt-4 p-2">
+          <div className="divide-y divide-[#1a1a1a12]">
+            {shown.map((o) => (
+              <OrderRow
+                key={o.id}
+                o={o}
+                open={open === o.id}
+                onToggle={() => setOpen(open === o.id ? null : o.id)}
+              />
+            ))}
+          </div>
+          {shown.length === 0 && (
+            <p className="muted px-3 py-10 text-center text-sm">Nothing matches that.</p>
+          )}
+        </div>
+      )}
+
+      <p className="muted mt-4 text-xs leading-relaxed">
+        Tap an order to see the exact words and how each one was matched.
+        The tags are the same routes the accuracy harness measures.
+      </p>
     </>
   );
 }

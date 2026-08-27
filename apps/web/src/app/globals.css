@@ -1426,3 +1426,56 @@ html, body {
 .conf-fill { height: 100%; border-radius: 999px; background: var(--ink); }
 
 @media (prefers-reduced-motion: reduce) { .node-in { animation: none; } }
+
+/* --- orders -----------------------------------------------------------
+   The orders list answers one question the rest of the dashboard cannot:
+   WHAT DID THE CUSTOMER ACTUALLY SAY, and what did the shop make of it.
+   Everything here is arranged around that pair, because a resolver nobody
+   can audit is a resolver nobody should trust with a price.
+   --------------------------------------------------------------------- */
+
+/* what they said, in the shop own words */
+.said {
+  border-left: 3px solid var(--hot);
+  padding-left: 0.9rem;
+}
+
+/* HOW a line was matched. Each method is a different amount of certainty
+   and they should not all look alike. */
+.method {
+  border-radius: 999px;
+  border: 1.5px solid var(--ink);
+  padding: 0.05rem 0.45rem;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.m-exact        { background: var(--green); color: var(--panel); }
+.m-fuzzy        { background: var(--accent); }
+.m-prior        { background: var(--pink); }
+.m-substituted  { background: var(--amber); }
+.m-llm          { background: var(--sand); }
+.m-unresolved   { background: var(--hot); color: var(--bg); }
+
+/* status of the order itself */
+.ost {
+  border-radius: 999px;
+  border: 1.5px solid var(--ink);
+  padding: 0.08rem 0.55rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.ost-fulfilled { background: var(--green); color: var(--panel); }
+.ost-confirmed { background: var(--accent); }
+.ost-awaiting  { background: var(--amber); }
+.ost-cancelled { background: var(--hot); color: var(--bg); }
+.ost-draft     { background: var(--sand); color: var(--muted); }
+
+/* the arrow from what was said to what was understood */
+.became {
+  color: var(--muted);
+  font-size: 0.75rem;
+  padding: 0 0.35rem;
+}
