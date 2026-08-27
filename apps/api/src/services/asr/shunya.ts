@@ -6,25 +6,24 @@ import type { Transcription } from './index.js';
  * Shunya Labs zero-indic. An Indian-language ASR trained on real Indian
  * accents and native code-switching.
  *
- * WHY IT IS HERE. Whisper on language=hi returns Devanagari, which the
- * resolver cannot read, so that path costs a second LLM call to
- * transliterate. Shunya on language_code=en returns ROMAN DIRECTLY, which
- * removes the hop entirely.
+ * SECOND IN THE CHAIN, behind Sarvam. See `transcribe` in ./index.ts for
+ * the table that decided that; the short version is that both engines land
+ * tel and chai patti, and only Sarvam hears atta.
  *
- * Measured on one clip, same resolver, same three items asked for:
+ * It stays in the chain rather than being deleted, and not out of sentiment.
+ * Sarvam is one vendor with one key and one outage away from a mute voice
+ * agent, and the layer under it should be something that also answers in
+ * Roman. Whisper alone would work, but it costs an extra LLM call to
+ * transliterate and doubles the latency.
  *
- *   whisper hi -> romanise   2292ms   3 of 3 found
- *   shunya  en               1588ms   3 of 3 found
- *   shunya  hi -> romanise    838ms   0 of 3   (output was garbled)
+ * WHY language_code=en ON HINDI AUDIO. Because hi returns Devanagari, which
+ * the resolver strips to an empty string. Measured on the same clip:
  *
- * So en, not hi. And the 700ms it saves is 700ms of dead air on a phone
- * call, which is the difference between an agent that sounds like it is
- * listening and one that sounds broken.
+ *   shunya en               382-1547ms   2 of 3 found
+ *   shunya hi -> romanise         838ms  0 of 3   (garbled)
  *
- * TREAT THAT MEASUREMENT AS PROVISIONAL. The clip was a US English speech
- * synthesiser reading Hinglish, which is the one thing these models are
- * NOT tuned for and Whisper is. A recording of an actual person is the
- * test that decides this, and it has not been run.
+ * The wide range is the token exchange: the first call pays ~800ms for it
+ * and every later one does not.
  */
 
 /**

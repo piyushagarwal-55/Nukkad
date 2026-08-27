@@ -12,6 +12,7 @@
     "type-check": "tsc --noEmit",
     "clean": "rm -rf dist",
     "smoke": "dotenv -e ../../.env -- tsx src/scripts/smoke.ts",
+    "asr:bench": "dotenv -e ../../.env -- tsx src/scripts/asr-bench.ts",
     "backfill:subnames": "dotenv -e ../../.env -- tsx src/scripts/backfill-subnames.ts",
     "backfill:transcripts": "dotenv -e ../../.env -- tsx src/scripts/backfill-transcripts.ts"
   },

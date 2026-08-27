@@ -14,24 +14,44 @@ export interface Transcription {
 }
 
 /**
- * Whisper is measurably WORSE than Sarvam on code-mixed Hinglish, and
- * that is fine, arguably better. The whole thesis is that transcription
- * errors are recoverable by retrieval, because the answer is guaranteed
- * to be inside a few hundred known SKUs with a strong household prior.
- * A noisier transcript makes the catalogue-constraint row of the ablation
- * table jump HIGHER, not lower. The delta is the product.
- */
-/**
- * The one call everything else should make.
+ * THE ONE CALL EVERYTHING ELSE SHOULD MAKE.
  *
- * Shunya first when it is configured, because it returns Roman directly
- * and saves the transliteration hop -- measured at 1588ms against 2292ms
- * for Whisper plus romanise, both finding all three items. It returns null
- * rather than throwing on any failure, so Whisper is a real fallback and
- * not a theoretical one.
+ * Order set by `npm run asr:bench --workspace=@nukkad/api`, three trials per
+ * engine on one Hinglish clip, scored not by word error rate but by how many
+ * of the three spoken items reach the far end as the right SKU:
+ *
+ *   engine                   median   range        found
+ *   whisper hi + romanise    1842ms   1515-2051    2/3
+ *   shunya zero-indic en      488ms    382-1547    2/3
+ *   sarvam saaras translit    514ms    414-638     3/3
+ *
+ * Sarvam leads, and the reason is narrower than the table looks. All three
+ * land tel and chai patti. Only Sarvam hears ATTA -- Whisper writes "adaa",
+ * Shunya writes "Aa", and neither survives ranking. One word decides it,
+ * which is exactly what you would expect when the catalogue constraint is
+ * already rescuing everything that is merely misspelt.
+ *
+ * WER would have ranked these differently and wrongly. Shunya's transcript
+ * is the least faithful of the three as prose and still ties Whisper on the
+ * only measure that pays.
+ *
+ * Each returns null rather than throwing, so the chain degrades instead of
+ * failing: Sarvam, then Shunya, then Whisper, which needs no key beyond the
+ * Groq one the rest of the system already has.
+ *
+ * A NOTE ON THE CLIP. It is a Windows speech synthesiser reading Hinglish in
+ * a US English voice, which is the one input the Indic models are NOT tuned
+ * for and Whisper is. That biases the table TOWARDS Whisper, and Whisper
+ * still comes last on both axes. A recording of an actual person would widen
+ * the gap, not close it -- but it has not been run, so treat the exact
+ * milliseconds as indicative and the ORDER as the finding.
  */
 export async function transcribe(path: string, fast = false): Promise<Transcription> {
-  return (await transcribeShunya(path)) ?? (await transcribeGroq(path, fast));
+  return (
+    (await transcribeSarvam(path)) ??
+    (await transcribeShunya(path)) ??
+    (await transcribeGroq(path, fast))
+  );
 }
 
 export async function transcribeGroq(path: string, fast = false): Promise<Transcription> {
@@ -59,9 +79,12 @@ export async function transcribeGroq(path: string, fast = false): Promise<Transc
 }
 
 /**
- * Optional second engine. Not a dependency. Its only job is to add a row
- * to the ablation table that says "ranking rescues BOTH engines", which
- * is a much stronger claim than rescuing one.
+ * Sarvam saaras, the primary engine. See `transcribe` above for why.
+ *
+ * Single-legged auth, unlike Shunya: the subscription key goes straight on
+ * the request, so there is no token to cache and no cold call to apologise
+ * for. Still returns null on any failure, because being first in the chain
+ * is not the same as being required.
  */
 export async function transcribeSarvam(path: string): Promise<Transcription | null> {
   if (!hasSarvam) return null;
@@ -81,8 +104,10 @@ export async function transcribeSarvam(path: string): Promise<Transcription | nu
   const j = (await res.json()) as { transcript?: string };
   const raw = (j.transcript ?? '').trim();
 
-  // Sarvam's codemix mode usually returns Roman already, but not always,
-  // and the resolver cannot tell the difference. Same boundary either way.
+  // Under SARVAM_MODE=translit this is already Roman and `romanise` is a
+  // no-op. The check stays because mode is configuration, and configuration
+  // drifts; codemix would put Devanagari here and the resolver cannot tell
+  // the difference between that and an empty query.
   return {
     text: isRoman(raw) ? raw : await romanise(raw),
     raw,

@@ -38,7 +38,8 @@ const schema = z.object({
   GROQ_VISION_MODEL: z.string().optional(),
   GROQ_VISION_MODEL_FAST: z.string().optional(),
 
-  // Optional second ASR, purely to add a row to the ablation table.
+  // Indic ASR. Both optional, both fall back to Whisper on Groq.
+  // Ranked by `npm run asr:bench --workspace=@nukkad/api`.
   SHUNYA_API_KEY: z.string().optional(),
   SHUNYA_AUTH_URL: z.string().default('https://app.shunyalabs.ai'),
   SHUNYA_BASE_URL: z.string().default('https://asrv2prod.shunyalabs.ai'),
@@ -48,8 +49,18 @@ const schema = z.object({
 
   SARVAM_API_KEY: z.string().optional(),
   SARVAM_BASE_URL: z.string().default('https://api.sarvam.ai'),
-  SARVAM_MODEL: z.string().default('saaras:v3'),
-  SARVAM_MODE: z.string().default('codemix'),
+  SARVAM_MODEL: z.string().default('saaras:v4'),
+  /**
+   * translit, NOT codemix, and this one character of config is worth more
+   * than most of the code around it.
+   *
+   * `mode` decides the OUTPUT SCRIPT. codemix keeps the native script, so
+   * saaras:v3 returns Devanagari -- which the resolver's normaliser strips
+   * to an empty string before scoring it against the catalogue. Not an
+   * error, not a low score: an empty query that matches the same wrong SKU
+   * every single time. translit returns Roman and the resolver can read it.
+   */
+  SARVAM_MODE: z.string().default('translit'),
 
   // Razorpay
   RAZORPAY_KEY_ID: z.string().startsWith('rzp_'),
