@@ -136,6 +136,10 @@ function LineCard({
             {line.pack && <>{line.pack} &middot; </>}
             {line.isFree ? <b className="text-[var(--green)]">free item</b> : <>{line.quantity}{line.unit ?? ''} &times; &#8377;{rupees(line.ratePaise)}</>}
             {line.mrpPaise ? <> &middot; MRP &#8377;{rupees(line.mrpPaise)}</> : null}
+            {/* Exactly 'rate' here, not any derivation starting with it.
+                A GST line derives 'rate-from-gst' and gets the full working
+                spelled out underneath instead, so the badge would be saying
+                the same thing twice and less clearly. */}
             {line.derived.includes('rate') && (
               <span className="badge badge-ambiguous ml-1.5">rate worked out</span>
             )}
