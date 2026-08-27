@@ -59,6 +59,13 @@ export interface PendingLine {
   wasSubstituted: boolean;
   alternates: Array<{ skuId: string; name: string; score: number }>;
   needsDisambiguation: boolean;
+  /**
+   * Set when the options were produced by OPENING A CATEGORY rather than
+   * by ranking -- i.e. nothing matched and the shop is eliciting a
+   * preference instead of clarifying between candidates. The two are
+   * different questions and get different copy.
+   */
+  elicitedCategory?: string;
 }
 
 /** the provenance an Order row needs, held while questions are outstanding */

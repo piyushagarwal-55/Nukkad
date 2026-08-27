@@ -150,6 +150,37 @@ const CASES: Case[] = [
     ],
   },
   {
+    name: 'a clear request for something unstocked is answered honestly',
+    why:
+      '"kuch namkeen bhej do" is not confusing, it is unavailable. ' +
+      'Answering it with "samajh nahi aaya" blames the customer for the ' +
+      "shop's shelf. The KB is what makes the honest answer possible: it " +
+      'recognises the phrase as a real product this shop has nothing near',
+    turns: [
+      { say: 'kuch namkeen bhej do', reject: 'samajh nahi' },
+    ],
+  },
+  {
+    name: 'rejecting an item is not cancelling the order',
+    why:
+      'both "chini nahi chahiye" and "nahi rehne do" contain nahi, and ' +
+      'until the paper split negative feedback from cancellation, both ' +
+      'wiped the whole basket',
+    turns: [
+      { say: 'do kilo atta aur ek kilo chini bhej do', expect: 'Total' },
+      // names a product, so only that line goes -- the atta survives
+      { say: 'sugar nahi chahiye', reject: 'cancel kar diya' },
+    ],
+  },
+  {
+    name: 'a bare no still cancels',
+    why: 'the other half of that split, and the easier one to break',
+    turns: [
+      { say: 'do kilo atta bhej dena', expect: 'Total' },
+      { say: 'nahi rehne do', orderStatus: 'CANCELLED' },
+    ],
+  },
+  {
     name: 'a stock question gets a real answer',
     why:
       'the catalogue is right there, so deflecting "atta hai kya" to the ' +

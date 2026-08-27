@@ -1,6 +1,6 @@
 import { prisma } from '@nukkad/db';
 import { rupeeLabel } from '@nukkad/shared';
-import type { InboundMessage, OutboundMessage, ResolvedLine } from '@nukkad/shared';
+import type { InboundMessage, OutboundMessage, ResolvedLine, Sku } from '@nukkad/shared';
 import { transcribe } from '../asr/index.js';
 import { isAudio, isImage } from '../asr/audio.js';
 import { extractOrder } from '../extraction/extract.js';
@@ -9,8 +9,10 @@ import { buildPrior } from '../resolver/prior.js';
 import { rankLine, DEFAULT_RANK } from '../resolver/rank.js';
 import { findSubstitutes } from '../substitution/substitute.js';
 import { hasVision } from '../../config/env.js';
-import { readAnswer } from './reply.js';
-import { compose, type Facts } from './compose.js';
+import { readAnswer, namesLine } from './reply.js';
+import { compose, type Facts, type Swap } from './compose.js';
+import { retrieveKb } from '../kb/retrieve.js';
+import type { Prior } from '../resolver/prior.js';
 import {
   loadConvo, save, flatten, isStale,
   type Convo, type Pending, type PendingLine, type OrderMeta,
@@ -65,6 +67,8 @@ interface Ctx {
   /** what the buyer sent this turn, so the voice can mirror their register */
   said: string;
   meta: OrderMeta;
+  /** filled in once the extractor has read this turn. See handle(). */
+  annotation?: { intent: string; goal: string };
 }
 
 /** say something true, in the customer's own words */
@@ -83,7 +87,60 @@ async function speak(
     card,
     fallback,
   });
-  return [{ text }];
+  return [{ text, ...label(facts) }];
+}
+
+/**
+ * The shop's own utterance, on the same two axes as the customer's.
+ *
+ * Derived from the Facts rather than classified by a model, because the
+ * agent already knows what it did -- a second opinion on its own action
+ * would be strictly worse and cost a round trip. Only the inbound side
+ * needs reading.
+ *
+ * Intent names follow MG-ShopDial's agent-side schema so the two halves of
+ * a conversation are annotated in one vocabulary.
+ */
+function label(f: Facts): { intent: string; goal: string } {
+  switch (f.kind) {
+    case 'GREETING':
+      return { intent: 'GREETINGS', goal: 'META' };
+    case 'ORDER_DRAFT':
+      // an explained substitution IS an explanation, and saying so is what
+      // makes the 22.7% figure checkable against our own traffic
+      return {
+        intent: f.substituted.length ? 'EXPLAIN' : 'RECOMMEND',
+        goal: 'ORDERING',
+      };
+    case 'ORDER_AMENDED':
+      return { intent: 'RECOMMEND', goal: 'ORDERING' };
+    case 'ORDER_CONFIRMED':
+      return { intent: 'POSITIVE_FEEDBACK', goal: 'ORDERING' };
+    case 'ORDER_CANCELLED':
+    case 'ORDER_REPLACED':
+      return { intent: 'INTERACTION_STRUCTURING', goal: 'ORDERING' };
+    case 'ASK_WHICH':
+      return { intent: 'CLARIFICATION_QUESTION', goal: 'ORDERING' };
+    case 'ELICIT':
+      return { intent: 'ELICIT_PREFERENCES', goal: 'RECOMMENDATION' };
+    case 'REJECTED':
+      return { intent: 'RECOMMEND', goal: 'RECOMMENDATION' };
+    case 'STILL_WAITING':
+      return { intent: 'CLARIFICATION_QUESTION', goal: 'ORDERING' };
+    case 'STOCK_ANSWER':
+      return { intent: 'ANSWER', goal: 'QA' };
+    case 'ACCOUNT':
+      return { intent: 'ANSWER', goal: 'QA' };
+    case 'QUESTION':
+      return { intent: 'ANSWER', goal: 'SEARCH' };
+    case 'NOT_STOCKED':
+      return { intent: 'ANSWER', goal: 'QA' };
+    case 'NOT_UNDERSTOOD':
+    case 'NO_PREVIOUS_ORDER':
+    case 'NOT_REGISTERED':
+    case 'NO_PHOTO':
+      return { intent: 'OTHER', goal: 'META' };
+  }
 }
 
 export async function handle(msg: InboundMessage): Promise<OutboundMessage[]> {
@@ -178,6 +235,26 @@ export async function handle(msg: InboundMessage): Promise<OutboundMessage[]> {
   const out = await turn(ctx, msg);
 
   /**
+   * ANNOTATE THE INBOUND MESSAGE, two axes.
+   *
+   * updateMany rather than update because the row may not exist: the
+   * Twilio route creates it before calling in, the simulator never does,
+   * and a no-op is the right answer for the second case.
+   *
+   * This is the part of MG-ShopDial worth keeping even where its findings
+   * do not transfer. Once every utterance carries an intent AND a goal you
+   * can ask how a real shop's conversations actually move -- how often
+   * ordering turns into a question, whether elicitation ever converts --
+   * and answer it from production rather than from a guess.
+   */
+  if (ctx.annotation) {
+    await prisma.message.updateMany({
+      where: { externalId: msg.externalId },
+      data: ctx.annotation,
+    });
+  }
+
+  /**
    * ONE WRITE, at the end.
    *
    * The transcript is what stops the voice repeating itself, which is the
@@ -261,6 +338,7 @@ async function turn(ctx: Ctx, msg: InboundMessage): Promise<OutboundMessage[]> {
  */
 async function act(ctx: Ctx, carried: PendingLine[]): Promise<OutboundMessage[]> {
   const extraction = await extractOrder(ctx.said);
+  ctx.annotation = { intent: extraction.intent, goal: extraction.goal };
 
   switch (extraction.intent) {
     case 'CANCEL':
@@ -307,26 +385,151 @@ async function act(ctx: Ctx, carried: PendingLine[]): Promise<OutboundMessage[]>
   );
 
   // ---- stock check and substitution BEFORE the card, never after ------
-  const substituted: string[] = [];
+  const substituted: Swap[] = [];
   for (const line of resolved) {
     if (!line.chosen) continue;
     if ((stock.get(line.chosen.sku.id) ?? 0) >= line.quantity) continue;
 
     const subs = findSubstitutes(line.chosen.sku, catalog, stock, prior);
     if (subs.length) {
-      substituted.push(line.chosen.sku.name);
+      substituted.push({
+        from: line.chosen.sku.name,
+        to: subs[0]!.sku.name,
+        why: whySwap(line.chosen.sku, subs[0]!.sku, prior),
+      });
       line.alternates = [line.chosen, ...line.alternates].slice(0, 2);
       line.chosen = subs[0]!;
     }
   }
 
-  return advance(
-    ctx,
-    merge(carried, resolved.map(flatten)),
-    carried.length > 0,
-    substituted,
-  );
+  /**
+   * NOTHING MATCHED. Open the category instead of giving up.
+   *
+   * "kuch snacks bhej do" used to end at "samajh nahi aaya", which is a
+   * dead end for a request a shopkeeper answers every day. MG-ShopDial
+   * treats eliciting preferences as its own agent intent for exactly this
+   * reason: when you cannot tell what they want, the move is to narrow it
+   * with them, not to fail.
+   */
+  let elicitedCategory: string | null = null;
+  const lost = resolved.find((l) => !l.chosen);
+  if (lost) {
+    const opened = await openCategory(lost.sourceText, catalog, stock);
+
+    /**
+     * Nothing near it, but the KB recognises the phrase. That is not
+     * confusion, it is a shelf this shop does not have -- and saying
+     * "samajh nahi aaya" to a clear request blames the customer for it.
+     */
+    if (!opened && resolved.length === 1) {
+      const known = (await retrieveKb(lost.sourceText, 1))[0];
+      if (known) {
+        return speak(
+          ctx,
+          { kind: 'NOT_STOCKED', product: known.canonical },
+          copy.notStocked(known.canonical),
+        );
+      }
+    }
+
+    if (opened) {
+      lost.alternates = opened.options.map((sku) => ({
+        sku, score: 0, fuzzy: 0, method: 'UNRESOLVED' as const,
+      }));
+      lost.needsDisambiguation = true;
+      elicitedCategory = opened.category;
+    }
+  }
+
+  const lines = merge(carried, resolved.map(flatten));
+  if (elicitedCategory && lost) {
+    /**
+     * Marked on the LINE rather than held in a module-level map, because
+     * the question can outlive the turn: a customer who ignores it and
+     * comes back an hour later must be re-asked the same way.
+     */
+    const at = lines.find((l) => l.sourceText === lost.sourceText);
+    if (at) at.elicitedCategory = elicitedCategory;
+  }
+
+  return advance(ctx, lines, carried.length > 0, substituted);
 }
+
+/**
+ * Why this bottle instead of that one, in the shop's own terms.
+ *
+ * The substitute ranker already weighs price, pack size and familiarity;
+ * this reads back whichever of those actually carried the decision, so the
+ * explanation is the real reason rather than a pleasant-sounding one.
+ */
+function whySwap(from: Sku, to: Sku, prior: Prior): string {
+  if ((prior.get(to.id) ?? 0) > 0.2) return 'aap ye pehle le chuke hain';
+  if (to.sellPaise < from.sellPaise) return 'thoda sasta bhi hai';
+  if (to.sellPaise === from.sellPaise) return 'same daam';
+  if (to.packSize === from.packSize && to.unit === from.unit) return 'wahi size';
+  return 'sabse paas ka hai';
+}
+
+/**
+ * What the shop has in the category the customer was gesturing at.
+ *
+ * The KB lookup is the RAG layer already used by the bill agent, pointed
+ * at a new job: it maps a loose phrase to a canonical product and its
+ * CATEGORY by trigram similarity, so "namkeen", "snacks" and "kuch chatpata"
+ * all land somewhere the catalogue can be filtered by.
+ *
+ * Returns null rather than guessing when the category is unknown or the
+ * shop stocks nothing in it -- an elicitation naming zero products is
+ * worse than admitting confusion.
+ */
+async function openCategory(
+  sourceText: string,
+  catalog: Sku[],
+  stock: Map<string, number>,
+): Promise<{ category: string; options: Sku[] } | null> {
+  const hits = await retrieveKb(sourceText, 3);
+  if (!hits.length) return null;
+
+  /**
+   * RANK THE KB'S NAMES AGAINST THIS SHOP. Do not join on category.
+   *
+   * The first version of this filtered the catalogue by `s.category ===
+   * hit.category` and never fired once, for a reason worth writing down:
+   * the two vocabularies are unrelated. The KB files things under snacks,
+   * pooja, homecare; a shop's own catalogue says wheat_atta, edible_oil,
+   * biscuit. Parle-G sits in `biscuit` here and in `snacks` there. Nothing
+   * short of a hand-written mapping table would make that join work, and a
+   * hand-written mapping is exactly the sort of thing that rots.
+   *
+   * So the bridge is ranking, which is the bridge everywhere else in this
+   * system. The KB knows that "namkeen" means Namkeen Bhujia; the ranker
+   * knows what this shop can offer against that name. No new vocabulary,
+   * no mapping to maintain, and it works for a shop whose categories were
+   * typed in by hand.
+   */
+  const none: Prior = new Map();
+  const found = new Map<string, Sku>();
+
+  for (const hit of hits) {
+    const line = rankLine(hit.canonical, 1, null, catalog, none, DEFAULT_RANK);
+    if (!line.chosen || line.confidence < NEARBY_FLOOR) continue;
+    if ((stock.get(line.chosen.sku.id) ?? 0) <= 0) continue;
+    found.set(line.chosen.sku.id, line.chosen.sku);
+  }
+
+  const options = [...found.values()].slice(0, 4);
+  return options.length >= 2 ? { category: hits[0]!.category, options } : null;
+}
+
+/**
+ * How close a shop SKU must be to a KB product before the shop claims to
+ * have something like it. Above the ranker's own floor on purpose: this is
+ * offering an alternative unprompted, which deserves more certainty than
+ * answering a direct request.
+ */
+const NEARBY_FLOOR = 0.5;
+
+
 
 /**
  * "Atta hai kya?" gets a real answer, because the shop knows.
@@ -445,7 +648,7 @@ async function advance(
   ctx: Ctx,
   lines: PendingLine[],
   amended: boolean,
-  substituted: string[] = [],
+  substituted: Swap[] = [],
 ): Promise<OutboundMessage[]> {
   const index = lines.findIndex((l) => l.needsDisambiguation);
 
@@ -471,9 +674,26 @@ async function advance(
     };
 
     const names = options.map((o) => o.name);
+
+    /**
+     * TWO DIFFERENT QUESTIONS, and they should not sound alike.
+     *
+     * Clarifying is "chawal mein se kaunsa" -- the ranker found three and
+     * cannot choose. Eliciting is "snacks mein ye ye hai" -- the ranker
+     * found nothing and the shop is opening the shelf. MG-ShopDial keeps
+     * them as separate agent intents; conflating them makes the shop sound
+     * confused when it is being helpful.
+     */
     return speak(
       ctx,
-      { kind: 'ASK_WHICH', sourceText: line.sourceText, options: names },
+      line.elicitedCategory
+        ? {
+            kind: 'ELICIT',
+            sourceText: line.sourceText,
+            category: line.elicitedCategory,
+            options: names,
+          }
+        : { kind: 'ASK_WHICH', sourceText: line.sourceText, options: names },
       copy.askWhich(line.sourceText, names),
     );
   }
@@ -492,7 +712,7 @@ async function placeOrder(
   ctx: Ctx,
   lines: PendingLine[],
   amended: boolean,
-  substituted: string[] = [],
+  substituted: Swap[] = [],
 ): Promise<OutboundMessage[]> {
   const kept = lines.filter((l) => l.skuId);
   if (!kept.length) {
@@ -566,6 +786,26 @@ async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | n
   if (pending.kind === 'CONFIRM') {
     const a = readAnswer(ctx.said, 3);
 
+    /**
+     * ANNOTATED HERE, not by the extractor, because this path never calls
+     * it -- and answers are a large share of any real conversation. Left
+     * unlabelled, "haan bhej do" stored null/null and the goal timeline
+     * had holes exactly where the customer was agreeing to things.
+     *
+     * Deterministic, and better for it: the system already knows how it
+     * read the reply, so asking a model to classify it again could only
+     * introduce disagreement with the action actually taken.
+     */
+    ctx.annotation = {
+      intent:
+        a.kind === 'YES' || (a.kind === 'CHOICE' && a.index === 0)
+          ? 'POSITIVE_FEEDBACK'
+          : a.kind === 'UNKNOWN'
+            ? 'DISCLOSE'
+            : 'NEGATIVE_FEEDBACK',
+      goal: 'ORDERING',
+    };
+
     const yes = a.kind === 'YES' || (a.kind === 'CHOICE' && a.index === 0);
     const change = a.kind === 'CHANGE' || (a.kind === 'CHOICE' && a.index === 1);
     const no = a.kind === 'NO' || (a.kind === 'CHOICE' && a.index === 2);
@@ -584,6 +824,22 @@ async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | n
     }
 
     if (no) {
+      /**
+       * A NO THAT NAMES A PRODUCT IS A REJECTION, NOT A CANCELLATION.
+       *
+       * "dhara nahi chahiye" and "nahi rehne do" both contain nahi, and
+       * until now both wiped the entire order. MG-ShopDial keeps Negative
+       * feedback separate from ending the conversation for exactly this
+       * reason, and reports it as the highest-agreement intent in the
+       * schema -- people are unambiguous when they reject a suggestion.
+       *
+       * The test is whether they named something on the card. If they did,
+       * that line is reopened and everything else survives. If they did
+       * not, they meant the order.
+       */
+      const rejected = await rejectLine(ctx, pending.orderId);
+      if (rejected) return rejected;
+
       await prisma.order.update({
         where: { id: pending.orderId },
         data: { status: 'CANCELLED', cancelledAt: new Date() },
@@ -616,6 +872,13 @@ async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | n
   const names = pending.options.map((o) => o.name);
   const a = readAnswer(ctx.said, pending.options.length, names);
 
+  ctx.annotation = {
+    intent: a.kind === 'NONE_OF_THESE' ? 'NEGATIVE_FEEDBACK' : 'ANSWER',
+    // answering which of several products you meant IS preference
+    // disclosure, which the paper files under recommendation
+    goal: pending.lines[pending.index]?.elicitedCategory ? 'RECOMMENDATION' : 'ORDERING',
+  };
+
   if (a.kind !== 'CHOICE' && a.kind !== 'NONE_OF_THESE') return null;
 
   const lines = pending.lines;
@@ -643,6 +906,103 @@ async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | n
 }
 
 // ---------------------------------------------------------------- upkeep
+
+/**
+ * Reopen one line of a pending order, if that is what they rejected.
+ *
+ * Returns null when no product on the card was named, which means the no
+ * was about the order and the caller should cancel it.
+ */
+async function rejectLine(ctx: Ctx, orderId: string): Promise<OutboundMessage[] | null> {
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: { lines: { include: { sku: true } } },
+  });
+  if (!order || order.status !== 'AWAITING') return null;
+
+  const named = order.lines.filter((l) => l.sku);
+  const at = namesLine(ctx.said, named.map((l) => l.sku!.name));
+  if (at === null) return null;
+
+  const target = named[at]!;
+  const [catalog, stock, prior] = await Promise.all([
+    getCatalog(ctx.kiranaId),
+    getStockMap(ctx.kiranaId),
+    buildPrior(ctx.householdId),
+  ]);
+
+  // what else the shop could give them instead of the thing they refused
+  const options = findSubstitutes(target.sku!, catalog, stock, prior)
+    .map((c) => c.sku)
+    .filter((s) => s.id !== target.skuId)
+    .slice(0, 3);
+
+  // the rest of the basket is untouched, which is the whole point
+  const survivors: PendingLine[] = named
+    .filter((l) => l.id !== target.id)
+    .map((l) => ({
+      sourceText: l.sourceText,
+      quantity: l.quantity,
+      unitHint: l.unitHint,
+      skuId: l.skuId,
+      name: l.sku!.name,
+      unitPricePaise: l.unitPricePaise,
+      method: l.method,
+      confidence: l.confidence,
+      wasSubstituted: l.wasSubstituted,
+      alternates: [],
+      needsDisambiguation: false,
+    }));
+
+  if (options.length) {
+    survivors.push({
+      sourceText: target.sourceText,
+      quantity: target.quantity,
+      unitHint: target.unitHint,
+      skuId: null,
+      name: target.sourceText,
+      unitPricePaise: 0,
+      method: 'UNRESOLVED',
+      confidence: 0,
+      wasSubstituted: false,
+      alternates: options.map((s) => ({ skuId: s.id, name: s.name, score: 0 })),
+      needsDisambiguation: true,
+    });
+  }
+
+  // the order as quoted no longer exists, so it is retired and rebuilt
+  await prisma.order.update({
+    where: { id: orderId },
+    data: { status: 'CANCELLED', cancelledAt: new Date() },
+  });
+  ctx.convo.pending = null;
+
+  if (!options.length) {
+    // nothing to offer: drop the line and re-quote what is left
+    if (!survivors.length) {
+      return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
+    }
+    return placeOrder(ctx, survivors, true);
+  }
+
+  ctx.meta = { ...ctx.meta, startedAt: Date.now() };
+  const reply = await speak(
+    ctx,
+    { kind: 'REJECTED', rejected: target.sku!.name, options: options.map((s) => s.name) },
+    copy.rejected(target.sku!.name),
+  );
+
+  // hold the question so the answer lands, carrying the survivors with it
+  ctx.convo.pending = {
+    kind: 'DISAMBIGUATE',
+    lines: survivors,
+    index: survivors.length - 1,
+    options: options.map((s) => ({ skuId: s.id, name: s.name })),
+    meta: ctx.meta,
+    askedAt: new Date().toISOString(),
+  };
+  return reply;
+}
 
 /**
  * Cancel an order the customer is replacing, and hand back its lines.

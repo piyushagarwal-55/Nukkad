@@ -35,15 +35,61 @@ import type { Turn } from './state.js';
  * conversation continues in a duller voice rather than stopping.
  */
 
+/**
+ * A stock-out and what was put in its place, with the REASON.
+ *
+ * The reason is here because of the most quietly useful number in
+ * MG-ShopDial: Explain accounts for 22.7% of real utterances, nearly a
+ * quarter of everything said, and this shop did none of it. It marked a
+ * swapped line "(badla gaya)" and left the customer to work out why their
+ * Fortune had become Dhara. A shopkeeper handing over a different bottle
+ * says why in the same breath, every single time.
+ */
+export interface Swap {
+  from: string;
+  to: string;
+  /** already phrased as a justification, e.g. "same daam" */
+  why: string;
+}
+
 /** one thing that is true, which the reply must be built out of */
 export type Facts =
   | { kind: 'GREETING' }
-  | { kind: 'ORDER_DRAFT'; substituted: string[] }
+  | { kind: 'ORDER_DRAFT'; substituted: Swap[] }
   | { kind: 'ORDER_AMENDED' }
   | { kind: 'ORDER_CONFIRMED'; ref: string }
   | { kind: 'ORDER_CANCELLED' }
   | { kind: 'ORDER_REPLACED' }
   | { kind: 'ASK_WHICH'; sourceText: string; options: string[] }
+  /**
+   * ELICIT PREFERENCES, which the shop could not do at all before.
+   *
+   * MG-ShopDial lists this as a distinct agent intent and finds it in
+   * ~11% of utterances. It is not the same as a clarification question:
+   * ASK_WHICH narrows between candidates the ranker already found, this
+   * one runs when the ranker found NOTHING and the shop has to open the
+   * category up. "kuch snacks bhej do" used to dead-end at "samajh nahi
+   * aaya"; now the KB gives the category and the shop names what it has.
+   */
+  | { kind: 'ELICIT'; sourceText: string; category: string; options: string[] }
+  /**
+   * REJECTION OF A SUBSTITUTE, which is not a cancellation.
+   *
+   * Splitting these is the paper's Negative feedback intent earning its
+   * keep. "dhara nahi chahiye" used to cancel the entire order, because
+   * the word nahi was all anything looked at.
+   */
+  | { kind: 'REJECTED'; rejected: string; options: string[] }
+  /**
+   * WE KNOW WHAT YOU MEAN AND WE DO NOT SELL IT.
+   *
+   * Distinct from NOT_UNDERSTOOD, and the distinction is the KB earning
+   * its place. "kuch namkeen bhej do" is a perfectly clear request that
+   * this shop cannot fill; answering it with "samajh nahi aaya" blames
+   * the customer for the shop's shelf. Knowing the phrase names a real
+   * product is what makes the honest answer possible.
+   */
+  | { kind: 'NOT_STOCKED'; product: string }
   | { kind: 'STILL_WAITING' }
   | { kind: 'NOT_UNDERSTOOD' }
   | { kind: 'ACCOUNT'; orders: number; spent: string }
@@ -67,9 +113,10 @@ function brief(f: Facts): string {
       ].join(' ');
 
     case 'ORDER_DRAFT': {
-      const sub = f.substituted.length
-        ? ` NOTE: ${f.substituted.join(' and ')} was out of stock, so something else was put in its place -- say so plainly.`
-        : '';
+      // EXPLAIN. Not "it was changed" -- what changed, to what, and why.
+      const sub = f.substituted
+        .map((sw) => ` ${sw.from} is out of stock so ${sw.to} was put in instead (${sw.why}). Say this plainly and say WHY, do not just say it was changed.`)
+        .join('');
       return `Their order is ready to send. Ask if you should send it.${sub}`;
     }
 
@@ -97,6 +144,32 @@ function brief(f: Facts): string {
         'Do NOT say how much they asked for -- you were not told the',
         'quantity and guessing at one puts a wrong number in front of a',
         'customer. Copy the product names exactly, pack size included.',
+      ].join(' ');
+
+    case 'ELICIT':
+      return [
+        `They asked for "${f.sourceText}", which is too broad to pick from.`,
+        `The shop has these in ${f.category}: ${f.options.join(', ')}.`,
+        'Name them and ask which they want. Do NOT number them, and do',
+        'not say how much they asked for.',
+      ].join(' ');
+
+    case 'REJECTED':
+      return [
+        `They do not want ${f.rejected}.`,
+        f.options.length
+          ? `The shop also has: ${f.options.join(', ')}. Offer those instead.`
+          : 'There is nothing else close to it. Say so and ask what they would like instead.',
+        'The rest of their order is untouched. Do NOT number the options.',
+      ].join(' ');
+
+    case 'NOT_STOCKED':
+      return [
+        `They asked for ${f.product}. This shop does not stock it.`,
+        'Say so plainly and without apologising twice. Do NOT suggest a',
+        'replacement -- you were not given one, and inventing a substitute',
+        'for something you do not carry is worse than saying no. Ask if',
+        'they need anything else.',
       ].join(' ');
 
     case 'STILL_WAITING':
@@ -246,6 +319,9 @@ function sanitise(raw: string): string {
 function allowedDigits(f: Facts): Set<string> {
   const source: string[] = [];
   if (f.kind === 'ASK_WHICH') source.push(...f.options, f.sourceText);
+  if (f.kind === 'ELICIT') source.push(...f.options, f.sourceText);
+  if (f.kind === 'REJECTED') source.push(...f.options, f.rejected);
+  if (f.kind === 'NOT_STOCKED') source.push(f.product);
   if (f.kind === 'STOCK_ANSWER') source.push(f.name, f.price);
   if (f.kind === 'ACCOUNT') source.push(String(f.orders), f.spent);
   if (f.kind === 'ORDER_CONFIRMED') source.push(f.ref);

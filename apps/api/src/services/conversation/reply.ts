@@ -117,6 +117,45 @@ export function readAnswer(
 const NAME_FLOOR = 0.5;
 const NAME_GAP = 0.15;
 
+/**
+ * WHICH LINE OF THE ORDER DID THEY JUST NAME, if any.
+ *
+ * A different question from readChoiceByName, and the difference is which
+ * way round the coverage runs. Choosing between offered options scores how
+ * much of the REPLY is accounted for, which is right when the reply is
+ * mostly the answer. Spotting a product inside "sugar nahi chahiye" is the
+ * opposite: two of the three words are filler, and coverage over the reply
+ * put Sugar 1kg at 0.32 -- under the floor, so the whole order was
+ * cancelled instead of one line.
+ *
+ * So this asks whether a DISTINCTIVE token of the product appears at all.
+ * Distinctive means at least four letters and not a pack size: "sugar" and
+ * "aashirvaad" identify a line, "1kg" and "500g" do not, and neither does
+ * a short word that could be anything.
+ */
+const isDistinctive = (t: string) => t.length >= 4 && !/^\d/.test(t);
+
+export function namesLine(text: string, lineNames: string[]): number | null {
+  const said = new Set(words(text));
+
+  const scored = lineNames.map((name, index) => {
+    const marks = words(name).filter(isDistinctive);
+    const hit = marks.filter((m) => said.has(m)).length;
+    return { index, hit, of: marks.length || 1 };
+  }).filter((x) => x.hit > 0);
+
+  if (!scored.length) return null;
+
+  /**
+   * Two atta lines and someone says "atta nahi chahiye" is genuinely
+   * ambiguous. The proportion of the name they matched breaks it -- and
+   * whatever it picks, it beats the old behaviour, which was to cancel
+   * everything they had just agreed to.
+   */
+  scored.sort((a, b) => b.hit / b.of - a.hit / a.of);
+  return scored[0]!.index;
+}
+
 export function readChoiceByName(text: string, optionNames: string[]): number | null {
   if (!optionNames.length) return null;
 

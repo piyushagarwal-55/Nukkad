@@ -433,6 +433,22 @@ model Message {
   transcript String?
 
   templateName String?
+
+  /**
+   * UTTERANCE-LEVEL ANNOTATION, two axes rather than one.
+   *
+   * Schema adapted from MG-ShopDial (Bernard & Balog, SIGIR '23), whose
+   * contribution is that INTENT (what an utterance does) and GOAL (what it
+   * is in service of) are separate questions. Their evidence: Recommend
+   * never appears under the QA or Search goals, so an agent that tracks
+   * only intent cannot tell when a recommendation is welcome.
+   *
+   * Nullable and additive on purpose -- every row written before this
+   * existed stays valid, and nothing reads it on the critical path.
+   */
+  intent String?
+  goal   String?
+
   createdAt    DateTime @default(now())
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)

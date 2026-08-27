@@ -42,6 +42,17 @@ export interface OutboundMessage {
   text: string;
   quickReplies?: QuickReply[];
   /**
+   * What the SHOP just did, on the same two axes the inbound side is
+   * annotated with -- see Message.intent/goal in the Prisma schema and
+   * MG-ShopDial (Bernard & Balog, SIGIR '23).
+   *
+   * Derived rather than classified: the agent knows which Facts it acted
+   * on, so labelling its own utterance costs nothing and cannot be wrong.
+   * Only the customer's side needs a model to read it.
+   */
+  intent?: string;
+  goal?: string;
+  /**
    * Meta requires a PRE-APPROVED TEMPLATE for any business-initiated message
    * sent outside the 24h session window. When this is set the adapter MUST
    * send it as a template and MUST NOT send free-form text.

@@ -71,6 +71,12 @@ export const confirmed = (totalPaise: number, ref: string): string =>
 export const account = (orders: number, spent: string): string =>
   `Ab tak ${orders} order. Kul ${spent}.`;
 
+export const notStocked = (product: string): string =>
+  `${product} hum abhi nahi rakhte. Aur kuch chahiye?`;
+
+export const rejected = (name: string): string =>
+  `Theek hai, ${name} nahi. Aur kya dekhun?`;
+
 export const askWhich = (sourceText: string, names: string[]): string =>
   `"${sourceText}" mein se kaunsa? ${names.join(', ')}`;
 

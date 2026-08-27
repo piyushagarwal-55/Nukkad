@@ -99,6 +99,9 @@ export async function whatsappRoutes(app: FastifyInstance) {
             direction: 'OUT',
             body: r.text ?? null,
             templateName: r.templateName ?? null,
+            // the shop's half of the utterance-level annotation
+            intent: r.intent ?? null,
+            goal: r.goal ?? null,
           },
         });
       }

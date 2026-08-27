@@ -36,12 +36,45 @@ export const extractionSchema = z.object({
     'CANCEL',
     'MODIFY',
     'CONFIRM',
+    /**
+     * Rejecting something the SHOP proposed -- a substitute they do not
+     * want, a product they did not mean. Split out from CANCEL because the
+     * two need opposite responses: a cancel ends the order, a rejection
+     * asks for the next option. MG-ShopDial found Negative feedback to be
+     * the highest-agreement intent in the whole schema, which is what you
+     * would expect: people are unambiguous when they say no to a
+     * suggestion.
+     */
+    'REJECT',
     /** namaste, kya haal hai, thanks */
     'GREETING',
     /** asking the shop something: timings, availability, price */
     'QUESTION',
     'UNKNOWN',
   ]),
+
+  /**
+   * WHAT THE UTTERANCE IS IN SERVICE OF, which is a different question
+   * from what it does.
+   *
+   * Taken from MG-ShopDial (Bernard & Balog, SIGIR '23). Their finding is
+   * that the Recommend intent appears in NO utterance annotated with the
+   * QA or Search goal -- so an agent tracking intent alone cannot tell
+   * when a suggestion is welcome and when it is an interruption.
+   *
+   * ORDERING IS OURS, NOT THEIRS, and the difference matters. Their four
+   * goals describe DISCOVERY shopping: someone who does not yet know
+   * which phone they want. A kirana line is mostly REPLENISHMENT --
+   * "do kilo atta bhej dena" from a customer who has bought the same atta
+   * for two years. That is a transaction, not a search, and forcing it
+   * into Recommendation would mislabel the overwhelming majority of real
+   * traffic. Their observation that conversations open with recommendation
+   * for 10-15 turns does not transfer here, and pretending it does would
+   * be cargo-culting a paper rather than reading it.
+   */
+  goal: z
+    .enum(['ORDERING', 'RECOMMENDATION', 'QA', 'SEARCH', 'META'])
+    .default('ORDERING'),
 });
 
 export type Extraction = z.infer<typeof extractionSchema>;
