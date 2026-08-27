@@ -13,7 +13,8 @@ import { fuzzyScore } from '../resolver/fuzzy.js';
 import { fitPack, displayNames, withoutPack } from '../resolver/pack.js';
 import { findSubstitutes } from '../substitution/substitute.js';
 import { hasVision } from '../../config/env.js';
-import { readAnswer, namesLine, isPointer } from './reply.js';
+import { readAnswer } from './reply.js';
+import { resolve, pickFrom } from '../resolver/resolve.js';
 import { compose, type Facts, type Swap, type PackAsk } from './compose.js';
 import { retrieveKb } from '../kb/retrieve.js';
 import type { Prior } from '../resolver/prior.js';
@@ -333,6 +334,20 @@ async function turn(ctx: Ctx, msg: InboundMessage): Promise<OutboundMessage[]> {
     if (answered) return answered;
 
     /**
+     * WHATEVER WAS ALREADY SETTLED GOES IN THE BAG FIRST.
+     *
+     * Asked which rice, a customer may answer with a rice the shop did
+     * not think to offer. That is not an answer, so it falls through --
+     * and the atta they had ALREADY been understood about was sitting in
+     * the pending question, not in the basket, so it vanished. One
+     * unanswered question, two items ordered, one item lost.
+     */
+    if (pending.kind === 'DISAMBIGUATE') {
+      const settled = pending.lines.filter((l) => l.skuId && !l.needsDisambiguation);
+      if (settled.length) ctx.convo.basket = mergeBasket(ctx.convo.basket, settled);
+    }
+
+    /**
      * NOT AN ANSWER, SO IT IS A NEW INSTRUCTION -- and nothing is at risk.
      *
      * This used to be twenty lines of rescue: cancel the AWAITING order,
@@ -510,28 +525,6 @@ async function act(
    * referent the pointer is left alone and falls through to the ordinary
    * "samajh nahi aaya", which is honest.
    */
-  const named = ctx.convo.lastNamed;
-  const pointing = extraction.items.filter((i) => isPointer(i.text));
-
-  if (pointing.length && named.length === 1) {
-    for (const item of pointing) item.text = named[0]!.name;
-  } else if (pointing.length) {
-    /**
-     * They pointed and there is nothing to point at, or several things.
-     * ASK. The alternative is what shipped: "yeh" went to the knowledge
-     * base as a product name, came back DRY YEAST, and the shop
-     * apologised for not stocking it.
-     */
-    const options = displayNames(named.map((n) => n.name));
-    return speak(
-      ctx,
-      options.length
-        ? { kind: 'ASK_WHICH', sourceText: pointing[0]!.text, options }
-        : { kind: 'NOT_UNDERSTOOD' },
-      options.length ? copy.askWhich(pointing[0]!.text, options) : copy.NOT_UNDERSTOOD,
-    );
-  }
-
   // ---- rank against THIS shop's catalogue, with THIS household's prior
   const [catalog, stock, prior] = await Promise.all([
     getCatalog(ctx.kiranaId),
@@ -539,35 +532,49 @@ async function act(
     buildPrior(ctx.householdId),
   ]);
 
-  const resolved: ResolvedLine[] = extraction.items.map((it) =>
-    rankLine(it.text, it.quantity, it.unit, catalog, prior, DEFAULT_RANK),
-  );
+  /**
+   * ONE RESOLUTION STEP, WITH EVERYTHING IT NEEDS.
+   *
+   * Pointer substitution, the raw-text fallback and the ranking all live
+   * in resolver/resolve.ts now, so this path and the question path and
+   * the answer path cannot disagree about what a phrase means. See the
+   * note at the top of that file for the six matchers this replaced.
+   */
+  const refs = resolve({
+    text: ctx.said,
+    spans: extraction.items,
+    catalogue: catalog,
+    prior,
+    lastNamed: ctx.convo.lastNamed,
+  });
 
   /**
-   * WHAT THEY ASKED FOR IS NOT ALWAYS HOW IT IS SOLD.
-   *
-   * Until this ran, every quantity was treated as a count of packets
-   * whatever unit the customer used, so "Tea 500 g" ordered 250 packets of
-   * 500g. See resolver/pack.ts. A request that does not divide into whole
-   * packets is not rounded silently -- it is collected here and asked
-   * about on the card.
+   * A pointer with nothing to point at is a question, not a failure.
+   * "yeh" used to be ranked as a product name and came back dry yeast.
    */
-  const mismatched: PackAsk[] = [];
-  for (const line of resolved) {
-    /**
-     * Fitted only when the SKU is FINAL. A line still going to the buyer
-     * as a question has no pack size yet -- "Rice 5 kg" could become a 5kg
-     * bag or a 1kg one, and fitting against a guess then re-fitting against
-     * the answer double-converts: 5 kg became 1 packet became 1 kg. It
-     * shipped as "5 x Basmati Rice 5kg", twenty-five kilos of rice.
-     *
-     * So each line is fitted exactly once, at the moment its SKU settles.
-     * See the disambiguation branch of answer() for the other half.
-     */
-    if (!line.chosen || line.needsDisambiguation) continue;
-    const ask = applyPack(line, line.chosen.sku);
-    if (ask) mismatched.push(ask);
+  const dangling = refs.find((r) => r.fromPointer && !r.line);
+  if (dangling) {
+    const options = displayNames(ctx.convo.lastNamed.map((n) => n.name));
+    return speak(
+      ctx,
+      options.length
+        ? { kind: 'ASK_WHICH', sourceText: dangling.sourceText, options }
+        : { kind: 'NOT_UNDERSTOOD' },
+      options.length ? copy.askWhich(dangling.sourceText, options) : copy.NOT_UNDERSTOOD,
+    );
   }
+
+  const resolved: ResolvedLine[] = refs.map(
+    (r) => r.line ?? {
+      sourceText: r.sourceText,
+      quantity: r.quantity,
+      unitHint: r.unitHint,
+      chosen: null,
+      alternates: [],
+      confidence: 0,
+      needsDisambiguation: false,
+    },
+  );
 
   // ---- stock check and substitution BEFORE the card, never after ------
   const substituted: Swap[] = [];
@@ -585,6 +592,25 @@ async function act(
       line.alternates = [line.chosen, ...line.alternates].slice(0, 2);
       line.chosen = subs[0]!;
     }
+  }
+
+  /**
+   * WHAT THEY ASKED FOR IS NOT ALWAYS HOW IT IS SOLD.
+   *
+   * Until this ran, every quantity was treated as a count of packets
+   * whatever unit the customer used, so "Tea 500 g" ordered 250 packets
+   * of 500g. See resolver/pack.ts. A request that does not divide into
+   * whole packets is collected here and asked about on the card rather
+   * than rounded in silence.
+   */
+  const mismatched: PackAsk[] = [];
+  for (const line of resolved) {
+    // fitted only when the SKU is FINAL -- a line still going out as a
+    // question has no pack size yet. See the answer() branch for the
+    // other half.
+    if (!line.chosen || line.needsDisambiguation) continue;
+    const ask = applyPack(line, line.chosen.sku);
+    if (ask) mismatched.push(ask);
   }
 
   /**
@@ -619,7 +645,7 @@ async function act(
 
     if (opened) {
       lost.alternates = opened.options.map((sku) => ({
-        sku, score: 0, fuzzy: 0, method: 'UNRESOLVED' as const,
+        sku, score: 0, fuzzy: 0, specificity: 0, method: 'UNRESOLVED' as const,
       }));
       lost.needsDisambiguation = true;
       elicitedCategory = opened.category;
@@ -796,18 +822,24 @@ async function question(ctx: Ctx, spans: string[]): Promise<OutboundMessage[]> {
   const asked = spans[0] ?? ctx.said;
 
   if (asked.trim()) {
-    const found = matching(asked, catalog, stock);
-
     /**
-     * ONE MATCH IS A PRICE, SEVERAL IS A LIST, and both come out of the
-     * same search. "moong dal ka price" finds one dal and gets a price;
-     * "daal kaunsi kaunsi hai" finds three and gets their names.
-     *
-     * Splitting these across two different searches -- rankLine for the
-     * confident case, matching for the rest -- is what let "moong dal ka
-     * price kitna h" fall between them and be answered with a category
-     * list.
+     * The SAME resolver, so a price question and an order find the same
+     * product. `matching` used to be a second implementation living here
+     * with its own direction and its own floor, which is how "moong dal
+     * ka price kitna h" resolved for ordering and not for asking.
      */
+    const [ref] = resolve({
+      text: asked,
+      spans: [],
+      catalogue: catalog.filter((s) => (stock.get(s.id) ?? 0) > 0),
+      prior,
+      lastNamed: ctx.convo.lastNamed,
+    });
+
+    const found = ref?.line
+      ? [ref.line.chosen!.sku, ...ref.line.alternates.map((a) => a.sku)]
+      : [];
+
     if (found.length === 1) {
       const sku = found[0]!;
       remember(ctx, [sku]);
@@ -1326,8 +1358,24 @@ async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | n
   }
 
   // ---- disambiguation --------------------------------------------------
-  const names = pending.options.map((o) => o.name);
-  const a = readAnswer(ctx.said, pending.options.length, names);
+  const catalog = await getCatalog(ctx.kiranaId);
+  const offered = pending.options
+    .map((o) => catalog.find((s) => s.id === o.skuId))
+    .filter((s): s is Sku => Boolean(s));
+
+  /**
+   * A tapped digit, or the NAME of one of the things offered.
+   *
+   * The name half is pickFrom -- the same scorer as everything else,
+   * pointed at just these few SKUs. It used to be readChoiceByName, a
+   * separate matcher with its own margin rule, which is why "Basmati Rice
+   * 5kg" read as ambiguous against "India Gate Basmati Rice 5kg" and the
+   * shop asked the same question five times running.
+   */
+  const a = readAnswer(ctx.said, pending.options.length);
+  const byName = a.kind === 'UNKNOWN' ? pickFrom(ctx.said, offered) : null;
+  const choice =
+    a.kind === 'CHOICE' ? a.index : byName !== null ? byName : null;
 
   ctx.annotation = {
     intent: a.kind === 'NONE_OF_THESE' ? 'NEGATIVE_FEEDBACK' : 'ANSWER',
@@ -1336,15 +1384,14 @@ async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | n
     goal: pending.lines[pending.index]?.elicitedCategory ? 'RECOMMENDATION' : 'ORDERING',
   };
 
-  if (a.kind !== 'CHOICE' && a.kind !== 'NONE_OF_THESE') return null;
+  if (choice === null && a.kind !== 'NONE_OF_THESE') return null;
 
   const lines = pending.lines;
   const line = lines[pending.index]!;
   const packAsks: PackAsk[] = [];
 
-  if (a.kind === 'CHOICE') {
-    const picked = pending.options[a.index]!;
-    const catalog = await getCatalog(ctx.kiranaId);
+  if (choice !== null) {
+    const picked = pending.options[choice]!;
     const sku = catalog.find((s) => s.id === picked.skuId);
     line.skuId = picked.skuId;
     line.name = picked.name;
@@ -1358,6 +1405,7 @@ async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | n
       if (ask) packAsks.push(ask);
     }
   } else {
+    // the trailing "koi nahi": drop the line entirely
     line.skuId = null;
   }
   line.needsDisambiguation = false;
@@ -1383,7 +1431,14 @@ async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | n
  */
 function dropFromBasket(ctx: Ctx): Promise<OutboundMessage[]> | null {
   const basket = ctx.convo.basket;
-  const at = namesLine(ctx.said, basket.map((l) => l.name));
+  /**
+   * The same scorer again, pointed at the basket. This was namesLine, a
+   * third matcher with a fourth notion of what counts as a match.
+   */
+  const at = pickFrom(ctx.said, basket.map((l) => ({
+    id: l.skuId!, kiranaId: ctx.kiranaId, name: l.name, brand: null,
+    packSize: 1, unit: 'pc', sellPaise: l.unitPricePaise, category: null, aliases: [],
+  })));
   if (at === null) return null;
 
   const [gone] = basket.splice(at, 1);

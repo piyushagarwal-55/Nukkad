@@ -64,6 +64,12 @@ export const ABLATIONS: Record<string, RankOptions> = {
 const MIN_LEXICAL_FOR_PRIOR = 0.2;
 
 /**
+ * How close two lexical claims must be to count as tied, and therefore
+ * to be arbitrated by history rather than decided by it.
+ */
+const TIE_EPSILON = 0.02;
+
+/**
  * How close an alternate must be to the leader before it is worth showing
  * a customer. See the note at the use site.
  */
@@ -128,56 +134,101 @@ export function rankLine(
   const spoken = stripQuantity(sourceText);
   const query = normalise(spoken);
 
+  /**
+   * PASS ONE: what does each SKU's best name claim, lexically.
+   *
+   * SCORED NAME-INTO-TEXT, PER NAME, and this one direction is the thing
+   * the whole resolver turns on. fuzzyScore(a, b) measures how much of A
+   * is accounted for by B. The old call asked how much of what the
+   * customer SAID is covered by a product, which punishes a question for
+   * being a question: "moong dal ka price kitna h" is four parts grammar
+   * to two parts product, Moong Dal scored 0.33, and the shop read out
+   * its category list instead of a price.
+   *
+   * Per name rather than against all of them joined, because a product
+   * with nine aliases should not be punished for having them. "moong dal"
+   * matching perfectly is the signal; the eight that do not appear are
+   * noise.
+   *
+   * SPECIFICITY falls out of the same loop. Every dal answers to "dal",
+   * so a dal question matches three SKUs at 1.00 each -- but "moong dal"
+   * is two words and both are present, and that is the stronger claim.
+   */
+  interface Claim { sku: Sku; fuzzy: number; specificity: number; method: ResolutionMethod }
+  const claims: Claim[] = [];
+
   for (const sku of catalog) {
-    const names = opts.useAliases
+    const names = (opts.useAliases
       ? [sku.name, sku.brand ?? '', ...sku.aliases]
-      : [sku.name];
-    const haystack = names.join(' ');
+      : [sku.name]
+    ).filter(Boolean);
 
     let fuzzy = 0;
+    let specificity = 0;
     let method: ResolutionMethod = 'UNRESOLVED';
 
-    const exact = names.some((n) => n && normalise(n) === query);
-    if (exact) {
-      fuzzy = 1;
-      method = 'EXACT';
-    } else if (opts.useFuzzy) {
-      fuzzy = fuzzyScore(spoken, haystack);
-      method = 'FUZZY';
+    for (const name of names) {
+      const isExact = normalise(name) === query;
+      const hit = isExact ? 1 : opts.useFuzzy ? fuzzyScore(name, spoken) : 0;
+      if (hit <= 0) continue;
+
+      const words = name.split(/\s+/).filter((w) => w.length >= 3).length;
+      if (hit > fuzzy || (hit === fuzzy && words > specificity)) {
+        fuzzy = hit;
+        specificity = Math.max(specificity, words);
+        method = isExact ? 'EXACT' : 'FUZZY';
+      }
     }
 
-    /**
-     * THE PRIOR BREAKS TIES. IT DOES NOT NOMINATE CANDIDATES.
-     *
-     * Without the floor below, a SKU with NO lexical match at all still
-     * scored W_PRIOR * p, cleared the 0.05 gate, and could reach the top
-     * three. Observed: asked for "chawal", the shop offered Aashirvaad
-     * Atta and Sugar 1kg as the options -- not because they sound like
-     * chawal, but because Ramesh buys them constantly.
-     *
-     * That is worse than failing. A shopkeeper who answers "rice?" with
-     * "flour or sugar?" is not being helpful, they are being broken, and
-     * it is the single most damaging thing the ranker can put in front of
-     * a customer.
-     *
-     * The floor is low on purpose. Everything the prior is FOR still
-     * works: "wahi wala atta" has atta in it, and all three sunflower oils
-     * clear it lexically before history picks Fortune. What it stops is
-     * history inventing a candidate out of nothing.
-     */
-    const footing = fuzzy >= MIN_LEXICAL_FOR_PRIOR;
-    const p = opts.usePrior && footing ? (prior.get(sku.id) ?? 0) : 0;
-    if (opts.usePrior && p > 0 && method === 'FUZZY' && fuzzy > 0.3) method = 'PRIOR';
+    if (fuzzy > 0) claims.push({ sku, fuzzy, specificity, method });
+  }
 
-    // Without the prior the score is purely lexical. With it, history can
-    // lift a weak lexical match over a stronger one, which is the entire
-    // point: you rank rather than transcribe.
-    const score = W_FUZZY * fuzzy + W_PRIOR * p;
-    if (score > 0.05) scored.push({ sku, score, fuzzy, method });
+  /**
+   * PASS TWO: history breaks ties, and ONLY ties.
+   *
+   * "The prior breaks ties" was the stated rule from the start and the
+   * arithmetic never enforced it -- W_PRIOR * p was simply added to every
+   * candidate, so a strong enough history could lift a vague match over a
+   * precise one. Harmless while scores were spread out; not harmless once
+   * scoring went name-into-text and shared aliases started producing
+   * exact 1.00 ties. Measured, the ablation inverted: catalogue-only rose
+   * to 86% and adding the prior DROPPED it to 71%, because history was
+   * overruling the lexical evidence rather than arbitrating it.
+   *
+   * So a candidate only receives its prior when its lexical claim is as
+   * good as the best one on offer -- same fuzzy, and no less specific.
+   * Three sunflower oils that all answer to "sunflower oil" tie exactly,
+   * and history picks Fortune, which is the entire point of the feature.
+   * Moong Dal at two words does not tie with Toor Dal at one, so no
+   * amount of buying toor dal can turn a moong dal request into it.
+   */
+  const bestFuzzy = Math.max(0, ...claims.map((c) => c.fuzzy));
+  const tied = claims.filter((c) => c.fuzzy >= bestFuzzy - TIE_EPSILON);
+  const bestSpecificity = Math.max(0, ...tied.map((c) => c.specificity));
+
+  for (const c of claims) {
+    const ties =
+      c.fuzzy >= bestFuzzy - TIE_EPSILON &&
+      c.specificity >= bestSpecificity &&
+      c.fuzzy >= MIN_LEXICAL_FOR_PRIOR;
+
+    const p = opts.usePrior && ties ? (prior.get(c.sku.id) ?? 0) : 0;
+    if (p > 0 && c.method === 'FUZZY') c.method = 'PRIOR';
+
+    const score = W_FUZZY * c.fuzzy + W_PRIOR * p;
+    if (score > 0.05) {
+      scored.push({ sku: c.sku, score, fuzzy: c.fuzzy, specificity: c.specificity, method: c.method });
+    }
   }
 
   const exactCount = scored.filter((c) => c.method === 'EXACT').length;
-  scored.sort((a, b) => b.score - a.score);
+
+  /**
+   * Sorted by score, then by how PARTICULAR the winning name was. The
+   * second term only ever separates ties, which is exactly when a shared
+   * alias like "dal" has put three products level.
+   */
+  scored.sort((a, b) => b.score - a.score || b.specificity - a.specificity);
   const top = scored.slice(0, opts.topK);
   const chosen = top[0] ?? null;
 

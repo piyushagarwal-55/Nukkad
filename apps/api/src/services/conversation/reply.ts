@@ -48,19 +48,14 @@ const words = (text: string): string[] =>
 /**
  * @param optionCount how many numbered options were actually offered, so a
  *        stray "5" in "5 kilo aata" is not read as tapping option 5
- * @param optionNames the options as PRODUCTS, matched by name.
  *
- *        This exists because the shop stopped numbering things. It asks
- *        "Basmati chahiye ya Sona Masoori?" the way a person would, and a
- *        person answers "basmati" -- not "1". Numbers still work, because
- *        some customers will type one anyway and refusing it would be rude
- *        for no reason.
+ *        Matching an answer to a PRODUCT is no longer done here. That is
+ *        resolver/pickFrom, which is the same scorer the rest of the
+ *        system uses, pointed at the small set of things just offered.
+ *        This file went back to what it is good at: reading yes, no and
+ *        a tapped digit.
  */
-export function readAnswer(
-  text: string,
-  optionCount: number,
-  optionNames: string[] = [],
-): Answer {
+export function readAnswer(text: string, optionCount: number): Answer {
   const ws = words(text);
   if (!ws.length) return { kind: 'UNKNOWN' };
 
@@ -76,14 +71,6 @@ export function readAnswer(
       return { kind: 'CHOICE', index: n - 1 };
     }
   }
-
-  /**
-   * Named one of the products on offer. Checked before the yes/no
-   * vocabulary because "sona masoori" contains no yes or no, and before
-   * the length cut because a product name can be four words long.
-   */
-  const byName = readChoiceByName(text, optionNames);
-  if (byName !== null) return { kind: 'CHOICE', index: byName };
 
   if (ws.length <= 3 && ws.some((w) => NONE.includes(w))) {
     return { kind: 'NONE_OF_THESE' };
@@ -114,88 +101,3 @@ export function readAnswer(
  * is not an answer, it is the same ambiguity restated, so it stays
  * unresolved and gets asked again.
  */
-/**
- * Words that point at something already mentioned instead of naming it.
- * "yeh", "wo", "isko" -- what a customer says the moment the shop has
- * just told them a price.
- */
-const POINTERS = new Set([
-  'yeh', 'ye', 'yah', 'wo', 'woh', 'vo', 'ise', 'isko', 'iske', 'usko',
-  'uske', 'usi', 'isi', 'this', 'that', 'it', 'same', 'wahi',
-]);
-
-/** true when a span points at something rather than naming it */
-export function isPointer(text: string): boolean {
-  const ws = words(text);
-  return ws.length > 0 && ws.every((w) => POINTERS.has(w));
-}
-
-const NAME_FLOOR = 0.5;
-const NAME_GAP = 0.15;
-
-/**
- * WHICH LINE OF THE ORDER DID THEY JUST NAME, if any.
- *
- * A different question from readChoiceByName, and the difference is which
- * way round the coverage runs. Choosing between offered options scores how
- * much of the REPLY is accounted for, which is right when the reply is
- * mostly the answer. Spotting a product inside "sugar nahi chahiye" is the
- * opposite: two of the three words are filler, and coverage over the reply
- * put Sugar 1kg at 0.32 -- under the floor, so the whole order was
- * cancelled instead of one line.
- *
- * So this asks whether a DISTINCTIVE token of the product appears at all.
- * Distinctive means at least four letters and not a pack size: "sugar" and
- * "aashirvaad" identify a line, "1kg" and "500g" do not, and neither does
- * a short word that could be anything.
- */
-const isDistinctive = (t: string) => t.length >= 4 && !/^\d/.test(t);
-
-export function namesLine(text: string, lineNames: string[]): number | null {
-  const said = new Set(words(text));
-
-  const scored = lineNames.map((name, index) => {
-    const marks = words(name).filter(isDistinctive);
-    const hit = marks.filter((m) => said.has(m)).length;
-    return { index, hit, of: marks.length || 1 };
-  }).filter((x) => x.hit > 0);
-
-  if (!scored.length) return null;
-
-  /**
-   * Two atta lines and someone says "atta nahi chahiye" is genuinely
-   * ambiguous. The proportion of the name they matched breaks it -- and
-   * whatever it picks, it beats the old behaviour, which was to cancel
-   * everything they had just agreed to.
-   */
-  scored.sort((a, b) => b.hit / b.of - a.hit / a.of);
-  return scored[0]!.index;
-}
-
-export function readChoiceByName(text: string, optionNames: string[]): number | null {
-  if (!optionNames.length) return null;
-
-  /**
-   * AN EXACT NAME WINS OUTRIGHT, gap check or no gap check.
-   *
-   * "Basmati Rice 5kg" is a SUBSTRING of "India Gate Basmati Rice 5kg",
-   * so both scored high, the margin was under the floor, the matcher
-   * called it ambiguous and the shop asked the same question again --
-   * and again, five times, because nothing about the answer was ever
-   * going to change. Naming an option exactly is not ambiguous, it is
-   * the clearest possible answer.
-   */
-  const flat = (t: string) => t.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const exact = optionNames.findIndex((n) => flat(n) === flat(text));
-  if (exact >= 0) return exact;
-
-
-  const scored = optionNames
-    .map((name, index) => ({ index, score: fuzzyScore(text, name) }))
-    .sort((a, b) => b.score - a.score);
-
-  const [best, next] = scored;
-  if (!best || best.score < NAME_FLOOR) return null;
-  if (next && best.score - next.score < NAME_GAP) return null;
-  return best.index;
-}

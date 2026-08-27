@@ -58,6 +58,8 @@ export function findSubstitutes(
        * the original's score.
        */
       fuzzy: 0,
+      // a substitute matched no name at all, so it claims nothing
+      specificity: 0,
       method: 'SUBSTITUTED',
     });
   }

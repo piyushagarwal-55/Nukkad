@@ -26,6 +26,12 @@ export interface Candidate {
    * alternates in resolver/rank.ts.
    */
   fuzzy: number;
+  /**
+   * How many words long the name that matched was. Separates candidates
+   * that tie on score because they share a short alias -- every dal
+   * answers to "dal", only one answers to "moong dal".
+   */
+  specificity: number;
   method: ResolutionMethod;
 }
 
