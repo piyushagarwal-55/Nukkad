@@ -19,10 +19,12 @@
     "seed": "dotenv -e ../../.env -- tsx prisma/seed.ts",
     "studio": "dotenv -e ../../.env -- prisma studio",
     "type-check": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "seed:kb": "dotenv -e ../../.env -- tsx prisma/kb-seed.ts"
   },
   "dependencies": {
-    "@prisma/client": "^6.3.0"
+    "@prisma/client": "^6.3.0",
+    "@nukkad/shared": "*"
   },
   "devDependencies": {
     "@types/node": "^22.13.0",

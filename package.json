@@ -1,7 +1,10 @@
 {
   "name": "nukkad",
   "private": true,
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "dev": "turbo dev",
     "dev:api": "turbo dev --filter=@nukkad/api",
@@ -13,6 +16,7 @@
     "db:generate": "npm run generate --workspace=@nukkad/db",
     "db:push": "npm run push --workspace=@nukkad/db",
     "db:seed": "npm run seed --workspace=@nukkad/db",
+    "db:seed:kb": "npm run seed:kb --workspace=@nukkad/db",
     "db:studio": "npm run studio --workspace=@nukkad/db",
     "eval": "npm run eval --workspace=@nukkad/eval",
     "clean": "turbo clean && rm -rf node_modules"
@@ -24,7 +28,11 @@
     "turbo": "^2.4.0",
     "typescript": "^5.7.0"
   },
-  "engines": { "node": ">=20.0.0" },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "packageManager": "npm@11.0.0",
-  "dependencies": { "dotenv": "^17.4.1" }
+  "dependencies": {
+    "dotenv": "^17.4.1"
+  }
 }

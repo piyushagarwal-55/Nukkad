@@ -253,6 +253,204 @@ export const PRODUCT_KB: KbEntry[] = [
     subnames: ['mehendi', 'hair dye', 'baal kala karne wala'] },
   { canonical: 'Sanitary Pads', category: 'personal', unit: 'pc',
     subnames: ['pads', 'whisper', 'stayfree', 'napkin'] },
+
+  /* ===================================================================
+     From a South Indian monthly grocery list (SimpleIndianRecipes.com).
+     Everything below was absent from the block above.
+
+     The list is worth having because the corpus started North-Indian and
+     a resolver that only knows "chawal" is useless in Chennai. Where a
+     product has both a Hindi and a Tamil name in common use, both are
+     subnames: a shop in Jaipur and a shop in Coimbatore should each be
+     understood by their own customers without anybody configuring a
+     language.
+     =================================================================== */
+
+  // ---------------------------------------------------------- rice
+  { canonical: 'Idli Rice', category: 'rice', unit: 'kg',
+    subnames: ['idli rice', 'idli arisi', 'idli chawal', 'puzhungal arisi'] },
+  { canonical: 'Boiled Rice', category: 'rice', unit: 'kg',
+    subnames: ['boiled rice', 'puzhungal arisi', 'ukda chawal', 'sela chawal'] },
+  { canonical: 'Raw Rice', category: 'rice', unit: 'kg',
+    subnames: ['raw rice', 'pacharisi', 'kacha chawal', 'arisi'] },
+  { canonical: 'Brown Rice', category: 'rice', unit: 'kg',
+    subnames: ['brown rice', 'bhura chawal', 'red rice', 'sivappu arisi'] },
+
+  // --------------------------------------------------------- flour
+  { canonical: 'Ragi Flour', category: 'flour', unit: 'kg',
+    subnames: ['ragi', 'ragi atta', 'ragi maavu', 'nachni', 'finger millet flour'] },
+  { canonical: 'Rice Flour', category: 'flour', unit: 'kg',
+    subnames: ['rice flour', 'chawal ka atta', 'arisi maavu', 'chaval atta'] },
+  { canonical: 'Broken Wheat', category: 'flour', unit: 'kg',
+    subnames: ['dalia', 'daliya', 'lapsi', 'samba godhumai', 'broken wheat', 'godhuma rava'] },
+  { canonical: 'Millet Grain', category: 'flour', unit: 'kg',
+    subnames: ['millet', 'bajra', 'samai', 'thinai', 'kambu', 'varagu', 'kuthiraivali', 'siridhanya'] },
+
+  // -------------------------------------------------------- pulses
+  { canonical: 'Whole Green Gram', category: 'pulses', unit: 'kg',
+    subnames: ['sabut moong', 'moong sabut', 'green gram', 'pachai payaru', 'whole moong'] },
+  { canonical: 'Whole Masoor', category: 'pulses', unit: 'kg',
+    subnames: ['sabut masoor', 'whole masoor', 'brown lentil'] },
+  { canonical: 'Whole Urad', category: 'pulses', unit: 'kg',
+    subnames: ['sabut urad', 'kaali urad', 'whole urad', 'ulundhu'] },
+  { canonical: 'Dried Green Peas', category: 'pulses', unit: 'kg',
+    subnames: ['sukhe matar', 'safed matar', 'dried peas', 'pattani'] },
+  { canonical: 'Double Beans', category: 'pulses', unit: 'kg',
+    subnames: ['double beans', 'lima beans', 'mochai'] },
+
+  // ----------------------------------------------------------- oil
+  { canonical: 'Sesame Oil', category: 'oil', unit: 'l',
+    subnames: ['til ka tel', 'gingelly oil', 'nallennai', 'sesame oil', 'til tel'] },
+  { canonical: 'Cooking Coconut Oil', category: 'oil', unit: 'l',
+    subnames: ['nariyal tel', 'thengai ennai', 'coconut oil', 'khane wala nariyal tel'] },
+  { canonical: 'Olive Oil', category: 'oil', unit: 'l',
+    subnames: ['olive oil', 'jaitun ka tel'] },
+
+  // ------------------------------------------------------- staples
+  { canonical: 'Palm Jaggery', category: 'staple', unit: 'kg',
+    subnames: ['palm jaggery', 'naatu chakkarai', 'karupatti', 'taad gud'] },
+  { canonical: 'Tamarind', category: 'staple', unit: 'kg',
+    subnames: ['imli', 'puli', 'tamarind', 'imli ka gooda'] },
+
+  // -------------------------------------------------------- spices
+  { canonical: 'Dry Red Chillies', category: 'spice', unit: 'g',
+    subnames: ['sukhi lal mirch', 'sabut mirch', 'dry red chilli', 'vathal milagai', 'khadi mirch'] },
+  { canonical: 'Fennel Seeds', category: 'spice', unit: 'g',
+    subnames: ['saunf', 'sonf', 'fennel', 'perunjeeragam'] },
+  { canonical: 'Poppy Seeds', category: 'spice', unit: 'g',
+    subnames: ['khus khus', 'khuskhus', 'poppy seeds', 'kasa kasa'] },
+  { canonical: 'Sesame Seeds', category: 'spice', unit: 'g',
+    subnames: ['til', 'safed til', 'sesame seeds', 'ellu'] },
+  { canonical: 'Dry Ginger', category: 'spice', unit: 'g',
+    subnames: ['sonth', 'saunth', 'sukku', 'dry ginger'] },
+  { canonical: 'Star Anise', category: 'spice', unit: 'g',
+    subnames: ['chakra phool', 'star anise', 'anasi poo'] },
+  { canonical: 'Ginger Garlic Paste', category: 'spice', unit: 'g',
+    subnames: ['adrak lehsun paste', 'ginger garlic paste', 'adrak lasan', 'inji poondu'] },
+  { canonical: 'Cumin Powder', category: 'spice', unit: 'g',
+    subnames: ['jeera powder', 'zeera powder', 'cumin powder'] },
+  { canonical: 'Black Pepper Powder', category: 'spice', unit: 'g',
+    subnames: ['kali mirch powder', 'pepper powder', 'milagu podi'] },
+  { canonical: 'Idli Podi', category: 'spice', unit: 'g',
+    subnames: ['idli podi', 'milagai podi', 'gunpowder', 'chutney podi'] },
+  { canonical: 'Rasam Powder', category: 'spice', unit: 'g',
+    subnames: ['rasam powder', 'rasam podi'] },
+  { canonical: 'Chana Masala', category: 'spice', unit: 'g',
+    subnames: ['chana masala', 'chole masala', 'chhole masala'] },
+  { canonical: 'Pav Bhaji Masala', category: 'spice', unit: 'g',
+    subnames: ['pav bhaji masala', 'pao bhaji masala'] },
+  { canonical: 'Chicken Masala', category: 'spice', unit: 'g',
+    subnames: ['chicken masala', 'meat masala', 'non veg masala'] },
+
+  // ---------------------------------------------------- condiments
+  { canonical: 'Soy Sauce', category: 'condiment', unit: 'ml',
+    subnames: ['soy sauce', 'soya sauce', 'soyabean sauce'] },
+  { canonical: 'Chilli Sauce', category: 'condiment', unit: 'ml',
+    subnames: ['chilli sauce', 'red sauce', 'schezwan sauce'] },
+  { canonical: 'Mayonnaise', category: 'condiment', unit: 'g',
+    subnames: ['mayonnaise', 'mayo', 'mayonaise'] },
+  { canonical: 'Mixed Fruit Jam', category: 'condiment', unit: 'g',
+    subnames: ['jam', 'jaam', 'mixed fruit jam', 'kissan jam'] },
+  { canonical: 'Chocolate Syrup', category: 'condiment', unit: 'ml',
+    subnames: ['chocolate syrup', 'choco syrup', 'hershey syrup'] },
+
+  // --------------------------------------------------------- dairy
+  { canonical: 'Cheese Spread', category: 'dairy', unit: 'g',
+    subnames: ['cheese spread', 'cheese', 'britannia cheese spread'] },
+  { canonical: 'Cheese Block', category: 'dairy', unit: 'g',
+    subnames: ['cheese block', 'cheese cube', 'pizza cheese', 'mozzarella'] },
+  { canonical: 'Fresh Cream', category: 'dairy', unit: 'ml',
+    subnames: ['fresh cream', 'malai', 'cream', 'amul cream'] },
+  { canonical: 'Flavoured Yogurt', category: 'dairy', unit: 'g',
+    subnames: ['yogurt', 'flavoured dahi', 'fruit yogurt', 'misti dahi'] },
+
+  // ------------------------------------------------------- bakery
+  { canonical: 'Pav Buns', category: 'bakery', unit: 'pc',
+    subnames: ['pav', 'paav', 'buns', 'ladi pav', 'burger bun'] },
+  { canonical: 'Pizza Base', category: 'bakery', unit: 'pc',
+    subnames: ['pizza base', 'pizza bread'] },
+
+  // -------------------------------------------------------- baking
+  { canonical: 'Dates', category: 'dryfruit', unit: 'g',
+    subnames: ['khajoor', 'khajur', 'dates', 'pericham pazham'] },
+  { canonical: 'Dry Yeast', category: 'baking', unit: 'g',
+    subnames: ['yeast', 'khameer', 'dry yeast'] },
+  { canonical: 'Baking Soda', category: 'baking', unit: 'g',
+    subnames: ['baking soda', 'meetha soda', 'cooking soda', 'khane wala soda'] },
+  { canonical: 'Baking Powder', category: 'baking', unit: 'g',
+    subnames: ['baking powder'] },
+  { canonical: 'Cocoa Powder', category: 'baking', unit: 'g',
+    subnames: ['cocoa powder', 'coco powder', 'chocolate powder'] },
+  { canonical: 'Vanilla Extract', category: 'baking', unit: 'ml',
+    subnames: ['vanilla essence', 'vanilla extract', 'essence'] },
+
+  // -------------------------------------------------------- snacks
+  { canonical: 'Pasta', category: 'snacks', unit: 'g',
+    subnames: ['pasta', 'macaroni', 'penne'] },
+  { canonical: 'Plain Noodles', category: 'snacks', unit: 'g',
+    subnames: ['noodles', 'hakka noodles', 'chowmein', 'chaumin'] },
+  { canonical: 'Rice Sevai', category: 'snacks', unit: 'g',
+    subnames: ['rice sevai', 'idiyappam', 'santhakai', 'instant sevai'] },
+  { canonical: 'Breakfast Cereal', category: 'snacks', unit: 'g',
+    subnames: ['cornflakes', 'corn flakes', 'cereal', 'kelloggs'] },
+  { canonical: 'Popcorn', category: 'snacks', unit: 'g',
+    subnames: ['popcorn', 'pop corn', 'makai popcorn'] },
+
+  // ------------------------------------------------------ homecare
+  { canonical: 'Bleach', category: 'homecare', unit: 'ml',
+    subnames: ['bleach', 'safed karne wala', 'ala', 'whitener'] },
+  { canonical: 'Fabric Softener', category: 'homecare', unit: 'ml',
+    subnames: ['fabric softener', 'comfort', 'kapde softener'] },
+  { canonical: 'Hand Wash Liquid', category: 'homecare', unit: 'ml',
+    subnames: ['hand wash', 'handwash', 'liquid soap', 'dettol handwash'] },
+  { canonical: 'Glass Cleaner', category: 'homecare', unit: 'ml',
+    subnames: ['glass cleaner', 'colin', 'sheesha cleaner'] },
+  { canonical: 'Room Freshener', category: 'homecare', unit: 'ml',
+    subnames: ['room freshener', 'air freshener', 'room spray', 'odonil'] },
+  { canonical: 'Garbage Bags', category: 'homecare', unit: 'pc',
+    subnames: ['garbage bag', 'dustbin bag', 'kachra bag', 'trash bag'] },
+  { canonical: 'Mosquito Repellent', category: 'homecare', unit: 'pc',
+    subnames: ['machar bhagane wala', 'all out', 'good knight', 'mosquito coil', 'kachua chaap'] },
+  { canonical: 'Broom', category: 'homecare', unit: 'pc',
+    subnames: ['jhadu', 'jhaadu', 'broom', 'supdi'] },
+  { canonical: 'Phenyl', category: 'homecare', unit: 'ml',
+    subnames: ['phenyl', 'fineil', 'pochha wala liquid'] },
+
+  // ------------------------------------------------------ personal
+  { canonical: 'Deodorant', category: 'personal', unit: 'ml',
+    subnames: ['deo', 'deodorant', 'body spray', 'spray'] },
+  { canonical: 'Hair Conditioner', category: 'personal', unit: 'ml',
+    subnames: ['conditioner', 'hair conditioner'] },
+  { canonical: 'Body Lotion', category: 'personal', unit: 'ml',
+    subnames: ['body lotion', 'moisturiser', 'lotion', 'cold cream'] },
+  { canonical: 'Sunscreen Lotion', category: 'personal', unit: 'ml',
+    subnames: ['sunscreen', 'sun cream', 'sunblock'] },
+  { canonical: 'Shaving Cream', category: 'personal', unit: 'g',
+    subnames: ['shaving cream', 'shave cream', 'daadhi wala cream'] },
+  { canonical: 'Razor', category: 'personal', unit: 'pc',
+    subnames: ['razor', 'blade', 'shaving razor', 'gillette'] },
+  { canonical: 'Hand Sanitizer', category: 'personal', unit: 'ml',
+    subnames: ['sanitizer', 'hand sanitizer', 'sanitiser'] },
+  { canonical: 'Antiseptic Liquid', category: 'personal', unit: 'ml',
+    subnames: ['dettol', 'savlon', 'antiseptic', 'antiseptic liquid'] },
+  { canonical: 'Toilet Paper', category: 'personal', unit: 'pc',
+    subnames: ['toilet paper', 'tissue roll', 'toilet roll'] },
+  { canonical: 'Kitchen Towel Roll', category: 'personal', unit: 'pc',
+    subnames: ['kitchen roll', 'kitchen towel', 'paper towel'] },
+  { canonical: 'Facial Tissue', category: 'personal', unit: 'pc',
+    subnames: ['tissue', 'tissue paper', 'napkin', 'face tissue'] },
+  { canonical: 'Cotton Buds', category: 'personal', unit: 'pc',
+    subnames: ['ear buds', 'cotton buds', 'kaan saaf karne wala'] },
+  { canonical: 'Talc Free Face Powder', category: 'personal', unit: 'g',
+    subnames: ['face powder', 'compact', 'powder'] },
+
+  // ----------------------------------------------------- disposable
+  { canonical: 'Paper Plates', category: 'disposable', unit: 'pc',
+    subnames: ['paper plate', 'dona pattal', 'disposable plate'] },
+  { canonical: 'Paper Cups', category: 'disposable', unit: 'pc',
+    subnames: ['paper cup', 'disposable glass', 'chai ka cup'] },
+  { canonical: 'Disposable Spoons', category: 'disposable', unit: 'pc',
+    subnames: ['plastic spoon', 'disposable spoon', 'chammach'] },
 ];
 
 /** Flattened form the trigram index searches over. */

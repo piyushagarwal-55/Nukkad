@@ -51,6 +51,43 @@ packages/
   shared/    types, zod validators, money helpers, consumption constants
 ```
 
+### The bill agent
+
+Photographing a supplier bill is the onboarding hero path, and it runs as a
+LangGraph state machine rather than a script:
+
+```
+extract -> retrieve -> reconcile -> price -> alias -> critic -> persist
+```
+
+Two rules hold it together. The model **never free-recalls**: every judgement
+is made over candidates retrieved from real rows, so it picks from a list or
+declines. And **arithmetic is not the model job** -- scores, price deltas and
+margins are computed in code, and the model is asked only what is genuinely
+linguistic.
+
+Matching is trigram similarity in Postgres over product names *and* their
+aliases, banded by score. Near-exact matches skip the LLM entirely; only the
+uncertain middle costs a model call; a critic node then tries to *refute* each
+match before it is trusted. Anything still unclear is left for the owner
+rather than guessed, because a wrong merge corrupts a stock count and a price
+at once.
+
+### The product knowledge base
+
+`packages/shared/src/constants/product-kb.ts` is the retrieval corpus: 178
+products and 670 local names, North and South Indian, seeded with
+
+```bash
+npm run db:seed:kb
+```
+
+It exists so alias generation retrieves instead of inventing. A bill prints
+the trade name; a customer says something else that is never on the bill.
+Asked cold, a model produces confident nonsense; given the real names of the
+nearest known products it mostly copies. Subnames are how a spoken order
+finds a SKU, so this is the highest-leverage data in the system.
+
 ### apps/api
 
 | Path | Responsibility |
