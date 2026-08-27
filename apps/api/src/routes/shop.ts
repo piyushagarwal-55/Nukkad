@@ -495,7 +495,55 @@ export async function shopRoutes(app: FastifyInstance) {
     const number = env.TWILIO_WHATSAPP_FROM.replace(/\D/g, '');
     const join = env.TWILIO_SANDBOX_JOIN_CODE ?? '';
 
+    /**
+     * IS THE LINE ACTUALLY LIVE?
+     *
+     * Three things have to be true before a message gets answered, and
+     * every one of them fails silently. No tunnel and Twilio cannot reach
+     * the webhook at all. No customer and inbound routing resolves nobody,
+     * so the shop says nothing. No catalogue and there is nothing to match
+     * a spoken order against.
+     *
+     * A shop owner cannot debug any of that from the outside -- the symptom
+     * is identical in all three cases, which is silence -- so the page says
+     * which one is missing instead of leaving them to guess.
+     */
+    const [households, skus] = await Promise.all([
+      prisma.household.count({ where: { kiranaId } }),
+      prisma.sku.count({ where: { kiranaId, active: true } }),
+    ]);
+
+    const checks = [
+      {
+        key: 'tunnel',
+        ok: !!env.PUBLIC_BASE_URL,
+        label: 'WhatsApp can reach this shop',
+        detail: env.PUBLIC_BASE_URL
+          ? `messages arrive at ${env.PUBLIC_BASE_URL}/wa/twilio`
+          : 'No public address is set, so nothing sent on WhatsApp reaches the shop at all.',
+      },
+      {
+        key: 'customers',
+        ok: households > 0,
+        label: households === 1 ? '1 customer registered' : `${households} customers registered`,
+        detail: households
+          ? 'A message is only answered if the sender is one of them.'
+          : 'Until a customer is added, every message goes unanswered.',
+      },
+      {
+        key: 'catalogue',
+        ok: skus > 0,
+        label: `${skus} items to order from`,
+        detail: skus
+          ? 'Spoken orders are matched against these.'
+          : 'With nothing in the catalogue there is nothing an order can resolve to.',
+      },
+    ];
+
     return {
+      live: checks.every((c) => c.ok),
+      checks,
+      counts: { households, skus },
       // customer side: live today, unchanged in production
       counterQrUrl: '/shop/qr',
       joinLink: `https://wa.me/${number}${join ? `?text=${encodeURIComponent(join)}` : ''}`,
