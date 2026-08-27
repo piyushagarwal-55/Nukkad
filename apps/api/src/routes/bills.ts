@@ -24,6 +24,17 @@ const MEDIA_DIR = join(process.cwd(), 'media');
  */
 
 const commitSchema = z.object({
+  /**
+   * Required when the bill reads as RETAIL.
+   *
+   * A retail receipt is a SALE: those goods left the shelf. Restocking from
+   * one inflates the catalogue by exactly the amount just sold, and nobody
+   * notices until the shelf disagrees with the screen. A kirana buying from
+   * a cash-and-carry genuinely does hold a retail receipt for its own
+   * purchase, so this is not refusable -- it is confirmable, once, by the
+   * person who knows which it was.
+   */
+  confirmPurchase: z.boolean().optional(),
   lines: z.array(z.object({
     id: z.string(),
     decision: z.enum(['RESTOCK', 'NEW', 'AMBIGUOUS', 'SKIPPED']),
@@ -108,6 +119,16 @@ export async function billRoutes(app: FastifyInstance) {
     if (!bill) return reply.code(404).send({ error: 'no such bill' });
     if (bill.status === 'COMMITTED') {
       return reply.code(409).send({ error: 'This bill has already been applied.' });
+    }
+
+    if (bill.docType === 'RETAIL' && !parsed.data.confirmPurchase) {
+      return reply.code(409).send({
+        error:
+          'This reads as a retail receipt, which is a sale rather than a delivery. ' +
+          'Applying it would add stock that just left the shelf. Confirm it really is ' +
+          'something you bought before it is applied.',
+        needsConfirmation: 'RETAIL',
+      });
     }
 
     let created = 0, restocked = 0, skipped = 0, aliasesAdded = 0;
@@ -238,6 +259,7 @@ async function readPlan(billId: string, kiranaId: string) {
 
   return {
     status: bill.status,
+    docType: bill.docType,
     supplier: bill.supplierName,
     billNo: bill.billNo,
     totalPaise: bill.totalPaise,
@@ -264,6 +286,9 @@ async function readPlan(billId: string, kiranaId: string) {
       workingName: l.workingName,
       gloss: l.gloss,
       unit: l.unit,
+      pack: l.pack,
+      mrpPaise: l.mrpPaise,
+      isFree: l.isFree,
       derived: l.derived,
     })),
   };

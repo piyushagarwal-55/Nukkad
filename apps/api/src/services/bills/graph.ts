@@ -51,6 +51,12 @@ export interface PlannedLine {
   gloss: string | null;
   /** normalised unit from the quantity cell: kg, pc, peti, bori */
   unit: string | null;
+  /** the Pack column, when the bill keeps size separate from name */
+  pack: string | null;
+  /** printed MRP. A sound default selling price; NOT the price paid. */
+  mrpPaise: number | null;
+  /** a quantity with no amount. Never priced, never counted in the total. */
+  isFree: boolean;
   quantity: number;
   ratePaise: number;
   amountPaise: number;
@@ -390,11 +396,20 @@ async function repair(s: State): Promise<Partial<State>> {
   const t0 = Date.now();
   const items = s.parsed?.items ?? [];
 
-  let derivedRate = 0, derivedAmount = 0, unsolvable = 0;
+  let derivedRate = 0, derivedAmount = 0, unsolvable = 0, freebies = 0;
   const fixed = items.map((it) => {
     const qty = it.qty;
     const rate = it.ratePaise;
     const amount = it.amountPaise;
+
+    // A free item is a quantity and nothing else. There is no equation to
+    // solve and no price to find: it is stock arriving at zero cost.
+    if (it.free || (amount === null && rate === null && it.mrpPaise !== null)) {
+      if (it.free) {
+        freebies++;
+        return { ...it, ratePaise: 0, amountPaise: 0, derived: ['free'] as string[] };
+      }
+    }
 
     if (rate !== null && amount !== null) return { ...it, ratePaise: rate, amountPaise: amount, derived: [] as string[] };
 
@@ -407,6 +422,19 @@ async function repair(s: State): Promise<Partial<State>> {
       return { ...it, ratePaise: rate, amountPaise: Math.round(qty * rate), derived: ['amount'] };
     }
 
+    // Only MRP survives. It is the printed ceiling rather than the price
+    // paid, so it is used as a last resort and labelled as such: a
+    // discounted line priced from MRP overstates what the shop spent.
+    if (amount === null && rate === null && it.mrpPaise !== null) {
+      derivedAmount++;
+      return {
+        ...it,
+        ratePaise: it.mrpPaise,
+        amountPaise: Math.round(qty * it.mrpPaise),
+        derived: ['amount-from-mrp'],
+      };
+    }
+
     // one number and no equation to stand it up: cannot be priced at all
     unsolvable++;
     return { ...it, ratePaise: rate ?? 0, amountPaise: amount ?? 0, derived: ['unsolvable'] };
@@ -415,6 +443,7 @@ async function repair(s: State): Promise<Partial<State>> {
   const parts = [
     derivedRate ? `${derivedRate} rate${derivedRate === 1 ? '' : 's'} worked out from amount / quantity` : '',
     derivedAmount ? `${derivedAmount} amount${derivedAmount === 1 ? '' : 's'} worked out from quantity x rate` : '',
+    freebies ? `${freebies} free item${freebies === 1 ? '' : 's'} priced at zero` : '',
     unsolvable ? `${unsolvable} could not be solved` : '',
   ].filter(Boolean);
 
@@ -463,7 +492,7 @@ function arithmeticOf(items: ParsedBill['items'], repairs: Record<number, string
     // would only ever confirm our own arithmetic. The check is for what was
     // actually READ off the paper.
     const wasDerived = (repairs[i] ?? []).length > 0;
-    if (wasDerived || it.ratePaise === null || !it.amountPaise) {
+    if (wasDerived || it.free || it.ratePaise === null || !it.amountPaise) {
       return { ok: true, note: null as string | null };
     }
     const expected = Math.round(it.qty * it.ratePaise);
@@ -501,18 +530,42 @@ async function verify(s: State): Promise<Partial<State>> {
    * ignores and one they act on.
    */
   const stated = s.parsed?.totalPaise ?? null;
-  const summed = items.reduce((a, it) => a + (it.amountPaise ?? 0), 0);
+  const summed = items.reduce((a, it) => a + (it.free ? 0 : it.amountPaise ?? 0), 0);
   let totalNote: string | null = null;
+  let wholeReadingSuspect = false;
 
   if (stated && Math.abs(stated - summed) > ARITH_TOLERANCE) {
     const gap = stated - summed;
-    const suspect = items.findIndex(
-      (it) => Math.abs((it.amountPaise ?? 0) + gap - (it.amountPaise ?? 0)) > 0 &&
-              Math.abs(gap) < (it.amountPaise ?? 0) * 2,
-    );
-    totalNote =
-      `lines add up to ${(summed / 100).toFixed(2)} but the bill says ${(stated / 100).toFixed(2)}` +
-      (suspect >= 0 ? `; the ${(Math.abs(gap) / 100).toFixed(2)} gap is the size of "${items[suspect]!.name}"` : '');
+    const off = Math.abs(gap) / Math.max(stated, 1);
+
+    /**
+     * HOW BADLY the total misses decides how much to distrust.
+     *
+     * A small gap is one misread digit, and naming the line whose amount
+     * matches it turns "something is wrong" into "check line four".
+     *
+     * A LARGE gap is a different animal. It means the lines we are holding
+     * are not the lines on the paper -- a dense thermal receipt where the
+     * model invented plausible products, which is precisely the failure this
+     * system exists to prevent. Flagging one line there is worse than
+     * useless: it implies the other seven were verified when nothing was.
+     * Past 10% the whole reading is suspect and every line says so.
+     */
+    if (off > 0.1) {
+      wholeReadingSuspect = true;
+      totalNote =
+        `these lines add up to ${(summed / 100).toFixed(2)} but the bill says ` +
+        `${(stated / 100).toFixed(2)}, a gap of ${Math.round(off * 100)}%. ` +
+        `The reading does not match the paper, so no line here is trustworthy. ` +
+        `Check every row against the bill before applying it.`;
+    } else {
+      const suspect = items.findIndex(
+        (it) => !it.free && Math.abs(gap) < (it.amountPaise ?? 0) * 2,
+      );
+      totalNote =
+        `lines add up to ${(summed / 100).toFixed(2)} but the bill says ${(stated / 100).toFixed(2)}` +
+        (suspect >= 0 ? `; the ${(Math.abs(gap) / 100).toFixed(2)} gap is the size of "${items[suspect]!.name}"` : '');
+    }
     bad += 1;
   }
 
@@ -545,7 +598,9 @@ async function verify(s: State): Promise<Partial<State>> {
   items.forEach((it, i) => {
     const notes: string[] = [];
     if (!arith[i]!.ok) notes.push(arith[i]!.note!);
-    if (totalNote && i === 0) notes.push(totalNote);
+    // a whole-document mismatch belongs on every line; putting it only on
+    // the first implies the rest were checked and passed
+    if (totalNote && (wholeReadingSuspect || i === 0)) notes.push(totalNote);
 
     if (second) {
       // match by position first, then by name, because a model can drop a
@@ -575,9 +630,11 @@ async function verify(s: State): Promise<Partial<State>> {
       node: 'verify',
       status: n ? 'RETRY' : 'OK',
       ms: Date.now() - t0,
-      note: second
-        ? `${bad} line${bad === 1 ? '' : 's'} did not add up, so it was read again on the second model: ${n} still disputed`
-        : `${bad} line${bad === 1 ? '' : 's'} did not add up and no second opinion was available`,
+      note: wholeReadingSuspect
+        ? `THE READING DOES NOT MATCH THE PAPER: lines total ${(summed / 100).toFixed(2)} against a printed ${((stated ?? 0) / 100).toFixed(2)}. All ${items.length} lines held for checking.`
+        : second
+          ? `${bad} line${bad === 1 ? '' : 's'} did not add up, so it was read again on the second model: ${n} still disputed`
+          : `${bad} line${bad === 1 ? '' : 's'} did not add up and no second opinion was available`,
     }],
   };
 }
@@ -597,7 +654,10 @@ async function retrieve(s: State): Promise<Partial<State>> {
       // retrieval runs on the ROMAN working form. rawName keeps the
       // original script for the review screen.
       const sc = s.script[idx];
-      const working = sc?.roman ?? it.name;
+      // "5KG" + "SHAKTI BHOG ATTA" is one product. Retail bills split them
+      // into separate columns; the catalogue keeps them together.
+      const base = sc?.roman ?? it.name;
+      const working = it.pack ? `${base} ${it.pack}` : base;
       const [skus, kb] = await Promise.all([
         retrieveSkus(s.kiranaId, working),
         retrieveKb(working),
@@ -608,6 +668,9 @@ async function retrieve(s: State): Promise<Partial<State>> {
         workingName: working,
         gloss: sc?.english ?? null,
         unit: sc?.unit ?? null,
+        pack: it.pack,
+        mrpPaise: it.mrpPaise,
+        isFree: !!it.free,
         quantity: it.qty,
         ratePaise: it.ratePaise ?? 0,
         amountPaise: it.amountPaise ?? 0,
@@ -794,7 +857,9 @@ async function price(s: State): Promise<Partial<State>> {
       return {
         ...l,
         priceDeltaPaise: null,
-        proposedSellPaise: Math.round(l.ratePaise * (1 + s.markupPct / 100)),
+        // A printed MRP beats any markup we could invent: it is the price
+        // the manufacturer set and the one the customer expects to see.
+        proposedSellPaise: l.mrpPaise ?? Math.round(l.ratePaise * (1 + s.markupPct / 100)),
       };
     }
 
@@ -1026,6 +1091,9 @@ async function persist(s: State): Promise<Partial<State>> {
           workingName: l.workingName,
           gloss: l.gloss,
           unit: l.unit,
+          pack: l.pack,
+          mrpPaise: l.mrpPaise,
+          isFree: l.isFree,
           derived: l.derived,
         },
       });
@@ -1050,6 +1118,7 @@ async function persist(s: State): Promise<Partial<State>> {
         status: 'PLANNED',
         supplierName: s.parsed?.supplier ?? null,
         billNo: s.parsed?.billNo ?? null,
+        docType: s.parsed?.docType ?? 'UNKNOWN',
         totalPaise: s.parsed?.totalPaise ?? null,
         agentMs: [...s.steps].reduce((a, b) => a + b.ms, 0) + (Date.now() - t0),
       },

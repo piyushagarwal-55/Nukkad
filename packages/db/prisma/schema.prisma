@@ -502,6 +502,15 @@ model SupplierBill {
   parseMs     Int?
   parseError  String?
 
+  /// PURCHASE | RETAIL | UNKNOWN.
+  ///
+  /// A wholesale bill from a distributor ADDS stock. A retail receipt is a
+  /// SALE and removes it. Applying one as the other silently inflates the
+  /// catalogue by exactly the amount that just left the shelf, so direction
+  /// is detected and, when it is a retail bill, confirmed by the owner
+  /// before anything is written.
+  docType     String?
+
   createdAt   DateTime  @default(now())
   committedAt DateTime?
 
@@ -568,6 +577,15 @@ model SupplierBillLine {
   gloss       String?
   /// normalised unit off the quantity cell: kg, pc, peti, bori
   unit        String?
+  /// the Pack column when the bill has one: "5KG", "150G", "1 LT"
+  pack        String?
+  /// printed MRP. NOT the price paid -- retail bills discount off it, and
+  /// treating MRP as the rate makes qty x rate disagree with the amount on
+  /// every discounted line.
+  mrpPaise    Int?
+  /// a free item: a quantity with no amount. Never priced, never counted
+  /// toward the total.
+  isFree      Boolean @default(false)
   /// which of quantity/rate/amount we SOLVED for rather than read. Shown as
   /// our arithmetic, not as something printed on their paper.
   derived     String[] @default([])

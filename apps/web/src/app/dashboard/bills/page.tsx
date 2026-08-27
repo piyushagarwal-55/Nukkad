@@ -34,11 +34,15 @@ interface Line {
   workingName: string | null;
   gloss: string | null;
   unit: string | null;
+  pack: string | null;
+  mrpPaise: number | null;
+  isFree: boolean;
   derived: string[];
 }
 interface Plan {
   billId: string;
   status: string;
+  docType: string | null;
   supplier: string | null;
   billNo: string | null;
   totalPaise: number | null;
@@ -126,7 +130,9 @@ function LineCard({
           )}
 
           <p className="muted mt-0.5 text-xs">
-            {line.quantity}{line.unit ?? ''} &times; &#8377;{rupees(line.ratePaise)}
+            {line.pack && <>{line.pack} &middot; </>}
+            {line.isFree ? <b className="text-[var(--green)]">free item</b> : <>{line.quantity}{line.unit ?? ''} &times; &#8377;{rupees(line.ratePaise)}</>}
+            {line.mrpPaise ? <> &middot; MRP &#8377;{rupees(line.mrpPaise)}</> : null}
             {line.derived.includes('rate') && (
               <span className="badge badge-ambiguous ml-1.5">rate worked out</span>
             )}
@@ -239,6 +245,7 @@ export default function Bills() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<{ created: number; restocked: number; skipped: number; aliasesAdded: number } | null>(null);
+  const [confirmRetail, setConfirmRetail] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { setDone(null); }, [plan?.billId]);
@@ -270,6 +277,7 @@ export default function Bills() {
       const r = await post<{ created: number; restocked: number; skipped: number; aliasesAdded: number }>(
         `/bills/${plan.billId}/commit`,
         {
+          confirmPurchase: confirmRetail,
           lines: plan.lines.map((l) => ({
             id: l.id,
             decision: l.decision,
@@ -348,6 +356,31 @@ export default function Bills() {
 
       {plan && (
         <>
+          {/* THE DIRECTION CHECK. A retail receipt is a sale: those goods
+              left the shelf. Applying it as a delivery adds stock that was
+              just sold, and nothing catches it until the shelf and the
+              screen disagree. */}
+          {plan.docType === 'RETAIL' && (
+            <div className="mt-5 rounded-xl border-2 border-[var(--ink)] bg-[var(--amber)] p-5 shadow-[4px_4px_0_var(--ink)]">
+              <h2 className="display text-xl">This looks like a retail receipt</h2>
+              <p className="mt-2 text-sm leading-relaxed">
+                A retail bill is usually a <b>sale</b> — those goods left the
+                shelf — and applying it would <b>add</b> stock you just sold.
+                If you bought these from a cash-and-carry, that is a purchase
+                and this is fine. Only you know which.
+              </p>
+              <label className="mt-4 flex items-center gap-2.5 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={confirmRetail}
+                  onChange={(e) => setConfirmRetail(e.target.checked)}
+                  className="h-4 w-4"
+                />
+                Yes, I bought these. Add them to my stock.
+              </label>
+            </div>
+          )}
+
           <Trace steps={plan.steps} ms={plan.agentMs} />
 
           <div className="pane mt-5 p-2">
@@ -372,7 +405,7 @@ export default function Bills() {
           <div className="mt-5 flex flex-wrap items-center gap-3">
             <button
               onClick={commit}
-              disabled={busy}
+              disabled={busy || (plan.docType === 'RETAIL' && !confirmRetail)}
               className="rounded-lg border-2 border-[var(--ink)] bg-[var(--accent)] px-5 py-2.5 text-sm font-semibold shadow-[4px_4px_0_var(--ink)] disabled:opacity-40"
             >
               {busy ? 'Applying…' : 'Apply to catalogue'}

@@ -16,6 +16,15 @@ import { z } from 'zod';
  * matches Razorpay's own unit so nothing converts at the boundary.
  */
 const billSchema = z.object({
+  /**
+   * Which way the stock moves.
+   *
+   * PURCHASE is a distributor billing the shop: stock comes IN. RETAIL is
+   * the shop billing a customer: stock goes OUT. The two look similar on
+   * paper and mean opposite things, and applying one as the other inflates
+   * the catalogue by exactly what just left the shelf.
+   */
+  docType: z.enum(['PURCHASE', 'RETAIL', 'UNKNOWN']).default('UNKNOWN'),
   supplier: z.string().nullable().default(null),
   billNo: z.string().nullable().default(null),
   date: z.string().nullable().default(null),
@@ -23,6 +32,19 @@ const billSchema = z.object({
     name: z.string(),
     /** verbatim quantity text: "90kg", "200pcs", "8 peti". Parsed later. */
     qtyText: z.string().nullable().default(null),
+    /** the Pack column, where the bill keeps size separate from name */
+    pack: z.string().nullable().default(null),
+    /**
+     * Printed MRP, kept SEPARATE from the price actually charged.
+     *
+     * Retail bills discount off MRP -- 195.00 printed, 175.00 paid -- so
+     * folding MRP into ratePaise makes qty x rate disagree with amount on
+     * every discounted line and disputes the whole bill. It is worth having
+     * on its own: MRP is a sound default selling price.
+     */
+    mrpPaise: z.number().int().nonnegative().nullable().default(null),
+    /** quantity present, amount absent: a free item. Never priced. */
+    free: z.boolean().default(false),
     qty: z.number().positive(),
     /**
      * NULLABLE, and this matters more than it looks.
@@ -61,6 +83,17 @@ const PROMPT = [
   '- The bill may be handwritten, in Hindi/Devanagari, or a mix. Copy names',
   '  in their ORIGINAL script. Do not translate or transliterate them.',
   '- Always read the printed grand total into totalPaise if one is shown.',
+  '- docType: RETAIL if this is a shop billing a CUSTOMER (look for',
+  '  \"Retail Invoice\", a cash/customer name, \"thanks visit again\",',
+  '  \"you have saved\", an MRP column). PURCHASE if a distributor or',
+  '  wholesaler is billing the shop. UNKNOWN if genuinely unclear.',
+  '- pack: the Pack/Size column if the bill has one (\"5KG\", \"150G\",',
+  '  \"1 LT\"). Do NOT merge it into name.',
+  '- MRP and RATE are DIFFERENT columns. MRP is the printed maximum price;',
+  '  ratePaise is what was actually charged per unit. If a bill shows only',
+  '  MRP and AMOUNT, put MRP in mrpPaise and leave ratePaise null.',
+  '- free: true for an item under a \"Free Items\" heading, or any line with',
+  '  a quantity but no amount. Leave its amountPaise null.',
 ].join('\n');
 
 export interface ParseResult {
