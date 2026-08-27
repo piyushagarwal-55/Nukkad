@@ -18,6 +18,7 @@ import { extractionSchema, type Extraction } from '@nukkad/shared';
 const SYSTEM = [
   'You segment Indian grocery orders. Return ONLY JSON matching:',
   '{"items":[{"text":"<verbatim span naming the product>","quantity":<number>,"unit":"<unit or null>"}],',
+  '"productSource":"EXPLICIT|LAST_NAMED|NONE",',
   '"intent":"ORDER|REPEAT|ACCOUNT|CANCEL|MODIFY|CONFIRM|CHECKOUT|REJECT|GREETING|QUESTION|UNKNOWN",',
   '"goal":"ORDERING|RECOMMENDATION|QA|SEARCH|META"}',
   'RULES:',
@@ -27,6 +28,19 @@ const SYSTEM = [
   '- Convert Hinglish number words to digits: do=2, teen=3, chaar=4, paanch=5,',
   '  das=10, adha=0.5, dedh=1.5, dhai=2.5, sava=1.25.',
   '- If the message is not an order, return items:[] and the right intent.',
+  'WHERE THE PRODUCT IS, which is why you see the recent messages:',
+  '- EXPLICIT: they named it in THIS message. Put the span in items.',
+  '- LAST_NAMED: they pointed at what was just discussed instead of',
+  '  naming it -- "yeh bhi daal do", "haan daal do", "ek aur", "same',
+  '  wala", "wo hi bhej do". Return items:[]; something downstream knows',
+  '  which product that was. Use this ONLY if the recent messages show a',
+  '  product to point at.',
+  '- NONE: no product is involved. A greeting, a question about timings.',
+  '- Hinglish puts commands where products look like they should be.',
+  '  "daal do" is PUT IT IN, not lentils. "de do", "kar do", "bhej do",',
+  '  "hata do" are all instructions. Never return one as a product span.',
+  '  "ek kilo daal do" with no earlier product IS lentils; the same words',
+  '  right after the shop quoted a price are not.',
   'INTENT NOTES:',
   '- REPEAT: wants the previous order again. "wahi wala bhej do",',
   '  "pichhli baar wala", "same as last time". Return items:[] for these,',
@@ -53,19 +67,57 @@ const SYSTEM = [
   '- META: greetings, thanks, chit-chat. Nothing to do with goods.',
 ].join('\n');
 
-export async function extractOrder(text: string, fast = false): Promise<Extraction> {
+/** the shop's side and the customer's, most recent last */
+export interface Turn { role: 'user' | 'shop'; text: string }
+
+/**
+ * @param recent the last few turns, so the parser can see what "yeh"
+ *        points at. Optional: the eval harness and the ASR bench call
+ *        this on isolated sentences with no conversation at all, and
+ *        must keep behaving exactly as they did.
+ */
+export async function extractOrder(
+  text: string,
+  fast = false,
+  recent: Turn[] = [],
+): Promise<Extraction> {
+  /**
+   * THE PARSER GETS THE CONVERSATION, which it never used to.
+   *
+   * The composer has always been shown the last several turns -- that is
+   * what stops it repeating itself -- while the parser saw one message in
+   * isolation. So the PROSE had context and the DECISIONS did not, and
+   * every referent bug in this system came out of that one asymmetry:
+   * "yeh" ranked as a product name and returned dry yeast, "daal do"
+   * matched a lentil, "haan daal do" added Toor Dal to a customer who had
+   * just been quoted the price of sugar.
+   *
+   * It still does not get to name a product. It reports that the
+   * reference points backwards, and the state resolver supplies the SKU.
+   */
+  const history = recent
+    .slice(-6)
+    .map((t) => `${t.role === 'user' ? 'Customer' : 'Shop'}: ${t.text}`)
+    .join('\n');
+
+  const user = history
+    ? `RECENT MESSAGES:\n${history}\n\nNOW: ${text}`
+    : text;
+
   const res = await groq.chat.completions.create({
     model: fast ? env.GROQ_LLM_MODEL_FAST : env.GROQ_LLM_MODEL,
     temperature: 0,
     response_format: { type: 'json_object' },
     messages: [
       { role: 'system', content: SYSTEM },
-      { role: 'user', content: text },
+      { role: 'user', content: user },
     ],
   });
 
   const raw = res.choices[0]?.message?.content ?? '{}';
   const parsed = extractionSchema.safeParse(JSON.parse(raw));
-  if (!parsed.success) return { items: [], intent: 'UNKNOWN', goal: 'ORDERING' };
+  if (!parsed.success) {
+    return { items: [], intent: 'UNKNOWN', goal: 'ORDERING', productSource: 'NONE' };
+  }
   return parsed.data;
 }

@@ -15,6 +15,8 @@ import { findSubstitutes } from '../substitution/substitute.js';
 import { hasVision } from '../../config/env.js';
 import { readAnswer } from './reply.js';
 import { resolve, pickFrom } from '../resolver/resolve.js';
+import { decide, type PolicyAction } from '../policy/decide.js';
+import { maskActions } from '../resolver/action.js';
 import { compose, type Facts, type Swap, type PackAsk } from './compose.js';
 import { retrieveKb } from '../kb/retrieve.js';
 import type { Prior } from '../resolver/prior.js';
@@ -450,82 +452,149 @@ async function act(
     }
   }
 
-  const extraction: Extraction = fromPhoto
-    ? { items: fromPhoto, intent: 'ORDER', goal: 'ORDERING' }
-    : await extractOrder(ctx.said);
-  ctx.annotation = {
-    // DISCLOSE is the paper's name for a customer stating what they want,
-    // and a photographed list is the purest form of it
-    intent: fromPhoto ? 'DISCLOSE' : extraction.intent,
-    goal: extraction.goal,
-  };
+  /**
+   * A PHOTOGRAPHED LIST SKIPS THE POLICY MODEL ENTIRELY.
+   *
+   * There is no ambiguity to resolve: the items came off paper, they name
+   * themselves, and there is no conversation around them to refer to.
+   */
+  if (fromPhoto) {
+    ctx.annotation = { intent: 'DISCLOSE', goal: 'ORDERING' };
+    return addExplicit(ctx, fromPhoto);
+  }
 
-  switch (extraction.intent) {
-    case 'CANCEL':
-      // everything in the bag goes back on the shelf
-      ctx.convo.basket = [];
-      ctx.convo.pending = null;
-      return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
+  /**
+   * THE POLICY MODEL DECIDES WHAT TO DO. See services/policy/decide.ts.
+   *
+   * It is shown the message, the recent turns and the STRUCTURED state,
+   * and it returns one action from a closed set. The catalogue is not
+   * consulted until an action says an explicit lookup is needed -- which
+   * is the only way to guarantee that a message containing no product
+   * cannot have one found in it.
+   */
+  const state = {
+    lastNamed: ctx.convo.lastNamed[0]?.name ?? null,
+    pendingQuestion: describePending(ctx),
+    basket: ctx.convo.basket.map((l) => l.name),
+  };
+  const decision = await decide({ message: ctx.said, recent: ctx.convo.recent, state });
+
+  ctx.annotation = { intent: decision.action, goal: goalOf(decision.action) };
+
+  /**
+   * TOO UNSURE TO ACT. The model was told a low number means the shop
+   * asks instead of guessing, and this is where that is honoured -- a
+   * wrong action on a real order costs more than one extra question.
+   */
+  if (decision.confidence < POLICY_FLOOR && decision.action !== 'NOT_UNDERSTOOD') {
+    return speak(ctx, { kind: 'NOT_UNDERSTOOD' }, copy.NOT_UNDERSTOOD);
+  }
+
+  switch (decision.action) {
+    case 'GREET':
+      return speak(ctx, { kind: 'GREETING' }, copy.GREETING);
+
+    case 'REPEAT_LAST_ORDER':
+      return repeatLast(ctx);
+
+    case 'ACCOUNT_SUMMARY':
+      return account(ctx);
 
     case 'CHECKOUT':
       return checkout(ctx);
 
-    case 'REJECT': {
-      const dropped = dropFromBasket(ctx);
-      if (dropped) return dropped;
-      break;
-    }
+    case 'CANCEL_ORDER':
+      ctx.convo.basket = [];
+      ctx.convo.pending = null;
+      return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
 
-    case 'REPEAT':
-      return repeatLast(ctx);
-
-    case 'ACCOUNT':
-      return account(ctx);
-
-    case 'GREETING':
+    case 'CONFIRM_PENDING_ACTION':
+      // a yes with nothing outstanding is just agreement
+      if (ctx.convo.basket.length) return checkout(ctx);
       return speak(ctx, { kind: 'GREETING' }, copy.GREETING);
 
-    case 'QUESTION':
-      return question(ctx, extraction.items.map((i) => i.text));
+    case 'REJECT_PENDING_ACTION': {
+      const dropped = dropFromBasket(ctx);
+      if (dropped) return dropped;
+      ctx.convo.basket = [];
+      ctx.convo.pending = null;
+      return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
+    }
 
-    default:
-      break;
-  }
+    case 'REMOVE_FROM_STATE':
+    case 'REMOVE_EXPLICIT_PRODUCT': {
+      const dropped = dropFromBasket(ctx, decision.products[0]?.query ?? ctx.convo.lastNamed[0]?.name);
+      if (dropped) return dropped;
+      return speak(ctx, { kind: 'NOT_UNDERSTOOD' }, copy.NOT_UNDERSTOOD);
+    }
 
-  if (!extraction.items.length) {
     /**
-     * NO ITEMS IS NOT THE SAME AS NOTHING TO SAY.
-     *
-     * Measured, three runs of the same sentence:
-     *
-     *   moong dal ka price kitna h -> QUESTION[moong dal]
-     *                              -> UNKNOWN[]
-     *                              -> QUESTION[moong dal]
-     *
-     * One run in three the extractor found no span, this branch fired,
-     * and the shop read out its category list instead of a price -- for a
-     * question it had answered correctly moments earlier. Routing on a
-     * label that changes between identical inputs means every fix to one
-     * path leaves the other untouched and the symptom just moves.
-     *
-     * So the product search does not depend on the label. question()
-     * matches against the raw sentence and ends at the catalogue only if
-     * genuinely nothing was named, which is what this branch wanted to be
-     * all along.
+     * NO SEARCH HAPPENS HERE. The product is the one the conversation was
+     * already about, and its id is in the state -- so "haan daal do" can
+     * never turn into Toor Dal, whatever the catalogue would have said.
      */
-    return question(ctx, []);
-  }
+    case 'ADD_FROM_STATE': {
+      const named = ctx.convo.lastNamed[0];
+      const catalogue = await getCatalog(ctx.kiranaId);
+      const sku = named && catalogue.find((x) => x.id === named.skuId);
+      if (!sku) return speak(ctx, { kind: 'NOT_UNDERSTOOD' }, copy.NOT_UNDERSTOOD);
 
-  /**
-   * "yeh" MEANS WHAT THE SHOP JUST NAMED.
-   *
-   * A customer told the price of moong dal replies "1 kg yeh pack kar
-   * do". Ranking the word yeh against a national product list returned
-   * DRY YEAST, and the shop apologised for not stocking it. Substituting
-   * the referent before ranking is the whole fix; if there is no single
-   * referent the pointer is left alone and falls through to the ordinary
-   * "samajh nahi aaya", which is honest.
-   */
+      return addExplicit(ctx, [{
+        text: sku.name,
+        quantity: decision.products[0]?.quantity ?? 1,
+        unit: decision.products[0]?.unit ?? null,
+      }], sku);
+    }
+
+    case 'ADD_EXPLICIT_PRODUCT':
+      return addExplicit(ctx, decision.products.map((p) => ({
+        text: p.query, quantity: p.quantity, unit: p.unit,
+      })));
+
+    case 'ANSWER_PRICE':
+    case 'ANSWER_STOCK':
+    case 'SEARCH_PRODUCT':
+      return question(ctx, decision.products.map((p) => p.query));
+
+    case 'CLARIFY':
+    case 'NOT_UNDERSTOOD':
+    default:
+      return question(ctx, []);
+  }
+}
+
+/** below this the shop asks rather than acts */
+const POLICY_FLOOR = 0.45;
+
+/** the paper's goal axis, derived from the action rather than classified */
+function goalOf(action: PolicyAction): string {
+  if (action === 'GREET') return 'META';
+  if (action === 'ANSWER_PRICE' || action === 'ANSWER_STOCK' || action === 'ACCOUNT_SUMMARY') return 'QA';
+  if (action === 'SEARCH_PRODUCT') return 'SEARCH';
+  if (action === 'CLARIFY' || action === 'NOT_UNDERSTOOD') return 'META';
+  return 'ORDERING';
+}
+
+/** what the shop is waiting on, in words the policy model can use */
+function describePending(ctx: Ctx): string | null {
+  const p = ctx.convo.pending;
+  if (!p) return null;
+  if (p.kind === 'CHECKOUT') return 'whether to send the order';
+  return `which product they meant: ${p.options.map((o) => o.name).join(', ')}`;
+}
+
+/**
+ * Rank named products against the catalogue and put them in the basket.
+ *
+ * `settled` short-circuits the ranker for a product the state already
+ * identified by id -- there is nothing to search for and searching could
+ * only introduce an error.
+ */
+async function addExplicit(
+  ctx: Ctx,
+  items: Array<{ text: string; quantity: number; unit: string | null }>,
+  settled?: Sku,
+): Promise<OutboundMessage[]> {
   // ---- rank against THIS shop's catalogue, with THIS household's prior
   const [catalog, stock, prior] = await Promise.all([
     getCatalog(ctx.kiranaId),
@@ -541,13 +610,34 @@ async function act(
    * the answer path cannot disagree about what a phrase means. See the
    * note at the top of that file for the six matchers this replaced.
    */
-  const refs = resolve({
-    text: ctx.said,
-    spans: extraction.items,
-    catalogue: catalog,
-    prior,
-    lastNamed: ctx.convo.lastNamed,
-  });
+  /**
+   * A product the policy layer already identified by id needs no ranking
+   * at all -- see ADD_FROM_STATE. Everything else goes through the one
+   * resolver, on the customer's own words.
+   */
+  const refs = settled
+    ? items.map((it) => ({
+        sourceText: it.text,
+        quantity: it.quantity,
+        unitHint: it.unit,
+        line: {
+          sourceText: it.text,
+          quantity: it.quantity,
+          unitHint: it.unit,
+          chosen: { sku: settled, score: 1, fuzzy: 1, specificity: 99, method: 'EXACT' as const },
+          alternates: [],
+          confidence: 1,
+          needsDisambiguation: false,
+        },
+        fromPointer: true,
+      }))
+    : resolve({
+        text: ctx.said,
+        spans: items,
+        catalogue: catalog,
+        prior,
+        lastNamed: ctx.convo.lastNamed,
+      });
 
   /**
    * A pointer with nothing to point at is a question, not a failure.
@@ -1221,6 +1311,21 @@ async function placeOrder(
   ctx.convo.basket = mergeBasket(ctx.convo.basket, kept);
   ctx.convo.pending = null;
 
+  /**
+   * "YEH" MEANS WHAT WE ARE TALKING ABOUT NOW.
+   *
+   * remember() used to be called only where the shop ANSWERED something,
+   * so the referent was pinned to the last thing ASKED about and never
+   * moved when the conversation did:
+   *
+   *   moong dal ka price kitna h   yeh -> Moong Dal
+   *   do kilo atta bhej do         yeh -> Moong Dal   <- topic moved, this did not
+   *
+   * Putting something in the basket is talking about it, and it is the
+   * most recent thing said.
+   */
+  remember(ctx, kept.map((l) => ({ id: l.skuId!, name: l.name })));
+
   const added = kept.map((l) => withoutPack(l.name));
 
   return speak(
@@ -1479,13 +1584,17 @@ async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | n
  * surviving line by hand and writing a replacement; with a basket it is
  * a splice.
  */
-function dropFromBasket(ctx: Ctx): Promise<OutboundMessage[]> | null {
+function dropFromBasket(ctx: Ctx, named?: string): Promise<OutboundMessage[]> | null {
   const basket = ctx.convo.basket;
   /**
    * The same scorer again, pointed at the basket. This was namesLine, a
    * third matcher with a fourth notion of what counts as a match.
+   *
+   * Matched against what the POLICY layer says they named, when it says
+   * anything: "sugar hata do" arrives as productQuery "sugar" with the
+   * command already stripped, so "hata do" never reaches the matcher.
    */
-  const at = pickFrom(ctx.said, basket.map((l) => ({
+  const at = pickFrom(named ?? ctx.said, basket.map((l) => ({
     id: l.skuId!, kiranaId: ctx.kiranaId, name: l.name, brand: null,
     packSize: 1, unit: 'pc', sellPaise: l.unitPricePaise, category: null, aliases: [],
   })));

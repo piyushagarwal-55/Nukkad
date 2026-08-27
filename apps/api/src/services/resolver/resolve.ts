@@ -1,6 +1,7 @@
 import type { Sku, ResolvedLine } from '@nukkad/shared';
 import { rankLine, DEFAULT_RANK, stripQuantity } from './rank.js';
 import type { Prior } from './prior.js';
+import { maskActions } from './action.js';
 
 /**
  * ONE RESOLUTION STEP, WITH ALL THE CONTEXT, BEFORE ANYONE DECIDES WHAT
@@ -62,6 +63,12 @@ export interface ResolveInput {
   prior: Prior;
   /** what the shop named in its previous reply, for resolving pointers */
   lastNamed: Array<{ skuId: string; name: string }>;
+  /**
+   * The parser has already decided the product comes from the
+   * conversation rather than from this message. Then nothing is searched:
+   * see the note on productSource in the extraction schema.
+   */
+  fromState?: boolean;
 }
 
 /**
@@ -83,14 +90,29 @@ const POINTERS = new Set([
 const FILLER = new Set([
   'bhi', 'bhee', 'aur', 'zara', 'na', 'to', 'hi', 'ji', 'please', 'too',
   'also', 'wala', 'wali', 'ka', 'ke', 'ki',
+  // instruction verbs, which are never products
+  'do', 'dena', 'dijiye', 'dedo', 'bhej', 'bhejo', 'bhejna', 'pack',
+  'kar', 'karo', 'kro', 'add', 'chahiye', 'chaiye',
+  // agreement and refusal: meaningful to the state machine, never a product
+  'haan', 'han', 'ha', 'haa', 'yes', 'ok', 'okay', 'theek', 'thik', 'accha',
+  'nahi', 'nai', 'no',
 ]);
 
-export function isPointer(text: string): boolean {
-  const ws = stripQuantity(text)
+const words = (text: string) =>
+  stripQuantity(text)
     .toLowerCase()
     .split(/[^a-z]+/)
     .filter((w) => w && !FILLER.has(w));
+
+/** the whole phrase is a pointer: "yeh", "wo wala", "yeh bhi" */
+export function isPointer(text: string): boolean {
+  const ws = words(text);
   return ws.length > 0 && ws.every((w) => POINTERS.has(w));
+}
+
+/** a pointer is in there somewhere, among other words */
+function hasPointer(text: string): boolean {
+  return words(text).some((w) => POINTERS.has(w));
 }
 
 export function resolve(input: ResolveInput): Reference[] {
@@ -101,11 +123,118 @@ export function resolve(input: ResolveInput): Reference[] {
    * extra grammar costs almost nothing -- which is precisely what makes
    * this fallback safe, and what made it useless before.
    */
-  const spans = input.spans.length
-    ? input.spans
-    : [{ text: input.text, quantity: 1, unit: null }];
+  /**
+   * MASK THE WHOLE MESSAGE FIRST, THEN JUDGE THE SPANS.
+   *
+   * Masking each span on its own does not work, because the extractor
+   * gets there first: given "haan daal do" it hands back a span of
+   * "daal", the phrase is already broken in half, and "daal" alone is a
+   * lentil by every measure. The shop added Toor Dal to a customer who
+   * had just been quoted the price of sugar.
+   *
+   * So commands are recognised in the ORIGINAL message, and a span that
+   * lives entirely inside one is dropped. That is the negative rule: a
+   * catalogue match found wholly within a recognised command is not a
+   * product, whatever it scores.
+   */
+  const whole = maskActions(input.text);
+
+  /**
+   * What is left that could name a product -- commands gone, quantities
+   * gone, filler and affirmations gone. "haan daal do" leaves nothing;
+   * "ek kilo atta daal do" leaves atta.
+   */
+  /**
+   * SPANS WIN WHEN THERE ARE SPANS.
+   *
+   * The whole-message reasoning below is for messages that named nothing
+   * of their own. When the caller has already identified products -- a
+   * photographed list, or the policy layer handing over what the customer
+   * named -- those are the answer, and each is masked on its own as a
+   * guard rather than re-derived from a sentence.
+   *
+   * Missing this collapsed a five-item shopping list to one line: a photo
+   * carries no message text at all, so the masked remainder was empty and
+   * the single-reference path took over.
+   */
+  const spanSurvivors = input.fromState
+    ? []
+    : input.spans.filter((sp) => maskActions(sp.text).rest.trim().length > 0);
+
+  const productish = spanSurvivors.length ? ['x'] : (input.fromState ? [] : words(whole.rest));
 
   const referent = input.lastNamed.length === 1 ? input.lastNamed[0]! : null;
+
+  const pointTo = (sku: Sku, span: { text: string; quantity: number; unit: string | null }): Reference => ({
+    sourceText: span.text,
+    quantity: span.quantity,
+    unitHint: span.unit,
+    line: {
+      sourceText: span.text,
+      quantity: span.quantity,
+      unitHint: span.unit,
+      chosen: { sku, score: 1, fuzzy: 1, specificity: 99, method: 'EXACT' },
+      alternates: [],
+      confidence: 1,
+      needsDisambiguation: false,
+    },
+    fromPointer: true,
+  });
+
+  const first = input.spans[0] ?? { text: input.text, quantity: 1, unit: null };
+
+  if (!productish.length) {
+    /**
+     * THE STATE RULE, and it is the primary path rather than a fallback.
+     *
+     * The message names no product of its own, so it is about whatever
+     * the conversation was already about. Nothing is searched, because
+     * searching can only produce a wrong answer -- "haan daal do" after a
+     * sugar price is the sugar.
+     */
+    const sku = referent && input.catalogue.find((s) => s.id === referent.skuId);
+    if (sku) return [pointTo(sku, first)];
+
+    /**
+     * The parser said the product was in the conversation and there is
+     * nothing there. Report it unresolved so the caller ASKS -- inventing
+     * a search at this point is how "yeh" became dry yeast.
+     */
+    if (input.fromState) {
+      return [{
+        sourceText: first.text,
+        quantity: first.quantity,
+        unitHint: first.unit,
+        line: null,
+        fromPointer: true,
+      }];
+    }
+
+    /**
+     * No referent either, so the mask may have eaten the only product
+     * word there was. "ek kilo daal do" from a customer the shop has
+     * told nothing yet really is a kilo of dal. Put it back.
+     */
+    const line = rankLine(
+      input.text, first.quantity, first.unit, input.catalogue, input.prior, DEFAULT_RANK,
+    );
+    return [{
+      sourceText: first.text,
+      quantity: first.quantity,
+      unitHint: first.unit,
+      line: line.chosen ? line : null,
+      fromPointer: false,
+    }];
+  }
+
+  /**
+   * Something product-like survived. Keep the extractor's spans that
+   * overlap it, and fall back to the masked remainder when none do --
+   * which is what happens on the runs where it returns no spans at all.
+   */
+  const spans = spanSurvivors.length
+    ? spanSurvivors
+    : [{ text: whole.rest, quantity: first.quantity, unit: first.unit }];
 
   return spans.map((span) => {
     const pointing = isPointer(span.text);
@@ -145,9 +274,43 @@ export function resolve(input: ResolveInput): Reference[] {
       };
     }
 
+    /**
+     * Ranked on the MASKED text, so a command can never be mistaken for a
+     * product. Falls back to the original when masking left nothing and
+     * there was no referent either -- "ek kilo daal do" from a customer
+     * the shop has told nothing yet really is a kilo of dal, and the
+     * mask would otherwise have eaten the only product word in it.
+     */
     const line = rankLine(
-      span.text, span.quantity, span.unit, input.catalogue, input.prior, DEFAULT_RANK,
+      span.text, span.quantity, span.unit,
+      input.catalogue, input.prior, DEFAULT_RANK,
     );
+
+    /**
+     * A pointer among other words, and nothing else confidently named.
+     * "yeh wala atta bhi do" leaves "atta" and gets the atta; "yeh bhi"
+     * leaves nothing and means what they were just talking about.
+     */
+    if (referent && hasPointer(span.text) && (!line.chosen || line.needsDisambiguation)) {
+      const sku = input.catalogue.find((s) => s.id === referent.skuId);
+      if (sku) {
+        return {
+          sourceText: span.text,
+          quantity: span.quantity,
+          unitHint: span.unit,
+          line: {
+            sourceText: span.text,
+            quantity: span.quantity,
+            unitHint: span.unit,
+            chosen: { sku, score: 1, fuzzy: 1, specificity: 99, method: 'EXACT' },
+            alternates: [],
+            confidence: 1,
+            needsDisambiguation: false,
+          },
+          fromPointer: true,
+        };
+      }
+    }
 
     return {
       sourceText: span.text,

@@ -78,6 +78,27 @@ export const extractionSchema = z.object({
    * for 10-15 turns does not transfer here, and pretending it does would
    * be cargo-culting a paper rather than reading it.
    */
+  /**
+   * WHERE THE PRODUCT IS TO BE FOUND, which is a different question from
+   * what it is -- and the parser only ever answers the first one.
+   *
+   *   EXPLICIT    they named it here; the spans above are real
+   *   LAST_NAMED  they pointed at what was just discussed
+   *   NONE        no product is involved at all
+   *
+   * This field exists because the alternative was inferring it from
+   * whether `items` came back empty, and that inference is wrong on a
+   * measurable fraction of runs: the same sentence yields a span once and
+   * nothing the next time. Asking directly, with the recent turns in
+   * view, is a question the model can actually answer.
+   *
+   * It still never names a SKU. LAST_NAMED means "the one from before"
+   * and the state resolver supplies which; EXPLICIT hands over a verbatim
+   * span and the catalogue-constrained ranker decides. Letting a model
+   * pick the product is the failure this whole design exists to avoid.
+   */
+  productSource: z.enum(['EXPLICIT', 'LAST_NAMED', 'NONE']).default('EXPLICIT'),
+
   goal: z
     .enum(['ORDERING', 'RECOMMENDATION', 'QA', 'SEARCH', 'META'])
     .default('ORDERING'),
