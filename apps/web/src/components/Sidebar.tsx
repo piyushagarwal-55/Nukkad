@@ -61,6 +61,7 @@ const ICON = {
   bill: 'M7 3h10a1 1 0 0 1 1 1v17l-3-2-3 2-3-2-3 2V4a1 1 0 0 1 1-1Zm2 5h6M9 12h6',
   orders: 'M6 2h9l4 4v15a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Zm8 0v5h5M9 13h6M9 17h4',
   whatsapp: 'M12 3a9 9 0 0 0-7.7 13.7L3 21l4.4-1.2A9 9 0 1 0 12 3Z',
+  voice: 'M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Zm7 9a7 7 0 0 1-14 0m7 7v3',
 } as const;
 
 const NAV = [
@@ -69,6 +70,7 @@ const NAV = [
   { href: '/dashboard/bills', label: 'Bill upload', icon: ICON.bill, fill: false },
   { href: '/dashboard/orders', label: 'Orders', icon: ICON.orders, fill: false },
   { href: '/dashboard/connect', label: 'WhatsApp', icon: ICON.whatsapp, fill: false },
+  { href: '/dashboard/voice', label: 'Voice', icon: ICON.voice, fill: false },
 ];
 
 export function Sidebar({ shopName }: { shopName: string }) {

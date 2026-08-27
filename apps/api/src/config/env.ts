@@ -62,6 +62,15 @@ const schema = z.object({
    */
   SARVAM_MODE: z.string().default('translit'),
 
+  /**
+   * The speaking half, same key as the listening half. bulbul:v2 is
+   * deprecated and took its speaker names with it -- v3 accepts aditya,
+   * ritu, priya, rahul, pooja, rohan. A stale name 400s the whole call.
+   */
+  SARVAM_TTS_MODEL: z.string().default('bulbul:v3'),
+  SARVAM_TTS_SPEAKER: z.string().default('ritu'),
+  SARVAM_TTS_LANGUAGE: z.string().default('hi-IN'),
+
   // Razorpay
   RAZORPAY_KEY_ID: z.string().startsWith('rzp_'),
   RAZORPAY_KEY_SECRET: z.string().min(10),
