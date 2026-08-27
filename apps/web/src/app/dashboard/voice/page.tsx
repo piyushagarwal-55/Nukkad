@@ -31,7 +31,8 @@ interface Trace {
   totalMs: number;
   basket: string[];
   lastNamed: string[];
-  audioBase64: string | null;
+  /** filled in when the stream finishes: how long until the first sound */
+  firstSoundMs?: number;
 }
 
 type Phase = 'idle' | 'listening' | 'thinking';
@@ -72,14 +73,70 @@ export default function Voice() {
             headers: { 'Content-Type': blob.type },
             body: blob,
           });
-          if (!res.ok) throw new Error(`server said ${res.status}`);
+          if (!res.ok || !res.body) throw new Error(`server said ${res.status}`);
 
-          const trace = (await res.json()) as Trace;
-          setTurns((t) => [...t, trace]);
+          /**
+           * SENTENCES ARRIVE ONE AT A TIME and are played in order.
+           *
+           * The point of cutting the reply into sentences on the server
+           * is that the first one can be heard while the rest is still
+           * being made. Waiting for the whole stream before playing any
+           * of it would give all of that back.
+           */
+          const queue: string[] = [];
+          let playing = false;
 
-          if (trace.audioBase64) {
-            const audio = new Audio(`data:audio/wav;base64,${trace.audioBase64}`);
-            void audio.play().catch(() => undefined);
+          const drain = async () => {
+            if (playing) return;
+            playing = true;
+            while (queue.length) {
+              const b64 = queue.shift()!;
+              const el = new Audio(`data:audio/wav;base64,${b64}`);
+              await new Promise<void>((done) => {
+                el.onended = () => done();
+                el.onerror = () => done();
+                void el.play().catch(() => done());
+              });
+            }
+            playing = false;
+          };
+
+          const reader = res.body.getReader();
+          const dec = new TextDecoder();
+          let buf = '';
+
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+
+            // SSE frames are separated by a blank line
+            const parts = buf.split('\n\n');
+            buf = parts.pop() ?? '';
+
+            for (const part of parts) {
+              const line = part.replace(/^data: /, '').trim();
+              if (!line) continue;
+              const ev = JSON.parse(line) as
+                | ({ type: 'trace' } & Trace)
+                | { type: 'audio'; b64: string }
+                | { type: 'done'; firstMs: number; totalMs: number }
+                | { type: 'error'; message: string };
+
+              if (ev.type === 'trace') {
+                setTurns((t) => [...t, ev]);
+                setPhase('idle');
+              } else if (ev.type === 'audio') {
+                queue.push(ev.b64);
+                void drain();
+              } else if (ev.type === 'done') {
+                setTurns((t) =>
+                  t.map((x, i) => (i === t.length - 1 ? { ...x, firstSoundMs: ev.firstMs } : x)),
+                );
+              } else if (ev.type === 'error') {
+                setErr(ev.message);
+              }
+            }
           }
         } catch (e) {
           setErr((e as Error).message);
@@ -118,7 +175,7 @@ export default function Voice() {
           `SAID    ${t.reply}`,
           `BASKET  ${t.basket.join(', ') || '(empty)'}`,
           `"YEH"   ${t.lastNamed.join(', ') || '(nothing)'}`,
-          `TIMING  ear ${t.asrMs}ms + think ${t.totalMs - t.asrMs - t.ttsMs}ms + mouth ${t.ttsMs}ms = ${t.totalMs}ms`,
+          `TIMING  ear ${t.asrMs}ms + think ${t.totalMs - t.asrMs}ms + first sound ${t.firstSoundMs ?? '?'}ms`,
         ].filter(Boolean).join('\n'),
       )
       .join('\n\n');
@@ -190,8 +247,13 @@ export default function Voice() {
           <div className="flex flex-wrap items-baseline justify-between gap-3">
             <span className="muted text-xs">turn {i + 1}</span>
             <span className="muted text-xs tabular-nums">
-              ear {t.asrMs}ms &middot; think {t.totalMs - t.asrMs - t.ttsMs}ms &middot; mouth{' '}
-              {t.ttsMs}ms &middot; <b className="text-[var(--ink)]">{t.totalMs}ms</b>
+              ear {t.asrMs}ms &middot; think {t.totalMs - t.asrMs}ms
+              {t.firstSoundMs ? (
+                <>
+                  {' '}&middot; first sound{' '}
+                  <b className="text-[var(--ink)]">+{t.firstSoundMs}ms</b>
+                </>
+              ) : null}
             </span>
           </div>
 

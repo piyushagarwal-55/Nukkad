@@ -82,7 +82,19 @@ function speakable(reply: string): string {
 
 export async function voiceTurn(
   audioIn: Buffer,
-  opts: { phone: string; shopPhone: string; mime?: string },
+  opts: {
+    phone: string;
+    shopPhone: string;
+    mime?: string;
+    /**
+     * Synthesise the whole reply here. False when the caller intends to
+     * speak it a sentence at a time -- see voice/speech.ts -- which is
+     * what every real transport does, because waiting for the last
+     * sentence before playing the first is the thing that made a turn
+     * feel like a dropped line.
+     */
+    speak?: boolean;
+  },
 ): Promise<VoiceTurn> {
   const started = Date.now();
   await mkdir(MEDIA, { recursive: true });
@@ -121,7 +133,7 @@ export async function voiceTurn(
 
   const reply = replies.map((r) => r.text).join('\n') || '';
   const spoken = speakable(reply);
-  const said = await speak(spoken);
+  const said = opts.speak === false ? null : await speak(spoken);
 
   const convo = await prisma.conversation.findFirst({
     where: { channel: 'sim', peerPhone: opts.phone },

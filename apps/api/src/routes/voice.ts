@@ -1,30 +1,42 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma, Prisma } from '@nukkad/db';
 import { voiceTurn } from '../services/voice/turn.js';
+import { speakInChunks } from '../services/voice/speech.js';
 
 /**
  * The browser end of the voice agent.
  *
  * Deliberately the same voiceTurn() the local harness uses and the same
  * one a phone webhook will use. A call is a transport; this is a
- * transport; neither is the agent. The point of that is cost -- every
- * fix can be found and verified here for nothing, and telephony credit
- * is spent only on confirming that the transport works.
+ * transport; neither is the agent. That is what makes every fix findable
+ * for free -- telephony credit gets spent confirming the transport, not
+ * debugging the shop.
  *
- * The whole trace comes back in the response rather than only being
- * logged, so the page can show what the ear heard next to what the shop
- * said. Nearly every voice bug is visible in that one comparison, and it
- * is exactly the line you cannot see from a handset.
+ * The reply is streamed as SERVER-SENT EVENTS rather than returned whole,
+ * because the point of chunking speech is that playback starts before
+ * synthesis finishes. Waiting for the last sentence to be made before
+ * sending the first defeats it entirely.
+ *
+ * Wire format, one JSON object per event:
+ *
+ *   {"type":"trace", ...}                 what was heard and decided
+ *   {"type":"audio","index":0,"b64":...}  a sentence, ready to play
+ *   {"type":"done","firstMs":..,"totalMs":..}
  */
 export async function voiceRoutes(app: FastifyInstance) {
   const HOUSEHOLD = '+918979560165';
   const SHOP = '+919927306131';
 
   /**
-   * Raw audio bytes, not multipart. The browser posts a Blob straight
-   * from MediaRecorder and this saves a parser and a dependency; the
-   * content type carries the codec, and ffmpeg normalises it anyway.
+   * BARGE-IN. One turn per caller, and a new one cancels the old.
+   *
+   * If the customer starts talking while the shop is still speaking, the
+   * sentences not yet synthesised are never made -- which is both faster
+   * and the difference between an agent that listens and one that talks
+   * over you. Keyed by phone because that is who is interrupting whom.
    */
+  const inFlight = new Map<string, AbortController>();
+
   app.addContentTypeParser(
     ['audio/webm', 'audio/ogg', 'audio/wav', 'audio/mpeg', 'application/octet-stream'],
     { parseAs: 'buffer' },
@@ -37,40 +49,68 @@ export async function voiceRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'no audio' });
     }
 
-    const mime = (req.headers['content-type'] ?? 'audio/webm').split(';')[0];
+    inFlight.get(HOUSEHOLD)?.abort();
+    const ctrl = new AbortController();
+    inFlight.set(HOUSEHOLD, ctrl);
 
-    const { trace, audio: out } = await voiceTurn(audio, {
-      phone: HOUSEHOLD,
-      shopPhone: SHOP,
-      mime,
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'Access-Control-Allow-Origin': req.headers.origin ?? '*',
+      'Access-Control-Allow-Credentials': 'true',
     });
 
-    /**
-     * Logged server-side as well as returned, in one block, because the
-     * fastest way to fix a voice bug is to paste the whole turn to
-     * somebody rather than describe it.
-     */
-    app.log.info(
-      {
-        heard: trace.heard,
-        engine: trace.asrEngine,
-        action: `${trace.action}/${trace.goal}`,
-        said: trace.spoken,
-        basket: trace.basket,
-        ms: { ear: trace.asrMs, mouth: trace.ttsMs, total: trace.totalMs },
-      },
-      'voice turn',
-    );
-
-    return {
-      ...trace,
-      // base64 so the page can play it without a second request
-      audioBase64: out ? out.toString('base64') : null,
+    const send = (o: unknown) => {
+      if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(o)}\n\n`);
     };
+
+    try {
+      const mime = (req.headers['content-type'] ?? 'audio/webm').split(';')[0];
+      const { trace } = await voiceTurn(audio, {
+        phone: HOUSEHOLD,
+        shopPhone: SHOP,
+        mime,
+        speak: false, // the speaking happens below, a sentence at a time
+      });
+
+      if (ctrl.signal.aborted) return reply.raw.end();
+
+      // the words go out first: the page can show them while the audio
+      // is still being made, which is most of what makes it feel quick
+      send({ type: 'trace', ...trace });
+
+      const spoken = await speakInChunks(
+        trace.spoken,
+        (c) => send({ type: 'audio', index: c.index, text: c.text, b64: c.audio.toString('base64'), ms: c.ms }),
+        { signal: ctrl.signal },
+      );
+
+      send({ type: 'done', ...spoken });
+
+      app.log.info(
+        {
+          heard: trace.heard,
+          engine: trace.asrEngine,
+          action: `${trace.action}/${trace.goal}`,
+          said: trace.spoken,
+          basket: trace.basket,
+          ms: { ear: trace.asrMs, think: trace.totalMs - trace.asrMs, firstSound: spoken.firstMs },
+        },
+        'voice turn',
+      );
+    } catch (err) {
+      app.log.error({ err }, 'voice turn failed');
+      send({ type: 'error', message: (err as Error).message });
+    } finally {
+      if (inFlight.get(HOUSEHOLD) === ctrl) inFlight.delete(HOUSEHOLD);
+      reply.raw.end();
+    }
   });
 
   /** start a fresh conversation, so a test run is not read against a stale basket */
   app.post('/voice/reset', async () => {
+    inFlight.get(HOUSEHOLD)?.abort();
     await prisma.conversation.updateMany({
       where: { channel: 'sim', peerPhone: HOUSEHOLD },
       data: { state: 'IDLE', contextJson: Prisma.DbNull },
