@@ -56,6 +56,41 @@ function amount(quantity: number, unit: string | null): { base: number; kind: 'm
   return null;
 }
 
+/**
+ * NAMING A PRODUCT versus QUOTING A PACKET.
+ *
+ * "daal kaunsi kaunsi hai" asks which KINDS the shop has, and answering
+ * "Moong Dal 1kg, Chana Dal 1kg, Toor Dal 1kg" repeats a size nobody
+ * asked about three times. The customer is choosing a dal, not a bag.
+ *
+ * The size is not always noise, though, and that is what makes this a
+ * rule rather than a deletion. Aashirvaad Atta 5kg and Aashirvaad Atta
+ * 10kg differ in NOTHING ELSE -- strip the pack from those and the
+ * question becomes "atta ya atta".
+ *
+ * So: drop the pack size unless it is the thing telling the options
+ * apart. Where a price or an order line is being quoted the size stays
+ * regardless, because there the packet IS what is being bought.
+ */
+const PACK_SUFFIX =
+  /[\s,-]+\d+(?:\.\d+)?\s*(?:kg|kgs|g|gm|gms|ml|l|ltr|litre|liter|pack|packs|packet|pc|pcs|piece|dozen)\b\.?$/i;
+
+export const withoutPack = (name: string): string =>
+  name.replace(PACK_SUFFIX, '').trim() || name;
+
+/**
+ * Shorten a set of names as far as they stay distinguishable.
+ *
+ * All-or-nothing per collision group rather than per name: showing
+ * "Aashirvaad Whole Wheat Atta 5kg" beside a bare "Toor Dal" reads as
+ * though the sizes mean something different in each case.
+ */
+export function displayNames(names: string[]): string[] {
+  const short = names.map(withoutPack);
+  const collides = new Set(short.filter((n, i) => short.indexOf(n) !== i));
+  return names.map((full, i) => (collides.has(short[i]!) ? full : short[i]!));
+}
+
 export interface PackFit {
   /** how many packets to actually put in the order */
   units: number;

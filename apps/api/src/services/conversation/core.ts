@@ -10,7 +10,7 @@ import { getCatalog, getStockMap } from '../catalog/cache.js';
 import { buildPrior } from '../resolver/prior.js';
 import { rankLine, DEFAULT_RANK, stripQuantity } from '../resolver/rank.js';
 import { fuzzyScore } from '../resolver/fuzzy.js';
-import { fitPack } from '../resolver/pack.js';
+import { fitPack, displayNames, withoutPack } from '../resolver/pack.js';
 import { findSubstitutes } from '../substitution/substitute.js';
 import { hasVision } from '../../config/env.js';
 import { readAnswer, namesLine } from './reply.js';
@@ -759,8 +759,8 @@ async function question(
     if (found.length) {
       return speak(
         ctx,
-        { kind: 'LISTING', asked: spans[0]!, options: found.map((s) => s.name) },
-        copy.listing(found.map((s) => s.name)),
+        { kind: 'LISTING', asked: spans[0]!, options: displayNames(found.map((s) => s.name)) },
+        copy.listing(displayNames(found.map((s) => s.name))),
         card,
       );
     }
@@ -934,7 +934,12 @@ async function advance(
       askedAt: new Date().toISOString(),
     };
 
-    const names = options.map((o) => o.name);
+    /**
+     * The stored options keep their FULL names -- that is what the answer
+     * is matched against and what prices the line. Only the SPOKEN list is
+     * shortened. See displayNames in resolver/pack.ts.
+     */
+    const names = displayNames(options.map((o) => o.name));
 
     /**
      * TWO DIFFERENT QUESTIONS, and they should not sound alike.
@@ -1267,7 +1272,11 @@ async function rejectLine(ctx: Ctx, orderId: string): Promise<OutboundMessage[] 
   ctx.meta = { ...ctx.meta, startedAt: Date.now() };
   const reply = await speak(
     ctx,
-    { kind: 'REJECTED', rejected: target.sku!.name, options: options.map((s) => s.name) },
+    {
+      kind: 'REJECTED',
+      rejected: withoutPack(target.sku!.name),
+      options: displayNames(options.map((s) => s.name)),
+    },
     copy.rejected(target.sku!.name),
   );
 
@@ -1334,7 +1343,7 @@ async function expire(pending: Pending): Promise<void> {
 function reAsk(ctx: Ctx, pending: Pending): Promise<OutboundMessage[]> {
   if (pending.kind === 'DISAMBIGUATE') {
     const line = pending.lines[pending.index]!;
-    const names = pending.options.map((o) => o.name);
+    const names = displayNames(pending.options.map((o) => o.name));
     return speak(
       ctx,
       { kind: 'ASK_WHICH', sourceText: line.sourceText, options: names },
