@@ -117,6 +117,9 @@ function LineCard({
   const cands = line.candidates?.catalogue ?? [];
   const delta = line.priceDeltaPaise;
 
+  /** ambiguous with nothing chosen: the commit route will skip this */
+  const unresolved = line.decision === 'AMBIGUOUS' && !line.skuId;
+
   return (
     <div className="border-t border-[#1a1a1a14] px-3 py-4 first:border-t-0">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -161,9 +164,12 @@ function LineCard({
               unit, tax included -- not the pre-tax list price. */}
           {line.listPricePaise !== null && (
             <p className="muted mt-1 text-[11px]">
+              {/* Literal characters, not &plus; and &minus;. JSX decodes the
+                  common HTML entity names but not those two, so they were
+                  rendering as the raw text "&plus;" on every GST line. */}
               bill says list &#8377;{rupees(line.listPricePaise)}
-              {line.discPct ? <> &minus; {line.discPct}% disc</> : null}
-              {line.taxPct ? <> &plus; {line.taxPct}% GST</> : null}
+              {line.discPct ? <> &#8722; {line.discPct}% disc</> : null}
+              {line.taxPct ? <> + {line.taxPct}% GST</> : null}
               {' '}&rarr; <b className="text-[var(--ink)]">&#8377;{rupees(line.ratePaise)}</b> actually paid per unit
             </p>
           )}
@@ -195,16 +201,32 @@ function LineCard({
 
       {/* what the owner can change */}
       <div className="mt-3 flex flex-wrap items-center gap-2">
+        {/*
+          THE SELECT MUST SAY WHAT WILL ACTUALLY HAPPEN.
+
+          It used to fall back to "Create as a new item" whenever there was
+          no skuId, which is exactly the state an unresolved AMBIGUOUS line
+          is in. So the screen read "Create as a new item", the commit route
+          saw AMBIGUOUS with no sku and skipped the line, and the owner got
+          a success message for a product that was never written. A bill
+          line that silently does nothing is worse than one that fails.
+
+          Unresolved is now its own value. It cannot be applied, and the
+          Apply button says so.
+        */}
         <select
-          value={line.decision === 'NEW' ? 'NEW' : (line.skuId ?? 'NEW')}
+          value={unresolved ? 'UNRESOLVED' : line.decision === 'NEW' ? 'NEW' : (line.skuId ?? 'NEW')}
           onChange={(e) => {
             const v = e.target.value;
+            if (v === 'UNRESOLVED') return;
             if (v === 'NEW') onChange({ decision: 'NEW', skuId: null });
             else if (v === 'SKIPPED') onChange({ decision: 'SKIPPED', skuId: null });
             else onChange({ decision: 'RESTOCK', skuId: v });
           }}
-          className="inv-field !w-auto max-w-[300px] !py-1.5 !text-xs"
+          data-unresolved={unresolved}
+          className="inv-field !w-auto max-w-[320px] !py-1.5 !text-xs data-[unresolved=true]:!border-[var(--hot)] data-[unresolved=true]:!bg-[var(--hot)]/10"
         >
+          {unresolved && <option value="UNRESOLVED">&#9888; Choose what to do with this line</option>}
           <option value="NEW">Create as a new item</option>
           {cands.map((c) => (
             <option key={c.id} value={c.id}>
@@ -317,6 +339,11 @@ export default function Bills() {
     } finally { setBusy(false); }
   }
 
+  /** lines the commit route will skip because nothing was chosen for them */
+  const unresolvedCount = plan
+    ? plan.lines.filter((l) => l.decision === 'AMBIGUOUS' && !l.skuId).length
+    : 0;
+
   const counts = plan
     ? {
         restock: plan.lines.filter((l) => l.decision === 'RESTOCK').length,
@@ -426,6 +453,7 @@ export default function Bills() {
           <div className="mt-5 flex flex-wrap items-center gap-3">
             <button
               onClick={commit}
+              title={unresolvedCount ? `${unresolvedCount} line(s) will be skipped` : undefined}
               disabled={busy || (plan.docType === 'RETAIL' && !confirmRetail)}
               className="rounded-lg border-2 border-[var(--ink)] bg-[var(--accent)] px-5 py-2.5 text-sm font-semibold shadow-[4px_4px_0_var(--ink)] disabled:opacity-40"
             >
@@ -434,9 +462,10 @@ export default function Bills() {
             <button onClick={() => setPlan(null)} className="muted text-sm hover:text-[var(--ink)]">
               Discard
             </button>
-            {counts && counts.ask > 0 && (
-              <p className="muted text-xs">
-                Lines marked <b>ambiguous</b> are skipped unless you pick a match above.
+            {unresolvedCount > 0 && (
+              <p className="text-xs text-[var(--warn)]">
+                <b>{unresolvedCount} line{unresolvedCount === 1 ? '' : 's'} will be skipped</b>{' '}
+                until you choose what to do with {unresolvedCount === 1 ? 'it' : 'them'}.
               </p>
             )}
           </div>
