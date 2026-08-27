@@ -55,6 +55,10 @@ export interface PlannedLine {
   pack: string | null;
   /** printed MRP. A sound default selling price; NOT the price paid. */
   mrpPaise: number | null;
+  /** pre-tax, pre-discount unit price off a GST invoice */
+  listPricePaise: number | null;
+  discPct: number | null;
+  taxPct: number | null;
   /** a quantity with no amount. Never priced, never counted in the total. */
   isFree: boolean;
   quantity: number;
@@ -411,6 +415,27 @@ async function repair(s: State): Promise<Partial<State>> {
       }
     }
 
+    /**
+     * A GST invoice gives list price, discount and tax rather than a rate.
+     * The amount already has both applied, so the honest unit cost is the
+     * amount divided by the quantity -- what the shop actually parted with
+     * per unit, tax included -- and NOT the list price.
+     */
+    const gst =
+      it.listPricePaise !== null && (it.discPct !== null || it.taxPct !== null);
+
+    if (gst && amount === null) {
+      const base = qty * it.listPricePaise!;
+      const afterDisc = base * (1 - (it.discPct ?? 0) / 100);
+      const withTax = Math.round(afterDisc * (1 + (it.taxPct ?? 0) / 100));
+      derivedAmount++;
+      return { ...it, ratePaise: Math.round(withTax / qty), amountPaise: withTax, derived: ['amount-from-gst'] };
+    }
+    if (gst && amount !== null) {
+      derivedRate++;
+      return { ...it, ratePaise: Math.round(amount / qty), amountPaise: amount, derived: ['rate-from-gst'] };
+    }
+
     if (rate !== null && amount !== null) return { ...it, ratePaise: rate, amountPaise: amount, derived: [] as string[] };
 
     if (rate === null && amount !== null && qty > 0) {
@@ -491,10 +516,27 @@ function arithmeticOf(items: ParsedBill['items'], repairs: Record<number, string
     // Derived numbers satisfy the equation by construction; checking them
     // would only ever confirm our own arithmetic. The check is for what was
     // actually READ off the paper.
-    const wasDerived = (repairs[i] ?? []).length > 0;
-    if (wasDerived || it.free || it.ratePaise === null || !it.amountPaise) {
-      return { ok: true, note: null as string | null };
+    if (it.free || !it.amountPaise) return { ok: true, note: null as string | null };
+
+    /**
+     * Where a GST invoice gave us every part, check the WHOLE equation.
+     * This is the one case worth checking even though repair touched the
+     * line, because all four numbers came off the paper independently and
+     * the arithmetic between them is a genuine test of the reading.
+     */
+    if (it.listPricePaise !== null && (it.discPct !== null || it.taxPct !== null)) {
+      const base = it.qty * it.listPricePaise;
+      const full = Math.round(base * (1 - (it.discPct ?? 0) / 100) * (1 + (it.taxPct ?? 0) / 100));
+      return Math.abs(full - it.amountPaise) <= ARITH_TOLERANCE
+        ? { ok: true, note: null }
+        : {
+            ok: false,
+            note: `${it.qty} x ${(it.listPricePaise / 100).toFixed(2)} less ${it.discPct ?? 0}% plus ${it.taxPct ?? 0}% tax is ${(full / 100).toFixed(2)}, but the bill says ${(it.amountPaise / 100).toFixed(2)}`,
+          };
     }
+
+    const wasDerived = (repairs[i] ?? []).length > 0;
+    if (wasDerived || it.ratePaise === null) return { ok: true, note: null };
     const expected = Math.round(it.qty * it.ratePaise);
     const off = Math.abs(expected - it.amountPaise);
     return off <= ARITH_TOLERANCE
@@ -670,6 +712,9 @@ async function retrieve(s: State): Promise<Partial<State>> {
         unit: sc?.unit ?? null,
         pack: it.pack,
         mrpPaise: it.mrpPaise,
+        listPricePaise: it.listPricePaise,
+        discPct: it.discPct,
+        taxPct: it.taxPct,
         isFree: !!it.free,
         quantity: it.qty,
         ratePaise: it.ratePaise ?? 0,

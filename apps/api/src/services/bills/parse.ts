@@ -43,6 +43,19 @@ const billSchema = z.object({
      * on its own: MRP is a sound default selling price.
      */
     mrpPaise: z.number().int().nonnegative().nullable().default(null),
+    /**
+     * A proper GST tax invoice prices a line in four moves, not one:
+     *
+     *     amount = qty x listPrice x (1 - disc%) x (1 + tax%)
+     *
+     * On a real invoice all three of these columns are populated and NONE
+     * of them equals the amount divided by quantity. Comparing qty x list
+     * to the amount disputes every single line of a perfectly good bill,
+     * so each part is captured and the whole equation is checked.
+     */
+    listPricePaise: z.number().int().nonnegative().nullable().default(null),
+    discPct: z.number().nonnegative().max(100).nullable().default(null),
+    taxPct: z.number().nonnegative().max(50).nullable().default(null),
     /** quantity present, amount absent: a free item. Never priced. */
     free: z.boolean().default(false),
     qty: z.number().positive(),
@@ -92,6 +105,11 @@ const PROMPT = [
   '- MRP and RATE are DIFFERENT columns. MRP is the printed maximum price;',
   '  ratePaise is what was actually charged per unit. If a bill shows only',
   '  MRP and AMOUNT, put MRP in mrpPaise and leave ratePaise null.',
+  '- A GST tax invoice has List Price, Disc. and Tax % columns. Read each',
+  '  into listPricePaise, discPct and taxPct. Do NOT put List Price into',
+  '  ratePaise: on such a bill the amount already includes tax and discount,',
+  '  so they are different numbers.',
+  '- discPct and taxPct are PERCENTAGES, not amounts. \"5.00 (%)\" is 5.',
   '- free: true for an item under a \"Free Items\" heading, or any line with',
   '  a quantity but no amount. Leave its amountPaise null.',
 ].join('\n');
