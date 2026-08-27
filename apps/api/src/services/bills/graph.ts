@@ -19,7 +19,8 @@ import {
  * decision can be too close to call and must escalate to a human instead
  * of guessing.
  *
- *   extract ─▶ verify ─▶ retrieve ─▶ reconcile ─▶ price ─▶ alias ─▶ critic ─▶ persist
+ *   extract ─▶ normalise ─▶ repair ─▶ verify ─▶ retrieve
+ *             ─▶ reconcile ─▶ price ─▶ alias ─▶ critic ─▶ persist
  *      │
  *      └─(unreadable, retries exhausted)─────────────────────────────────▶ fail
  *
@@ -42,10 +43,19 @@ import {
 export type Decision = 'RESTOCK' | 'NEW' | 'AMBIGUOUS' | 'SKIPPED';
 
 export interface PlannedLine {
+  /** verbatim from the bill, original script. NEVER overwritten. */
   rawName: string;
+  /** Roman working form used for retrieval. Equals rawName when already Roman. */
+  workingName: string;
+  /** English gloss, when the line needed transliterating */
+  gloss: string | null;
+  /** normalised unit from the quantity cell: kg, pc, peti, bori */
+  unit: string | null;
   quantity: number;
   ratePaise: number;
   amountPaise: number;
+  /** which numbers were DERIVED rather than read off the paper */
+  derived: string[];
 
   decision: Decision;
   confidence: number;
@@ -96,6 +106,12 @@ const BillState = Annotation.Root({
   }),
   /** bill-line index -> what did not add up about it */
   disputes: Annotation<Record<number, string>>({ reducer: (_p, n) => n, default: () => ({}) }),
+  /** bill-line index -> transliteration, gloss, unit */
+  script: Annotation<Record<number, { roman: string; english: string; unit: string | null; agreed: boolean }>>(
+    { reducer: (_p, n) => n, default: () => ({}) },
+  ),
+  /** bill-line index -> which numbers we solved for rather than read */
+  repairs: Annotation<Record<number, string[]>>({ reducer: (_p, n) => n, default: () => ({}) }),
   attempts: Annotation<number>({ reducer: (_p, n) => n, default: () => 0 }),
   failure: Annotation<string | null>({ reducer: (_p, n) => n, default: () => null }),
 });
@@ -142,9 +158,172 @@ async function extract(s: State): Promise<Partial<State>> {
 }
 
 /** Retry once, then give up rather than burning tokens on an unreadable photo. */
-function afterExtract(s: State): 'verify' | 'extract' | typeof END {
-  if (s.parsed) return 'verify';
+function afterExtract(s: State): 'normalise' | 'extract' | typeof END {
+  if (s.parsed) return 'normalise';
   return s.attempts < 2 ? 'extract' : END;
+}
+
+/* --------------------------------------------------------- node: normalise */
+
+const scriptSchema = z.object({
+  roman: z.string().min(1).max(80),
+  english: z.string().min(1).max(80),
+  unit: z.string().max(12).nullable().default(null),
+});
+
+const SCRIPT_PROMPT = [
+  'An Indian wholesale bill line, possibly written in Devanagari or another',
+  'Indian script, possibly in Hinglish, possibly in English.',
+  '',
+  'Return ONLY JSON: {"roman":"...","english":"...","unit":"..."}',
+  '',
+  '- roman: the name TRANSLITERATED into Roman letters, as an Indian person',
+  '  would type it. आटा -> "atta". मसूर दाल -> "masoor dal". Keep it a',
+  '  transliteration, not a translation.',
+  '- english: what the product IS in English. आटा -> "wheat flour".',
+  '  मसूर दाल -> "red lentil". These are different jobs; do both.',
+  '- unit: the unit from the quantity text, normalised to one of',
+  '  kg, g, l, ml, pc, pkt, dz, peti, bori. "8 पेटी" -> "peti".',
+  '  "90kg" -> "kg". "200pcs" -> "pc". null if there is no unit.',
+  '- If the line is already Roman, roman is the line unchanged.',
+].join('\n');
+
+const isRoman = (t: string) => !/[^\u0000-\u024F]/.test(t);
+
+/**
+ * SCRIPT AND LANGUAGE, handled as retrieval rather than translation.
+ *
+ * A Devanagari bill is not a translation problem to be solved with a
+ * Hindi-to-English dictionary. Dictionaries fail on exactly the cases that
+ * matter: handwriting variants, regional spellings, a shopkeeper writing
+ * तेल for one brand of oil and रिफाइंड for another.
+ *
+ * So this node asks for TWO INDEPENDENT READINGS of each foreign-script
+ * line -- a transliteration and an English gloss -- and then retrieves both
+ * against the knowledge base. Agreement between two different routes to the
+ * same catalogue entry is evidence. Divergence is a signal to slow down.
+ *
+ * Neither reading overwrites rawName. The bill said what it said, and the
+ * review screen shows the owner the original beside what we made of it.
+ */
+async function normalise(s: State): Promise<Partial<State>> {
+  const t0 = Date.now();
+  const items = s.parsed?.items ?? [];
+  const foreign = items.filter((i) => !isRoman(i.name));
+
+  if (!foreign.length) {
+    return {
+      script: {},
+      steps: [{ node: 'normalise', status: 'SKIP', ms: Date.now() - t0, note: 'already in Roman script' }],
+    };
+  }
+
+  const out: Record<number, { roman: string; english: string; unit: string | null; agreed: boolean }> = {};
+  let agreed = 0;
+
+  await Promise.all(items.map(async (it, i) => {
+    if (isRoman(it.name)) return;
+    try {
+      const res = await groq.chat.completions.create({
+        model: env.GROQ_LLM_MODEL_FAST,
+        temperature: 0,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: SCRIPT_PROMPT },
+          { role: 'user', content: `LINE: ${it.name}\nQUANTITY CELL: ${it.qtyText ?? '(none)'}` },
+        ],
+      });
+      const p = scriptSchema.safeParse(JSON.parse(res.choices[0]?.message?.content ?? '{}'));
+      if (!p.success) return;
+
+      // do the two readings reach the same shelf? Retrieval decides, not us.
+      const [byRoman, byEnglish] = await Promise.all([
+        retrieveKb(p.data.roman, 1),
+        retrieveKb(p.data.english, 1),
+      ]);
+      const same =
+        !!byRoman[0] && !!byEnglish[0] && byRoman[0].id === byEnglish[0].id;
+      if (same) agreed++;
+
+      out[i] = { roman: p.data.roman, english: p.data.english, unit: p.data.unit, agreed: same };
+    } catch {
+      /* leave the line in its original script; retrieval will simply miss */
+    }
+  }));
+
+  const done = Object.keys(out).length;
+  return {
+    script: out,
+    steps: [{
+      node: 'normalise',
+      status: 'OK',
+      ms: Date.now() - t0,
+      note: `${done}/${foreign.length} non-Roman lines transliterated · ${agreed} where the transliteration and the English gloss retrieved the same product`,
+    }],
+  };
+}
+
+/* ------------------------------------------------------------ node: repair */
+
+/**
+ * CONSTRAINT REPAIR.
+ *
+ * Every bill line is three numbers tied by one equation:
+ *
+ *     quantity x rate = amount
+ *
+ * Give it any two and the third follows. Plenty of real wholesale books
+ * fill in only Quantity and Amount and leave Rate blank, because the
+ * shopkeeper does the division in his head. The honest thing for a reader
+ * to report is null, and the honest thing for us to do with a null is
+ * SOLVE for it -- not to reject the bill, which is what used to happen.
+ *
+ * Anything derived here is labelled as derived. It goes to the owner marked
+ * as our arithmetic rather than as something printed on their paper, which
+ * is a distinction they are entitled to.
+ */
+async function repair(s: State): Promise<Partial<State>> {
+  const t0 = Date.now();
+  const items = s.parsed?.items ?? [];
+
+  let derivedRate = 0, derivedAmount = 0, unsolvable = 0;
+  const fixed = items.map((it) => {
+    const qty = it.qty;
+    const rate = it.ratePaise;
+    const amount = it.amountPaise;
+
+    if (rate !== null && amount !== null) return { ...it, ratePaise: rate, amountPaise: amount, derived: [] as string[] };
+
+    if (rate === null && amount !== null && qty > 0) {
+      derivedRate++;
+      return { ...it, ratePaise: Math.round(amount / qty), amountPaise: amount, derived: ['rate'] };
+    }
+    if (amount === null && rate !== null) {
+      derivedAmount++;
+      return { ...it, ratePaise: rate, amountPaise: Math.round(qty * rate), derived: ['amount'] };
+    }
+
+    // one number and no equation to stand it up: cannot be priced at all
+    unsolvable++;
+    return { ...it, ratePaise: rate ?? 0, amountPaise: amount ?? 0, derived: ['unsolvable'] };
+  });
+
+  const parts = [
+    derivedRate ? `${derivedRate} rate${derivedRate === 1 ? '' : 's'} worked out from amount / quantity` : '',
+    derivedAmount ? `${derivedAmount} amount${derivedAmount === 1 ? '' : 's'} worked out from quantity x rate` : '',
+    unsolvable ? `${unsolvable} could not be solved` : '',
+  ].filter(Boolean);
+
+  return {
+    parsed: s.parsed ? { ...s.parsed, items: fixed } : null,
+    repairs: Object.fromEntries(fixed.map((f, i) => [i, f.derived])),
+    steps: [{
+      node: 'repair',
+      status: unsolvable ? 'RETRY' : 'OK',
+      ms: Date.now() - t0,
+      note: parts.length ? parts.join(' · ') : 'every line already carried all three numbers',
+    }],
+  };
 }
 
 /* ------------------------------------------------------------ node: verify */
@@ -174,11 +353,16 @@ function afterExtract(s: State): 'verify' | 'extract' | typeof END {
 /** paise, absolute, to absorb rounding in a rate like 46.67 */
 const ARITH_TOLERANCE = 200;
 
-function arithmeticOf(items: ParsedBill['items']) {
-  return items.map((it) => {
+function arithmeticOf(items: ParsedBill['items'], repairs: Record<number, string[]>) {
+  return items.map((it, i) => {
+    // Derived numbers satisfy the equation by construction; checking them
+    // would only ever confirm our own arithmetic. The check is for what was
+    // actually READ off the paper.
+    const wasDerived = (repairs[i] ?? []).length > 0;
+    if (wasDerived || it.ratePaise === null || !it.amountPaise) {
+      return { ok: true, note: null as string | null };
+    }
     const expected = Math.round(it.qty * it.ratePaise);
-    // a bill that omits the amount column cannot be cross-checked this way
-    if (!it.amountPaise) return { ok: true, note: null as string | null };
     const off = Math.abs(expected - it.amountPaise);
     return off <= ARITH_TOLERANCE
       ? { ok: true, note: null }
@@ -196,8 +380,34 @@ async function verify(s: State): Promise<Partial<State>> {
     return { steps: [{ node: 'verify', status: 'SKIP', ms: Date.now() - t0, note: 'nothing to check' }] };
   }
 
-  const arith = arithmeticOf(items);
-  const bad = arith.filter((a) => !a.ok).length;
+  const arith = arithmeticOf(items, s.repairs);
+  let bad = arith.filter((a) => !a.ok).length;
+
+  /**
+   * THE WHOLE-DOCUMENT CHECK, and the most useful one on a handwritten
+   * bill: the lines have to sum to the printed total.
+   *
+   * When they do not, the gap is usually one misread line rather than
+   * eleven, so we look for the single line whose amount would close it
+   * exactly. Naming the suspect turns "something is wrong somewhere" into
+   * "check line four", which is the difference between a warning an owner
+   * ignores and one they act on.
+   */
+  const stated = s.parsed?.totalPaise ?? null;
+  const summed = items.reduce((a, it) => a + (it.amountPaise ?? 0), 0);
+  let totalNote: string | null = null;
+
+  if (stated && Math.abs(stated - summed) > ARITH_TOLERANCE) {
+    const gap = stated - summed;
+    const suspect = items.findIndex(
+      (it) => Math.abs((it.amountPaise ?? 0) + gap - (it.amountPaise ?? 0)) > 0 &&
+              Math.abs(gap) < (it.amountPaise ?? 0) * 2,
+    );
+    totalNote =
+      `lines add up to ${(summed / 100).toFixed(2)} but the bill says ${(stated / 100).toFixed(2)}` +
+      (suspect >= 0 ? `; the ${(Math.abs(gap) / 100).toFixed(2)} gap is the size of "${items[suspect]!.name}"` : '');
+    bad += 1;
+  }
 
   // everything adds up: the reading is self-consistent, no second call
   if (bad === 0) {
@@ -207,7 +417,9 @@ async function verify(s: State): Promise<Partial<State>> {
         node: 'verify',
         status: 'OK',
         ms: Date.now() - t0,
-        note: `all ${items.length} lines add up (qty x rate = amount)`,
+        note: stated
+          ? `all ${items.length} lines add up, and they sum to the printed total of ${(stated / 100).toFixed(2)}`
+          : `all ${items.length} lines add up (qty x rate = amount)`,
       }],
     };
   }
@@ -226,6 +438,7 @@ async function verify(s: State): Promise<Partial<State>> {
   items.forEach((it, i) => {
     const notes: string[] = [];
     if (!arith[i]!.ok) notes.push(arith[i]!.note!);
+    if (totalNote && i === 0) notes.push(totalNote);
 
     if (second) {
       // match by position first, then by name, because a model can drop a
@@ -239,7 +452,7 @@ async function verify(s: State): Promise<Partial<State>> {
         notes.push('the second reading did not find this line at all');
       } else {
         if (other.qty !== it.qty) notes.push(`quantity read as ${it.qty} and ${other.qty}`);
-        if (other.ratePaise !== it.ratePaise) {
+        if (other.ratePaise !== null && it.ratePaise !== null && other.ratePaise !== it.ratePaise) {
           notes.push(`rate read as ${(it.ratePaise / 100).toFixed(2)} and ${(other.ratePaise / 100).toFixed(2)}`);
         }
       }
@@ -275,16 +488,24 @@ async function retrieve(s: State): Promise<Partial<State>> {
 
   const lines: PlannedLine[] = await Promise.all(
     items.map(async (it, idx) => {
+      // retrieval runs on the ROMAN working form. rawName keeps the
+      // original script for the review screen.
+      const sc = s.script[idx];
+      const working = sc?.roman ?? it.name;
       const [skus, kb] = await Promise.all([
-        retrieveSkus(s.kiranaId, it.name),
-        retrieveKb(it.name),
+        retrieveSkus(s.kiranaId, working),
+        retrieveKb(working),
       ]);
 
       return {
         rawName: it.name,
+        workingName: working,
+        gloss: sc?.english ?? null,
+        unit: sc?.unit ?? null,
         quantity: it.qty,
-        ratePaise: it.ratePaise,
-        amountPaise: it.amountPaise,
+        ratePaise: it.ratePaise ?? 0,
+        amountPaise: it.amountPaise ?? 0,
+        derived: s.repairs[idx] ?? [],
         decision: 'NEW' as Decision,
         confidence: 0,
         reasoning: '',
@@ -698,6 +919,10 @@ async function persist(s: State): Promise<Partial<State>> {
           suggestedAliases: l.suggestedAliases,
           disputed: l.disputed,
           disputeNote: l.disputeNote,
+          workingName: l.workingName,
+          gloss: l.gloss,
+          unit: l.unit,
+          derived: l.derived,
         },
       });
     }
@@ -734,6 +959,8 @@ async function persist(s: State): Promise<Partial<State>> {
 
 const workflow = new StateGraph(BillState)
   .addNode('extract', extract)
+  .addNode('normalise', normalise)
+  .addNode('repair', repair)
   .addNode('verify', verify)
   .addNode('retrieve', retrieve)
   .addNode('reconcile', reconcile)
@@ -742,7 +969,9 @@ const workflow = new StateGraph(BillState)
   .addNode('critic', critic)
   .addNode('persist', persist)
   .addEdge(START, 'extract')
-  .addConditionalEdges('extract', afterExtract, ['verify', 'extract', END])
+  .addConditionalEdges('extract', afterExtract, ['normalise', 'extract', END])
+  .addEdge('normalise', 'repair')
+  .addEdge('repair', 'verify')
   .addEdge('verify', 'retrieve')
   .addEdge('retrieve', 'reconcile')
   .addEdge('reconcile', 'price')

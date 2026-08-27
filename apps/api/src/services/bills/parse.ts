@@ -21,9 +21,22 @@ const billSchema = z.object({
   date: z.string().nullable().default(null),
   items: z.array(z.object({
     name: z.string(),
+    /** verbatim quantity text: "90kg", "200pcs", "8 peti". Parsed later. */
+    qtyText: z.string().nullable().default(null),
     qty: z.number().positive(),
-    ratePaise: z.number().int().nonnegative(),
-    amountPaise: z.number().int().nonnegative(),
+    /**
+     * NULLABLE, and this matters more than it looks.
+     *
+     * Plenty of real wholesale books fill in only Quantity and Amount and
+     * leave the Rate column blank; the shopkeeper does the division in his
+     * head. Requiring a number here made the model choose between lying and
+     * failing validation, and it correctly chose to fail: an entire
+     * Devanagari bill was thrown away because eleven rate cells were empty.
+     *
+     * A missing field is information. The repair node derives it.
+     */
+    ratePaise: z.number().int().nonnegative().nullable().default(null),
+    amountPaise: z.number().int().nonnegative().nullable().default(null),
   })),
   totalPaise: z.number().int().nonnegative().nullable().default(null),
 });
@@ -33,13 +46,21 @@ export type ParsedBill = z.infer<typeof billSchema>;
 const PROMPT = [
   'This is a wholesale supplier bill for an Indian kirana shop.',
   'Extract every line item. Return ONLY JSON:',
-  '{"supplier":"","billNo":"","date":"","items":[{"name":"","qty":<number>,',
-  '"ratePaise":<int>,"amountPaise":<int>}],"totalPaise":<int>}',
+  '{"supplier":"","billNo":"","date":"","items":[{"name":"",',
+  '"qtyText":"","qty":<number>,"ratePaise":<int|null>,',
+  '"amountPaise":<int|null>}],"totalPaise":<int|null>}',
   'RULES:',
   '- Money must be INTEGER PAISE. 255.00 rupees is 25500.',
   '- Copy item names VERBATIM, including brand and pack size. Do not tidy them.',
   '- Skip tax rows, discount rows and the grand total from the items array.',
-  '- If a field is genuinely unreadable use null rather than guessing.',
+  '- If a column is BLANK on the bill, or a value is unreadable, use null.',
+  '  Do NOT compute it, do NOT estimate it. A blank Rate column is normal in',
+  '  Indian wholesale books and null is the correct answer for it.',
+  '- qtyText: copy the quantity cell verbatim, units and all: "90kg",',
+  '  "200pcs", "8 peti". qty is just the number from it.',
+  '- The bill may be handwritten, in Hindi/Devanagari, or a mix. Copy names',
+  '  in their ORIGINAL script. Do not translate or transliterate them.',
+  '- Always read the printed grand total into totalPaise if one is shown.',
 ].join('\n');
 
 export interface ParseResult {

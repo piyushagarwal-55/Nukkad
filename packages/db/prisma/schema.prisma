@@ -560,6 +560,18 @@ model SupplierBillLine {
   /// what specifically did not add up, shown to the owner
   disputeNote String?
 
+  /// Roman working form used for retrieval. rawName above keeps the original
+  /// script, because the review screen shows the owner what their paper said
+  /// beside what we made of it.
+  workingName String?
+  /// English gloss, when the line had to be transliterated
+  gloss       String?
+  /// normalised unit off the quantity cell: kg, pc, peti, bori
+  unit        String?
+  /// which of quantity/rate/amount we SOLVED for rather than read. Shown as
+  /// our arithmetic, not as something printed on their paper.
+  derived     String[] @default([])
+
   bill SupplierBill @relation(fields: [billId], references: [id], onDelete: Cascade)
   sku  Sku?         @relation(fields: [skuId], references: [id])
 

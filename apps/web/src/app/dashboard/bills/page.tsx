@@ -31,6 +31,10 @@ interface Line {
   suggestedAliases: string[];
   disputed: boolean;
   disputeNote: string | null;
+  workingName: string | null;
+  gloss: string | null;
+  unit: string | null;
+  derived: string[];
 }
 interface Plan {
   billId: string;
@@ -47,6 +51,8 @@ interface Plan {
 const NODE_BLURB: Record<string, string> = {
   extract: 'Read the photograph into structured line items',
   retrieve: 'Pulled the nearest catalogue rows and knowledge base entries',
+  normalise: 'Transliterated Devanagari and glossed it in English, then checked both routes reach the same product',
+  repair: 'Solved for whichever of quantity, rate and amount the bill left blank',
   verify: 'Checked qty x rate against the printed amount, and read it twice where it did not close',
   reconcile: 'Decided restock, new, or too close to call',
   price: 'Compared every rate against what this shop last paid',
@@ -109,8 +115,22 @@ function LineCard({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="font-medium">{line.rawName}</p>
+
+          {/* what we made of it, when the paper was not in Roman script.
+              The original above is never overwritten. */}
+          {line.workingName && line.workingName !== line.rawName && (
+            <p className="muted mt-0.5 text-xs">
+              read as <b className="text-[var(--ink)]">{line.workingName}</b>
+              {line.gloss && <> &middot; {line.gloss}</>}
+            </p>
+          )}
+
           <p className="muted mt-0.5 text-xs">
-            {line.quantity} &times; &#8377;{rupees(line.ratePaise)} = &#8377;{rupees(line.amountPaise)}
+            {line.quantity}{line.unit ?? ''} &times; &#8377;{rupees(line.ratePaise)}
+            {line.derived.includes('rate') && (
+              <span className="badge badge-ambiguous ml-1.5">rate worked out</span>
+            )}
+            {' = '}&#8377;{rupees(line.amountPaise)}
             {delta !== null && delta !== 0 && (
               <>
                 {' · '}

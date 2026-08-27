@@ -261,6 +261,10 @@ async function readPlan(billId: string, kiranaId: string) {
       suggestedAliases: l.suggestedAliases,
       disputed: l.disputed,
       disputeNote: l.disputeNote,
+      workingName: l.workingName,
+      gloss: l.gloss,
+      unit: l.unit,
+      derived: l.derived,
     })),
   };
 }
