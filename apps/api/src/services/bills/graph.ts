@@ -4,6 +4,7 @@ import { prisma } from '@nukkad/db';
 import { groq } from '../../lib/groq.js';
 import { env } from '../../config/env.js';
 import { parseBill, RateLimited, type ParsedBill } from './parse.js';
+import { groundedSubnames } from './subnames.js';
 import {
   retrieveKb, retrieveSkus, normaliseBillName, packConflict, MATCH,
   type KbHit, type SkuHit,
@@ -974,29 +975,6 @@ async function price(s: State): Promise<Partial<State>> {
 
 /* -------------------------------------------------------------- node: alias */
 
-const aliasSchema = z.object({ aliases: z.array(z.string().min(2).max(40)).max(8) });
-
-const ALIAS_PROMPT = [
-  'You give the local names Indian households actually use for a grocery item.',
-  '',
-  'You are shown REFERENCE entries: real products with the real names people',
-  'use for them, retrieved from a curated list. Use them as your evidence.',
-  '',
-  'Return ONLY JSON: {"aliases":["...","..."]}',
-  '',
-  'RULES:',
-  '- Prefer names that appear in the REFERENCE block. Reuse them verbatim when',
-  '  the product is the same kind of thing.',
-  '- Roman Hinglish, lowercase, no Devanagari.',
-  '- Always include the bare generic ("atta", "tel", "namak"): it is what',
-  '  people say most.',
-  '- Include romanisation variants people actually type ("aata", "chini").',
-  '- Include the brand alone only if people refer to it that way.',
-  '- NEVER include the pack size or a number. Quantity is handled elsewhere.',
-  '- If the reference block is empty, return at most three names you are sure of.',
-  '- Maximum 8. Fewer good ones beats more invented ones.',
-].join('\n');
-
 /**
  * Grounded subname generation.
  *
@@ -1015,42 +993,15 @@ async function alias(s: State): Promise<Partial<State>> {
   let grounded = 0;
 
   const lines = await mapLimit(s.lines, DB_CONCURRENCY, async (l) => {
-      // restocks already have their names; only new products need any
-      if (l.decision !== 'NEW') return l;
+    // A restock already has names on the SKU it is joining. An ambiguous
+    // line has no decision yet, and generating for one the owner then sends
+    // to a restock is wasted; the commit route covers that case instead.
+    if (l.decision !== 'NEW') return l;
 
-      const kb = (l as PlannedLine & { _kb?: KbHit[] })._kb ?? [];
-      const reference = kb
-        .map((h) => `- ${(h.brand + ' ' + h.canonical).trim()} (${h.category}): ${h.subnames.join(', ')}`)
-        .join('\n');
-      if (reference) grounded++;
-
-      try {
-        const res = await groq.chat.completions.create({
-          model: env.GROQ_LLM_MODEL_FAST,
-          temperature: 0.2,
-          response_format: { type: 'json_object' },
-          messages: [
-            { role: 'system', content: ALIAS_PROMPT },
-            {
-              role: 'user',
-              content: `PRODUCT AS PRINTED: ${l.rawName}\n\nREFERENCE:\n${reference || '(nothing close found)'}`,
-            },
-          ],
-        });
-        const p = aliasSchema.safeParse(JSON.parse(res.choices[0]?.message?.content ?? '{}'));
-        if (!p.success) return l;
-
-        const cleaned = [...new Set(
-          p.data.aliases
-            .map((a) => a.trim().toLowerCase())
-            // a "subname" carrying a digit is a pack size, not a name
-            .filter((a) => a && !/\d/.test(a)),
-        )];
-        generated += cleaned.length;
-        return { ...l, suggestedAliases: cleaned };
-      } catch {
-        return l;
-      }
+    const r = await groundedSubnames(l.rawName);
+    generated += r.aliases.length;
+    if (r.grounded) grounded++;
+    return r.aliases.length ? { ...l, suggestedAliases: r.aliases } : l;
   });
 
   const newCount = lines.filter((l) => l.decision === 'NEW').length;

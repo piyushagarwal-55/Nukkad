@@ -11,7 +11,8 @@
     "worker:nudge": "dotenv -e ../../.env -- tsx src/workers/nudge-scheduler.ts",
     "type-check": "tsc --noEmit",
     "clean": "rm -rf dist",
-    "smoke": "dotenv -e ../../.env -- tsx src/scripts/smoke.ts"
+    "smoke": "dotenv -e ../../.env -- tsx src/scripts/smoke.ts",
+    "backfill:subnames": "dotenv -e ../../.env -- tsx src/scripts/backfill-subnames.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

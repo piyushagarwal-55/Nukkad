@@ -7,6 +7,7 @@ import { prisma } from '@nukkad/db';
 import { planBill } from '../services/bills/graph.js';
 import { invalidateCatalog } from '../services/catalog/cache.js';
 import { syncAliasArray } from '../services/catalog/aliases.js';
+import { groundedSubnames } from '../services/bills/subnames.js';
 import { requireSession } from './auth.js';
 
 const MEDIA_DIR = join(process.cwd(), 'media');
@@ -181,7 +182,22 @@ export async function billRoutes(app: FastifyInstance) {
           stock: { create: { quantity: qty } },
         },
       });
-      aliasesAdded += await addAliases(sku.id, aliases);
+
+      /**
+       * Generate names now if the line has none.
+       *
+       * The alias node only runs on lines the AGENT called new. A line it
+       * marked ambiguous -- a pack-size clash, say -- gets no names, and if
+       * the owner then chooses "create as a new item" the product lands in
+       * the catalogue with nothing a customer could ask for it by. It would
+       * never match a spoken order, and nothing would ever say why.
+       */
+      let names = aliases;
+      if (!names.length) {
+        const r = await groundedSubnames(line.rawName);
+        names = r.aliases;
+      }
+      aliasesAdded += await addAliases(sku.id, names);
       touched.push(sku.id);
       await prisma.supplierBillLine.update({ where: { id: line.id }, data: { skuId: sku.id } });
       created++;
