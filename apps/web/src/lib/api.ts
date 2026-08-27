@@ -23,8 +23,21 @@ export const patch = <T,>(path: string, body: unknown) =>
   req<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
 export const del = <T,>(path: string) => req<T>(path, { method: 'DELETE' });
 
-export const rupees = (paise: number) =>
-  new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(paise / 100);
+/**
+ * Rupees, showing paise only when there are any.
+ *
+ * This used to round everything to whole rupees, which is fine on a
+ * dashboard and wrong on a bill review: 538.65 displayed as 539 and 179.55
+ * as 180 makes the arithmetic look broken to anyone holding the paper, and
+ * hides the discount that produced the odd number in the first place.
+ */
+export const rupees = (paise: number) => {
+  const exact = paise % 100 === 0;
+  return new Intl.NumberFormat('en-IN', {
+    minimumFractionDigits: exact ? 0 : 2,
+    maximumFractionDigits: exact ? 0 : 2,
+  }).format(paise / 100);
+};
 
 export interface Me {
   kiranaId: string;

@@ -583,6 +583,15 @@ model SupplierBillLine {
   /// treating MRP as the rate makes qty x rate disagree with the amount on
   /// every discounted line.
   mrpPaise    Int?
+
+  /// A GST tax invoice prices a line in four moves rather than one:
+  ///     amount = qty x listPrice x (1 - disc%) x (1 + tax%)
+  /// All three are printed and none equals amount/qty, so each is kept.
+  /// Showing the owner "list 400 + 5% GST -> 420" is the difference between
+  /// a number that looks wrong and one that explains itself.
+  listPricePaise Int?
+  discPct        Float?
+  taxPct         Float?
   /// a free item: a quantity with no amount. Never priced, never counted
   /// toward the total.
   isFree      Boolean @default(false)

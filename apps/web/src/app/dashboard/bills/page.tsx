@@ -36,6 +36,9 @@ interface Line {
   unit: string | null;
   pack: string | null;
   mrpPaise: number | null;
+  listPricePaise: number | null;
+  discPct: number | null;
+  taxPct: number | null;
   isFree: boolean;
   derived: string[];
 }
@@ -146,6 +149,20 @@ function LineCard({
               </>
             )}
           </p>
+
+          {/* SHOW THE WORKING.
+              The bill prints 400 and the catalogue gets 420, and without
+              this line that looks like a mistake rather than the GST it
+              actually is. The unit cost is what the shop parted with per
+              unit, tax included -- not the pre-tax list price. */}
+          {line.listPricePaise !== null && (
+            <p className="muted mt-1 text-[11px]">
+              bill says list &#8377;{rupees(line.listPricePaise)}
+              {line.discPct ? <> &minus; {line.discPct}% disc</> : null}
+              {line.taxPct ? <> &plus; {line.taxPct}% GST</> : null}
+              {' '}&rarr; <b className="text-[var(--ink)]">&#8377;{rupees(line.ratePaise)}</b> actually paid per unit
+            </p>
+          )}
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
