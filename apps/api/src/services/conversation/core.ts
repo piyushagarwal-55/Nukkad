@@ -19,7 +19,7 @@ import { decide, type PolicyAction } from '../policy/decide.js';
 import { createInvoiceLink } from '../payments/razorpay.js';
 import { checkAndSettle } from '../payments/settle.js';
 import { maskActions } from '../resolver/action.js';
-import { compose, type Facts, type Swap, type PackAsk } from './compose.js';
+import { compose, composeStream, type Facts, type Swap, type PackAsk } from './compose.js';
 import { retrieveKb } from '../kb/retrieve.js';
 import type { Prior } from '../resolver/prior.js';
 import {
@@ -89,16 +89,23 @@ interface Ctx {
   meta: OrderMeta;
   /** filled in once the extractor has read this turn. See handle(). */
   annotation?: { intent: string; goal: string };
+  /**
+   * Voice only. When present the composer STREAMS and every finished
+   * sentence arrives here as the model writes it, so speech can start
+   * before the reply does. Absent on WhatsApp, where a partial message
+   * would just be a message sent twice.
+   */
+  onSentence?: (sentence: string) => void | Promise<void>;
 }
 
 /** say something true, in the customer's own words */
 async function speak(
-  ctx: Pick<Ctx, 'convo' | 'buyerName' | 'shopName' | 'said'>,
+  ctx: Pick<Ctx, 'convo' | 'buyerName' | 'shopName' | 'said' | 'onSentence'>,
   facts: Facts,
   fallback: string,
   card?: string,
 ): Promise<OutboundMessage[]> {
-  const text = await compose({
+  const input = {
     facts,
     said: ctx.said,
     buyerName: ctx.buyerName,
@@ -106,7 +113,18 @@ async function speak(
     recent: ctx.convo.recent,
     card,
     fallback,
-  });
+  };
+
+  /**
+   * Streamed when somebody is listening for sentences, whole otherwise.
+   * The two produce the same text; only the delivery differs, so nothing
+   * downstream -- the transcript, the ledger, the annotation -- has to
+   * know which one ran.
+   */
+  const text = ctx.onSentence
+    ? await composeStream(input, ctx.onSentence)
+    : await compose(input);
+
   return [{ text, ...label(facts) }];
 }
 
@@ -179,7 +197,10 @@ function label(f: Facts): { intent: string; goal: string } {
   }
 }
 
-export async function handle(msg: InboundMessage): Promise<OutboundMessage[]> {
+export async function handle(
+  msg: InboundMessage,
+  hooks: { onSentence?: (s: string) => void | Promise<void> } = {},
+): Promise<OutboundMessage[]> {
   const started = Date.now();
 
   /**
@@ -259,6 +280,7 @@ export async function handle(msg: InboundMessage): Promise<OutboundMessage[]> {
     buyerPhone: household.phone,
     shopName: kirana.name,
     said: text,
+    onSentence: hooks.onSentence,
     meta: {
       source: audio ? 'VOICE' : 'TEXT',
       rawText: msg.text ?? null,

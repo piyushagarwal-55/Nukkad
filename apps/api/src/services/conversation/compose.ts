@@ -422,11 +422,24 @@ function brief(f: Facts): string {
   }
 }
 
+/**
+ * The one line that differs between the two callers.
+ *
+ * compose() asks for JSON because a wrapped string is easy to validate
+ * whole. composeStream() must not: a partial JSON response is an
+ * unterminated string with a half-written escape. Removing
+ * response_format while leaving this instruction in the prompt produced
+ * exactly what you would expect -- the model obeyed the prompt, and the
+ * shop read the characters {"reply": out loud to a customer.
+ */
+const RETURN_JSON = 'Return ONLY JSON: {"reply":"..."}';
+const RETURN_PROSE = 'Return the sentence itself. No JSON, no quotes, no label.';
+
 const SYSTEM = [
   'You are the person answering WhatsApp for a small neighbourhood kirana',
   'shop in India. You are not a bot and you do not sound like one.',
   '',
-  'Return ONLY JSON: {"reply":"..."}',
+  RETURN_JSON,
   '',
   'HOW TO WRITE',
   '- Short. One or two sentences. This is WhatsApp, not email.',
@@ -570,7 +583,8 @@ function violates(reply: string, allowed: Set<string>): boolean {
   return (reply.match(/\d+/g) ?? []).some((d) => !allowed.has(d));
 }
 
-export async function compose(input: ComposeInput): Promise<string> {
+/** the prompt is identical either way; only the delivery differs */
+function buildPrompt(input: ComposeInput): string {
   const history = input.recent
     .slice(-6)
     .map((t) => `${t.role === 'user' ? input.buyerName : 'You'}: ${t.text}`)
@@ -584,6 +598,12 @@ export async function compose(input: ComposeInput): Promise<string> {
     `\nFACT: ${brief(input.facts)}`,
     input.card ? NO_NUMBERS : '',
   ].filter(Boolean).join('\n');
+
+  return user;
+}
+
+export async function compose(input: ComposeInput): Promise<string> {
+  const user = buildPrompt(input);
 
   let reply = input.fallback;
   const allowed = allowedDigits(input.facts);
@@ -610,5 +630,101 @@ export async function compose(input: ComposeInput): Promise<string> {
     // a duller sentence is fine; a dropped message is not
   }
 
+  return input.card ? `${reply}\n\n${input.card}` : reply;
+}
+
+/**
+ * THE SAME REPLY, HANDED OVER A SENTENCE AT A TIME.
+ *
+ * For voice. Words are useless to a caller until they are sound, and
+ * sound cannot start until a sentence is finished -- so finishing the
+ * FIRST sentence early is worth more than finishing the whole reply
+ * early. Streaming the model overlaps synthesis of sentence one with the
+ * writing of sentence two, which is the pattern the interview agent in
+ * practers uses and the reason its turns feel immediate.
+ *
+ * NOT IN JSON MODE, and that is the entire reason this is a separate
+ * function rather than a flag. A partial JSON response is partial JSON --
+ * an unterminated string with a half-written escape -- and parsing that
+ * incrementally is a lot of fragile code to recover a field that was
+ * only ever called `reply`. Asking for the sentence directly costs
+ * nothing: sanitise() and violates() were always what did the real work.
+ *
+ * EVERY SENTENCE IS CHECKED BEFORE IT IS HANDED OVER. Speaking as the
+ * model writes must not become a way past the guard that stops
+ * fabricated totals and invented quantities. Checking before the caller
+ * ever sees it also means a bad sentence is never half-said and then
+ * retracted, which is not a thing you can do to someone on a phone.
+ */
+export async function composeStream(
+  input: ComposeInput,
+  onSentence: (sentence: string) => void | Promise<void>,
+): Promise<string> {
+  const user = buildPrompt(input);
+  const allowed = allowedDigits(input.facts);
+
+  const said: string[] = [];
+  let buffer = '';
+
+  /** cut at .!? followed by whitespace; a decimal point has neither */
+  const cut = (buf: string) => {
+    const out: string[] = [];
+    const re = /[\s\S]*?[.!?]+(?:\s|$)/g;
+    let m: RegExpExecArray | null;
+    let last = 0;
+    while ((m = re.exec(buf)) !== null) {
+      const s = m[0].trim();
+      if (s) out.push(s);
+      last = re.lastIndex;
+    }
+    return { done: out, rest: buf.slice(last) };
+  };
+
+  const offer = async (sentence: string) => {
+    const clean = sentence.replace(/\s+/g, ' ').trim();
+    if (!clean || violates(clean, allowed)) return;
+    said.push(clean);
+    await onSentence(clean);
+  };
+
+  try {
+    const stream = await groq.chat.completions.create({
+      model: env.GROQ_LLM_MODEL_FAST,
+      temperature: 0.6,
+      stream: true,
+      messages: [
+        { role: 'system', content: SYSTEM.replace(RETURN_JSON, RETURN_PROSE) },
+        { role: 'user', content: user },
+      ],
+    });
+
+    for await (const part of stream) {
+      const delta = part.choices[0]?.delta?.content;
+      if (!delta) continue;
+
+      /**
+       * A newline once something has been said is the model starting to
+       * draw a list or a card -- exactly what sanitise() cuts on the
+       * non-streaming path. Stop reading rather than try to repair it.
+       */
+      if (delta.includes('\n') && said.length) break;
+
+      buffer += delta;
+      const { done, rest } = cut(buffer);
+      buffer = rest;
+      for (const sentence of done) await offer(sentence);
+    }
+
+    if (buffer.trim()) await offer(buffer);
+  } catch {
+    // a duller sentence is fine; a dropped reply is not
+  }
+
+  if (!said.length) {
+    await onSentence(input.fallback);
+    said.push(input.fallback);
+  }
+
+  const reply = said.join(' ');
   return input.card ? `${reply}\n\n${input.card}` : reply;
 }

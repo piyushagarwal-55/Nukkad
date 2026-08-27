@@ -94,6 +94,12 @@ export async function voiceTurn(
      * feel like a dropped line.
      */
     speak?: boolean;
+    /**
+     * Called with each finished sentence AS THE MODEL WRITES IT, so the
+     * caller can start synthesising sentence one while sentence two is
+     * still being composed. See composeStream in conversation/compose.ts.
+     */
+    onSentence?: (sentence: string) => void | Promise<void>;
   },
 ): Promise<VoiceTurn> {
   const started = Date.now();
@@ -121,15 +127,18 @@ export async function voiceTurn(
    */
   const heard = await transcribe(wav);
 
-  const replies = await handle({
-    channel: 'sim',
-    senderId: opts.phone,
-    recipientId: opts.shopPhone,
-    text: heard.text,
-    media: [],
-    externalId: `voice_${randomUUID()}`,
-    receivedAt: new Date(),
-  });
+  const replies = await handle(
+    {
+      channel: 'sim',
+      senderId: opts.phone,
+      recipientId: opts.shopPhone,
+      text: heard.text,
+      media: [],
+      externalId: `voice_${randomUUID()}`,
+      receivedAt: new Date(),
+    },
+    { onSentence: opts.onSentence },
+  );
 
   const reply = replies.map((r) => r.text).join('\n') || '';
   const spoken = speakable(reply);

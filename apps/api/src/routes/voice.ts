@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { prisma, Prisma } from '@nukkad/db';
 import { voiceTurn } from '../services/voice/turn.js';
-import { speakInChunks } from '../services/voice/speech.js';
+import { speak } from '../services/voice/tts.js';
 
 /**
  * The browser end of the voice agent.
@@ -67,25 +67,54 @@ export async function voiceRoutes(app: FastifyInstance) {
 
     try {
       const mime = (req.headers['content-type'] ?? 'audio/webm').split(';')[0];
+
+      /**
+       * SYNTHESIS STARTS BEFORE THE REPLY IS WRITTEN.
+       *
+       * Each sentence arrives here the moment the model finishes it, and
+       * its audio is made and sent while the next one is still being
+       * composed. Nothing waits for the whole reply: not the speech, not
+       * the page. The chain keeps them in order -- sentence two must not
+       * overtake sentence one just because it was shorter to say.
+       */
+      const started = Date.now();
+      let firstSoundMs = 0;
+      let index = 0;
+      let chain: Promise<void> = Promise.resolve();
+
       const { trace } = await voiceTurn(audio, {
         phone: HOUSEHOLD,
         shopPhone: SHOP,
         mime,
-        speak: false, // the speaking happens below, a sentence at a time
+        speak: false,
+        onSentence: (sentence) => {
+          chain = chain.then(async () => {
+            if (ctrl.signal.aborted) return;
+            const said = await speak(sentence);
+            if (!said || ctrl.signal.aborted) return;
+            if (!firstSoundMs) firstSoundMs = Date.now() - started;
+            send({
+              type: 'audio',
+              index: index++,
+              text: sentence,
+              b64: said.audio.toString('base64'),
+              ms: said.latencyMs,
+            });
+          });
+        },
       });
 
+      await chain;
       if (ctrl.signal.aborted) return reply.raw.end();
 
-      // the words go out first: the page can show them while the audio
-      // is still being made, which is most of what makes it feel quick
+      /**
+       * The trace goes out AFTER the audio, which looks backwards and is
+       * not: the caller wants sound as early as possible, and the trace
+       * cannot be complete until the reply is. The page shows the words
+       * from the sentences as they arrive.
+       */
       send({ type: 'trace', ...trace });
-
-      const spoken = await speakInChunks(
-        trace.spoken,
-        (c) => send({ type: 'audio', index: c.index, text: c.text, b64: c.audio.toString('base64'), ms: c.ms }),
-        { signal: ctrl.signal },
-      );
-
+      const spoken = { chunks: index, firstMs: firstSoundMs, totalMs: Date.now() - started };
       send({ type: 'done', ...spoken });
 
       app.log.info(
