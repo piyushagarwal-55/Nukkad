@@ -1,4 +1,4 @@
-import { prisma, Prisma } from '@nukkad/db';
+import { prisma } from '@nukkad/db';
 import type { ChannelId, ResolvedLine } from '@nukkad/shared';
 
 /**
@@ -44,7 +44,7 @@ export type Pending =
       /** carried through so the order row stays attributable to the audio */
       meta: OrderMeta;
     }
-  | { kind: 'MENU'; askedAt: string };
+  ;
 
 /** a ResolvedLine flattened to something that survives a JSON round trip */
 export interface PendingLine {
@@ -105,9 +105,37 @@ export function flatten(line: ResolvedLine): PendingLine {
   };
 }
 
+/** one line of the running transcript, kept so the voice has memory */
+export interface Turn {
+  role: 'user' | 'shop';
+  text: string;
+}
+
 export interface Convo {
   id: string;
+  /**
+   * Mutable on purpose. Handlers set this as they go and the whole
+   * conversation is written ONCE at the end of the turn, instead of every
+   * branch paying for its own round trip to a database in another region.
+   */
   pending: Pending | null;
+  recent: Turn[];
+}
+
+/**
+ * How much of the conversation the voice can see.
+ *
+ * Small deliberately. It exists so the reply does not repeat the sentence
+ * it just sent -- which is the specific thing that makes a bot feel like a
+ * bot -- and not so the model can reason over history. Everything that
+ * needs remembering properly is in `pending` or in the database.
+ */
+const RECENT_MAX = 8;
+
+/** what actually lands in contextJson */
+interface Stored {
+  pending: Pending | null;
+  recent: Turn[];
 }
 
 /**
@@ -131,8 +159,12 @@ export async function loadConvo(
     select: { id: true, contextJson: true },
   });
 
-  const pending = (row.contextJson as Pending | null) ?? null;
-  return { id: row.id, pending };
+  const stored = (row.contextJson as Stored | null) ?? null;
+  return {
+    id: row.id,
+    pending: stored?.pending ?? null,
+    recent: stored?.recent ?? [],
+  };
 }
 
 type StateName =
@@ -142,19 +174,24 @@ type StateName =
 const STATE_OF: Record<Pending['kind'], StateName> = {
   CONFIRM: 'AWAITING_CONFIRM',
   DISAMBIGUATE: 'AWAITING_DISAMBIGUATION',
-  MENU: 'MENU',
 };
 
-export async function setPending(id: string, pending: Pending): Promise<void> {
+/**
+ * One write per turn, at the end.
+ *
+ * The recent transcript is trimmed here rather than at every append, so a
+ * long conversation cannot grow contextJson without bound.
+ */
+export async function save(convo: Convo): Promise<void> {
+  const stored: Stored = {
+    pending: convo.pending,
+    recent: convo.recent.slice(-RECENT_MAX),
+  };
   await prisma.conversation.update({
-    where: { id },
-    data: { state: STATE_OF[pending.kind], contextJson: pending as never },
-  });
-}
-
-export async function clearPending(id: string): Promise<void> {
-  await prisma.conversation.update({
-    where: { id },
-    data: { state: 'IDLE', contextJson: Prisma.DbNull },
+    where: { id: convo.id },
+    data: {
+      state: convo.pending ? STATE_OF[convo.pending.kind] : 'IDLE',
+      contextJson: stored as never,
+    },
   });
 }

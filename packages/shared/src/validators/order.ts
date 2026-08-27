@@ -17,7 +17,31 @@ export const extractionSchema = z.object({
     quantity: z.number().positive().default(1),
     unit: z.string().nullable().default(null),
   })),
-  intent: z.enum(['ORDER', 'CANCEL', 'MODIFY', 'QUESTION', 'CONFIRM', 'UNKNOWN']),
+  /**
+   * WIDER THAN IT LOOKS, and each one exists because the alternative was a
+   * numbered menu.
+   *
+   * "Pichhla order dobara bhejo" used to be option 1 on a four-item list a
+   * shop assistant would never read out loud. A person just says it, so
+   * REPEAT and ACCOUNT are recognised from language instead. GREETING and
+   * QUESTION exist so that "kya haal hai" and "dukaan kab tak khuli hai"
+   * get an answer rather than the same menu a third time.
+   */
+  intent: z.enum([
+    'ORDER',
+    /** wants the last order again */
+    'REPEAT',
+    /** asking about their own spend or history */
+    'ACCOUNT',
+    'CANCEL',
+    'MODIFY',
+    'CONFIRM',
+    /** namaste, kya haal hai, thanks */
+    'GREETING',
+    /** asking the shop something: timings, availability, price */
+    'QUESTION',
+    'UNKNOWN',
+  ]),
 });
 
 export type Extraction = z.infer<typeof extractionSchema>;

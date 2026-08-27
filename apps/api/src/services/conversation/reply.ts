@@ -22,8 +22,11 @@
  * those go to retrieval and none of them are listed here.
  */
 
+import { fuzzyScore } from '../resolver/fuzzy.js';
+
 export type Answer =
   | { kind: 'CHOICE'; index: number }
+  | { kind: 'NONE_OF_THESE' }
   | { kind: 'YES' }
   | { kind: 'NO' }
   | { kind: 'CHANGE' }
@@ -36,6 +39,8 @@ export type Answer =
 const YES = ['haan', 'ha', 'han', 'haa', 'yes', 'y', 'ok', 'okay', 'thik', 'theek', 'sahi', 'done', 'ji', 'bhejo', 'bhej', 'confirm'];
 const NO = ['nahi', 'nai', 'na', 'no', 'n', 'cancel', 'rehne', 'mat', 'stop'];
 const CHANGE = ['badlo', 'badal', 'badlaav', 'change', 'edit', 'hatao', 'hata'];
+/** none of the ones you offered */
+const NONE = ['koi', 'kuch', 'none', 'neither', 'nothing'];
 
 const words = (text: string): string[] =>
   text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
@@ -43,8 +48,19 @@ const words = (text: string): string[] =>
 /**
  * @param optionCount how many numbered options were actually offered, so a
  *        stray "5" in "5 kilo aata" is not read as tapping option 5
+ * @param optionNames the options as PRODUCTS, matched by name.
+ *
+ *        This exists because the shop stopped numbering things. It asks
+ *        "Basmati chahiye ya Sona Masoori?" the way a person would, and a
+ *        person answers "basmati" -- not "1". Numbers still work, because
+ *        some customers will type one anyway and refusing it would be rude
+ *        for no reason.
  */
-export function readAnswer(text: string, optionCount: number): Answer {
+export function readAnswer(
+  text: string,
+  optionCount: number,
+  optionNames: string[] = [],
+): Answer {
   const ws = words(text);
   if (!ws.length) return { kind: 'UNKNOWN' };
 
@@ -61,6 +77,18 @@ export function readAnswer(text: string, optionCount: number): Answer {
     }
   }
 
+  /**
+   * Named one of the products on offer. Checked before the yes/no
+   * vocabulary because "sona masoori" contains no yes or no, and before
+   * the length cut because a product name can be four words long.
+   */
+  const byName = readChoiceByName(text, optionNames);
+  if (byName !== null) return { kind: 'CHOICE', index: byName };
+
+  if (ws.length <= 3 && ws.some((w) => NONE.includes(w))) {
+    return { kind: 'NONE_OF_THESE' };
+  }
+
   // Longer phrases are amendments, not answers. "haan bhej do" is a yes;
   // "haan lekin chini hata do" is a change of order wearing a yes.
   if (ws.length > 3) return { kind: 'UNKNOWN' };
@@ -72,4 +100,32 @@ export function readAnswer(text: string, optionCount: number): Answer {
   if (ws.some((w) => YES.includes(w))) return { kind: 'YES' };
 
   return { kind: 'UNKNOWN' };
+}
+
+/**
+ * Which of the offered products they named, if any.
+ *
+ * Separate from readAnswer because the caller must be able to say "this was
+ * not a choice" and fall through to the order pipeline. Someone answering
+ * "kuch nahi, atta bhej do" has named a product that is not on the list,
+ * and forcing it onto the nearest option would order the wrong thing.
+ *
+ * The gap check is the load-bearing part. Two rices scoring 0.71 and 0.69
+ * is not an answer, it is the same ambiguity restated, so it stays
+ * unresolved and gets asked again.
+ */
+const NAME_FLOOR = 0.5;
+const NAME_GAP = 0.15;
+
+export function readChoiceByName(text: string, optionNames: string[]): number | null {
+  if (!optionNames.length) return null;
+
+  const scored = optionNames
+    .map((name, index) => ({ index, score: fuzzyScore(text, name) }))
+    .sort((a, b) => b.score - a.score);
+
+  const [best, next] = scored;
+  if (!best || best.score < NAME_FLOOR) return null;
+  if (next && best.score - next.score < NAME_GAP) return null;
+  return best.index;
 }

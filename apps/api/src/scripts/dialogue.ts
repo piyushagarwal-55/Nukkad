@@ -8,19 +8,26 @@ import type { InboundMessage } from '@nukkad/shared';
  *
  *   npm run dialogue --workspace=@nukkad/api
  *
- * smoke.ts already sends single messages and checks what comes back. It
- * cannot catch the class of bug this file exists for, because every bug
- * here needs at least two turns to show up: the bot asks a question, the
- * customer answers, and the answer goes nowhere.
+ * smoke.ts sends single messages and checks what comes back. It cannot
+ * catch the class of bug this file exists for, because every bug here
+ * needs at least two turns: the bot asks a question, the customer answers,
+ * and the answer goes nowhere.
  *
- * That was the actual state of the WhatsApp agent. Every card offered
- * numbered taps and not one of them did anything -- "1" went into the
- * order extractor as a fresh request, found no products, and got the menu
- * back. Orders sat at AWAITING forever.
+ * WHAT IS ASSERTED, AND WHAT DELIBERATELY IS NOT.
  *
- * So each case below is a SCRIPT, and the assertions are about the
- * database as much as the reply text. A confirm that does not move the row
- * to CONFIRMED is not a confirm, however nice the message sounds.
+ * The prose is written by a model now, so asserting on exact sentences
+ * would test the model's mood rather than the system. What gets asserted
+ * is what must be true regardless of phrasing:
+ *
+ *   the DATABASE   status moved, the right number of lines got written
+ *   the LEDGER     the appended card is rendered by code, so the product
+ *                  names and the total are exact and checkable
+ *   the SHAPE      no numbered menus, and never the same sentence twice
+ *
+ * That last one is not decoration. Repeating a canned line at anyone who
+ * goes off-script is the single most bot-like thing a bot does, and it is
+ * a property of the whole conversation rather than of any one reply, so
+ * nothing but a multi-turn test can see it.
  */
 
 const HOUSEHOLD = '+918979560165';
@@ -39,18 +46,13 @@ const inbound = (text: string): InboundMessage => ({
 
 interface Turn {
   say: string;
-  /** substring the reply must contain */
+  /** substring the reply must contain. Use for LEDGER content, not prose. */
   expect?: string;
   /** substring the reply must NOT contain */
   reject?: string;
   /** checked against the order the conversation is currently holding */
   orderStatus?: string;
-  /**
-   * how many lines that order must have.
-   *
-   * The assertion that catches merge bugs. Reply text can look perfect
-   * while the row behind it holds one line instead of two.
-   */
+  /** how many lines that order must have. Catches merge bugs. */
   lines?: number;
 }
 
@@ -58,40 +60,51 @@ interface Case { name: string; why: string; turns: Turn[] }
 
 const CASES: Case[] = [
   {
-    name: 'tap 1 confirms',
-    why: 'the tap the confirm card actually offers',
+    name: 'a greeting gets a greeting, not a menu',
+    why:
+      'the whole complaint. "Hi" used to return a four-item numbered list, ' +
+      'which tells the customer they are talking to a form',
     turns: [
-      { say: 'do kilo atta bhej dena', expect: 'Total' },
-      { say: '1', expect: 'confirm ho gaya', orderStatus: 'CONFIRMED' },
+      { say: 'Hi' },
+      { say: 'kya haal hai bhaiya' },
     ],
   },
   {
-    name: 'typed haan confirms',
-    why: 'nobody types the number, they type haan',
+    name: 'off-script twice, answered differently twice',
+    why:
+      'a canned fallback repeats itself, and by the third time the customer ' +
+      'has learned that going off-script is pointless',
     turns: [
-      { say: 'ek kilo chini bhejo', expect: 'Total' },
-      { say: 'haan bhej do', expect: 'confirm ho gaya', orderStatus: 'CONFIRMED' },
+      { say: 'dukaan kitne baje tak khuli hai' },
+      { say: 'aur delivery ho jayegi kya' },
+      { say: 'accha theek hai' },
     ],
   },
   {
-    name: 'tap 3 cancels',
-    why: 'and the row must actually move, not just the message',
+    name: 'order and confirm',
+    why: 'the tap that used to do nothing at all',
+    turns: [
+      { say: 'do kilo atta bhej dena', expect: 'Atta' },
+      { say: 'haan bhej do', orderStatus: 'CONFIRMED' },
+    ],
+  },
+  {
+    name: 'cancel moves the row',
+    why: 'a nice message that leaves the row at AWAITING is not a cancel',
     turns: [
       { say: 'do kilo atta bhej dena', expect: 'Total' },
-      { say: '3', expect: 'cancel', orderStatus: 'CANCELLED' },
+      { say: 'nahi rehne do', orderStatus: 'CANCELLED' },
     ],
   },
   {
     name: 'an amendment is merged, not started over',
     why:
-      'staring at a confirm card and typing more items is the commonest ' +
-      'real reply. A rigid machine answers it with the menu; a naive one ' +
-      'makes a SECOND order and leaves the first pending forever',
+      'a naive machine makes a SECOND order and leaves the first pending ' +
+      'forever, so the shop sees work nobody will ever pack',
     turns: [
       { say: 'do kilo atta bhej dena', expect: 'Atta' },
-      // the card must now hold BOTH, and the catalogue says Sugar, not chini
-      { say: 'aur ek kilo chini bhi bhej dena', expect: 'Sugar', reject: 'Kya karna hai' },
-      { say: 'haan', expect: 'confirm', orderStatus: 'CONFIRMED', lines: 2 },
+      { say: 'aur ek kilo chini bhi bhej dena', expect: 'Sugar' },
+      { say: 'haan', orderStatus: 'CONFIRMED', lines: 2 },
     ],
   },
   {
@@ -109,39 +122,68 @@ const CASES: Case[] = [
       'cancel or edit an order the customer was adding to',
     turns: [
       { say: 'do kilo atta bhej dena', expect: 'Total' },
-      { say: '2 kilo chawal', expect: 'Chawal', reject: 'dobara bhej' },
+      { say: '2 kilo chawal' },
     ],
   },
   {
-    name: 'other lines survive a question',
+    name: 'the choice is answered by NAME',
     why:
-      'the old code found the first uncertain line, asked about it, and ' +
-      'discarded every other line in the order. chawal is genuinely ' +
-      'ambiguous across three rice SKUs, so it is a real question and not ' +
-      'a staged one',
+      'the shop stopped numbering options, so it asks "Basmati ya Sona ' +
+      'Masoori?" the way a person would -- and a person answers "basmati"',
     turns: [
-      { say: 'do kilo chawal aur do kilo atta', expect: 'matlab' },
-      // answering about the rice must bring the ATTA back with it
-      { say: '1', expect: 'Atta', lines: 2 },
+      { say: 'do kilo chawal aur do kilo atta' },
+      { say: 'sona masoori wala', expect: 'Sona Masoori', lines: 2 },
     ],
   },
   {
-    name: 'menu tap 3 answers',
-    why: 'the menu offered four taps and none of them did anything',
+    name: 'repeat the last order, by saying so',
+    why: 'this used to be menu option 1',
     turns: [
-      { say: 'kya haal hai', expect: 'Kya karna hai' },
-      { say: '3', expect: 'order' },
+      { say: 'wahi wala order dobara bhej do', expect: 'Total' },
+    ],
+  },
+  {
+    name: 'ask about the account, by saying so',
+    why: 'this used to be menu option 3',
+    turns: [
+      { say: 'mera hisaab kitna hua', expect: 'Rs' },
+    ],
+  },
+  {
+    name: 'a stock question gets a real answer',
+    why:
+      'the catalogue is right there, so deflecting "atta hai kya" to the ' +
+      'shopkeeper makes the assistant feel useless',
+    turns: [
+      { say: 'atta hai kya' },
     ],
   },
 ];
 
-/** wipe conversation state so each case starts from a known place */
+/** the shape of an if/else bot, in one regex */
+const MENU = /^\s*\d\s*=/m;
+
+/**
+ * When a ledger is attached, the sentence above it must contain NO digits.
+ *
+ * This is the assertion that catches an invented quantity, and it exists
+ * because one got through: asked to confirm two kilos of atta, the shop
+ * wrote "Ji, 1 kilo atta bhej dena?" while the list underneath said 2 x.
+ * A wrong number in front of a customer is the worst thing this system can
+ * do. It is not catchable by reading prose for meaning -- but as a SHAPE
+ * it is trivial, which is the whole reason the composer is now blinded to
+ * the ledger rather than merely told to ignore it.
+ */
+const HAS_DIGIT = /\d/;
+
 async function reset() {
   await prisma.conversation.updateMany({
     where: { channel: 'sim', peerPhone: HOUSEHOLD },
     data: { state: 'IDLE', contextJson: Prisma.DbNull },
   });
 }
+
+const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 async function run() {
   let passed = 0;
@@ -154,6 +196,7 @@ async function run() {
 
     let lastOrderId: string | null = null;
     let ok = true;
+    const saidByShop: string[] = [];
 
     for (const turn of c.turns) {
       const replies = await handle(inbound(turn.say));
@@ -162,10 +205,30 @@ async function run() {
       console.log(`  >  ${turn.say}`);
       console.log(`  <  ${text.replace(/\n/g, '\n     ')}`);
 
-      // the reference the confirm card prints, so the assertion can find
-      // the row without guessing which order was just made
+      // the reference the ledger prints, so the assertion can find the row
+      // without guessing which order was just made
       const ref = /\(#([a-z0-9]{6})\)/.exec(text)?.[1];
       if (ref) lastOrderId = ref;
+
+      // ---- properties that hold for EVERY reply ----------------------
+      if (MENU.test(text)) {
+        console.log('     FAIL numbered menu in the reply');
+        ok = false;
+      }
+      // the prose is everything above the ledger, which legitimately
+      // repeats itself when an order is restated
+      const prose = text.split('\n')[0]!;
+
+      if (text.includes('Total:') && HAS_DIGIT.test(prose)) {
+        console.log('     FAIL a digit in the prose above the ledger');
+        ok = false;
+      }
+
+      if (saidByShop.some((prev) => squash(prev) === squash(prose))) {
+        console.log('     FAIL said this exact sentence already');
+        ok = false;
+      }
+      saidByShop.push(prose);
 
       if (turn.expect && !text.toLowerCase().includes(turn.expect.toLowerCase())) {
         console.log(`     FAIL expected to contain "${turn.expect}"`);

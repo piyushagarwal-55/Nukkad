@@ -18,6 +18,14 @@ export type ResolutionMethod =
 export interface Candidate {
   sku: Sku;
   score: number;
+  /**
+   * The purely LEXICAL part of the score, before the household prior is
+   * added in. Kept separate because the two answer different questions:
+   * `score` decides which candidate wins, `fuzzy` decides whether a
+   * candidate has any business being on the list at all. See the note on
+   * alternates in resolver/rank.ts.
+   */
+  fuzzy: number;
   method: ResolutionMethod;
 }
 

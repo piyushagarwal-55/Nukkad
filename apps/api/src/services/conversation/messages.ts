@@ -2,115 +2,80 @@ import { rupeeLabel } from '@nukkad/shared';
 import type { PendingLine } from './state.js';
 
 /**
- * All buyer-facing copy in one file so it can be reviewed by an actual
- * Hindi speaker in one sitting rather than hunted through the codebase.
+ * TWO KINDS OF TEXT LIVE HERE, and they are not the same kind of thing.
  *
- * CONSTRAINT THAT SHAPES EVERYTHING HERE: Meta requires a PRE-APPROVED
- * TEMPLATE with fixed body text and numbered variable slots for any
- * business-initiated message sent outside the 24h session window. The
- * model is mechanically barred from writing that message. So the knock is
- * a dumb template, and all the intelligence lives INSIDE the session once
- * the buyer replies.
+ * THE LEDGER. `orderCard` renders quantities, product names and the total.
+ * It is plain code and it always will be. Every rupee a customer reads is
+ * computed here and appended to the reply verbatim, so no model is ever in
+ * a position to round a total, drop a line, or invent a price. See
+ * ./compose.ts for the rule; this file is the half that enforces it.
  *
- * SECOND CONSTRAINT, learned the hard way on the dashboard: never offer a
- * choice the system will not honour. A card that lists four taps and acts
- * on none of them is worse than a card with no taps, because the customer
- * spends their patience finding that out. Every option below is wired to
- * something in core.ts, including the ones that answer "not yet".
+ * THE FALLBACKS. The flat strings below are what gets sent if the composer
+ * call fails. They are the old canned replies, kept for exactly that, and
+ * they are why an outage costs the shop a duller sentence rather than a
+ * dropped message. They are not the normal path any more. Nothing here
+ * offers a numbered menu.
  */
 
-/** The knock. Must map 1:1 to an approved template. Variables only. */
+/** The knock. Must map 1:1 to a Meta-approved template. Variables only. */
 export const TEMPLATE_REORDER = {
   name: 'nukkad_reorder_nudge',
   body: 'Namaste {{1}}, {{2}} din ho gaye pichhle order ko. Dobara bhejne ke liye reply karein.',
 };
 
-export const menu = (name: string): string =>
-  `Namaste ${name}. Kya karna hai?`;
-
-export const menuAgain = (): string =>
-  'Number bhej dijiye, ya seedha likh dijiye kya chahiye.';
-
-export const MENU_OPTIONS = [
-  { id: '1', label: 'Pichhla order dobara bhejo' },
-  { id: '2', label: 'Naya order (likh kar ya bol kar)' },
-  { id: '3', label: 'Mera hisaab dekho' },
-  { id: '4', label: 'Automatic order set karo' },
-];
-
 /**
- * The confirm card. Stock has ALREADY been checked and substitutions
- * ALREADY resolved before this renders, so the buyer sees reality once
- * and taps once. Going back twice is what makes a demo look broken.
+ * The ledger. Substitutions are marked because a customer who is handed
+ * Dhara when they asked for Fortune must see that before they agree, not
+ * when the bag arrives.
  */
-export function confirmCard(
-  lines: PendingLine[],
-  totalPaise: number,
-  amended = false,
-): string {
+export function orderCard(lines: PendingLine[]): string {
   const rows = lines.map((l) => {
     const sub = l.wasSubstituted ? '  (badla gaya)' : '';
     return `  ${l.quantity} x ${l.name}${sub}`;
   });
+  const total = lines.reduce((s, l) => s + l.unitPricePaise * l.quantity, 0);
 
-  return [
-    // the heading changes so an amended card is not mistaken for a second
-    // order, which is what it looked like before amendments were merged
-    amended ? 'Theek hai, ab order aisa hai:' : 'Aapka order:',
-    ...rows,
-    '',
-    `Total: ${rupeeLabel(totalPaise)}`,
-  ].join('\n');
+  return [...rows, '', `Total: ${rupeeLabel(Math.round(total))}`].join('\n');
 }
 
-export const CONFIRM_OPTIONS = [
-  { id: '1', label: 'Haan, bhej do' },
-  { id: '2', label: 'Badlaav karna hai' },
-  { id: '3', label: 'Cancel' },
-];
+// ---- fallbacks, used only when the composer call fails ----------------
 
-export const confirmed = (totalPaise: number, ref: string): string =>
-  `Order confirm ho gaya. Total ${rupeeLabel(totalPaise)}. (#${ref})\nDukaan se nikalte hi bata denge.`;
+export const GREETING = 'Namaste. Bataiye, kya chahiye?';
 
-export const cancelled = (): string =>
-  'Order cancel kar diya. Kuch aur chahiye to bata dijiye.';
+export const NOT_REGISTERED =
+  'Aapka number register nahi hai. Apne dukaandaar se poochhein.';
 
-/**
- * "Badlaav karna hai" cancels and asks for the whole list again, and says
- * so out loud. Pretending to hold a half-edited order and then quietly
- * dropping a line is the kind of thing that costs a shop a customer.
- */
-export const sendAgain = (): string =>
-  'Theek hai, wo order cancel kar diya. Poori list dobara bhej dijiye.';
+export const NO_PHOTO =
+  'Abhi photo nahi padh sakte. Bol kar ya likh kar bhej dijiye.';
 
-export const stillWaiting = (): string =>
-  'Order abhi bheja nahi hai. Bhejun?';
-
-/** Low confidence goes to the buyer as taps. Never a silent guess. */
-export function disambiguation(sourceText: string, names: string[]): string {
-  const opts = names.map((n, i) => `${i + 1} = ${n}`);
-  return [`"${sourceText}" ka matlab?`, '', ...opts, `${opts.length + 1} = Koi nahi`].join('\n');
-}
-
-export const nothingUnderstood = (): string =>
+export const NOT_UNDERSTOOD =
   'Maaf kijiye, samajh nahi aaya. Naam aur maatra likh dijiye, jaise "2 kilo atta".';
 
-export const askForOrder = (): string =>
-  'Batayiye kya chahiye. Likh dijiye ya voice note bhej dijiye.';
+export const QUESTION =
+  'Ye dukaandaar se pooch kar bata denge. Tab tak order likhwa dijiye.';
 
-export const noPreviousOrder = (): string =>
-  'Abhi tak koi purana order nahi hai. Pehli baar likh kar bata dijiye.';
+export const CANCELLED = 'Theek hai, cancel kar diya.';
 
-export const account = (orders: number, spentPaise: number): string =>
-  `Ab tak ${orders} order. Kul ${rupeeLabel(spentPaise)}.`;
+export const SEND_AGAIN = 'Theek hai, wo cancel kar diya. Poori list dobara bhej dijiye.';
 
-/**
- * Autonomy tier is the shopkeeper's setting, not the customer's, because
- * it decides whether the shop ships goods nobody explicitly asked for.
- * Saying "not yet" is honest; wiring a tap to it would not be.
- */
-export const autoOrderNotYet = (): string =>
-  'Automatic order abhi dukaandaar hi chalu karte hain. Unse keh dijiye, wo laga denge.';
+export const STILL_WAITING = 'Order abhi bheja nahi hai. Bhej dun?';
+
+export const NO_PREVIOUS_ORDER =
+  'Abhi tak koi purana order nahi hai. Likh kar bata dijiye kya chahiye.';
+
+export const readyToSend = (): string => 'Ye lijiye. Bhej dun?';
+
+export const confirmed = (totalPaise: number, ref: string): string =>
+  `Order confirm ho gaya. Total ${rupeeLabel(totalPaise)}. (#${ref})`;
+
+export const account = (orders: number, spent: string): string =>
+  `Ab tak ${orders} order. Kul ${spent}.`;
+
+export const askWhich = (sourceText: string, names: string[]): string =>
+  `"${sourceText}" mein se kaunsa? ${names.join(', ')}`;
+
+export const stockAnswer = (name: string, inStock: boolean): string =>
+  inStock ? `${name} hai. Kitna bhejun?` : `${name} abhi khatam hai.`;
 
 export const outOfStock = (name: string, alt: string): string =>
   `${name} abhi khatam hai. ${alt} bhej dun?`;

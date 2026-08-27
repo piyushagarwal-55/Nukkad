@@ -57,6 +57,18 @@ export const ABLATIONS: Record<string, RankOptions> = {
   'plus-confirmation': { useAliases: true,  useFuzzy: true,  usePrior: true,  confidenceFloor: 0.55, topK: 3 },
 };
 
+/**
+ * How much lexical footing a SKU needs before its reorder history counts.
+ * See the note at the use site: below this, the prior may not vote.
+ */
+const MIN_LEXICAL_FOR_PRIOR = 0.2;
+
+/**
+ * How close an alternate must be to the leader before it is worth showing
+ * a customer. See the note at the use site.
+ */
+const ALT_BAND = 0.6;
+
 const W_FUZZY = 0.7;
 const W_PRIOR = 0.3;
 
@@ -90,14 +102,34 @@ export function rankLine(
       method = 'FUZZY';
     }
 
-    const p = opts.usePrior ? (prior.get(sku.id) ?? 0) : 0;
+    /**
+     * THE PRIOR BREAKS TIES. IT DOES NOT NOMINATE CANDIDATES.
+     *
+     * Without the floor below, a SKU with NO lexical match at all still
+     * scored W_PRIOR * p, cleared the 0.05 gate, and could reach the top
+     * three. Observed: asked for "chawal", the shop offered Aashirvaad
+     * Atta and Sugar 1kg as the options -- not because they sound like
+     * chawal, but because Ramesh buys them constantly.
+     *
+     * That is worse than failing. A shopkeeper who answers "rice?" with
+     * "flour or sugar?" is not being helpful, they are being broken, and
+     * it is the single most damaging thing the ranker can put in front of
+     * a customer.
+     *
+     * The floor is low on purpose. Everything the prior is FOR still
+     * works: "wahi wala atta" has atta in it, and all three sunflower oils
+     * clear it lexically before history picks Fortune. What it stops is
+     * history inventing a candidate out of nothing.
+     */
+    const footing = fuzzy >= MIN_LEXICAL_FOR_PRIOR;
+    const p = opts.usePrior && footing ? (prior.get(sku.id) ?? 0) : 0;
     if (opts.usePrior && p > 0 && method === 'FUZZY' && fuzzy > 0.3) method = 'PRIOR';
 
     // Without the prior the score is purely lexical. With it, history can
     // lift a weak lexical match over a stronger one, which is the entire
     // point: you rank rather than transcribe.
     const score = W_FUZZY * fuzzy + W_PRIOR * p;
-    if (score > 0.05) scored.push({ sku, score, method });
+    if (score > 0.05) scored.push({ sku, score, fuzzy, method });
   }
 
   scored.sort((a, b) => b.score - a.score);
@@ -109,12 +141,40 @@ export function rankLine(
   const margin = top.length > 1 ? (top[0]!.score - top[1]!.score) : (chosen?.score ?? 0);
   const confidence = chosen ? Math.min(1, chosen.score * 0.6 + margin * 0.4) : 0;
 
+  /**
+   * ALTERNATES MUST BE RIVALS, NOT JUST RUNNERS-UP.
+   *
+   * top-k by score always returns k things, however bad the k-th is. That
+   * is fine for an eval table and wrong for a question put to a customer:
+   * asked for "tata wali chai" the shop offered Tata Tea Gold, Aashirvaad
+   * Atta and Tata Salt. The tea was right. The atta was there because
+   * something had to be, and it makes the shop look like it is guessing.
+   *
+   * So an alternate has to be within a band of the leader to be worth
+   * naming. Genuine ambiguity survives -- three sunflower oils sit within
+   * a few points of each other, which is exactly when the buyer should be
+   * asked -- and filler does not.
+   *
+   * BANDED ON `fuzzy`, NOT ON `score`, and the difference is the whole
+   * fix. Banding on score did not drop the atta, because the prior had
+   * lifted it to within a few points of the tea -- history is precisely
+   * what made the wrong answer look competitive. Membership in the option
+   * set is a question about what they SAID; the prior only gets to order
+   * the list once it is drawn up.
+   *
+   * This is a PRESENTATION cut, applied after ranking, so the ablation
+   * table still measures the ranker rather than this.
+   */
+  const rivals = chosen
+    ? top.slice(1).filter((c) => c.fuzzy >= chosen.fuzzy * ALT_BAND)
+    : [];
+
   return {
     sourceText,
     quantity,
     unitHint,
     chosen,
-    alternates: top.slice(1),
+    alternates: rivals,
     confidence,
     needsDisambiguation: !chosen || confidence < opts.confidenceFloor,
   };

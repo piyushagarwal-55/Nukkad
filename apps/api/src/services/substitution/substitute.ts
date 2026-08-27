@@ -51,6 +51,13 @@ export function findSubstitutes(
     out.push({
       sku: s,
       score: 0.35 * priceScore + 0.25 * packScore + 0.4 * familiarity,
+      /**
+       * A substitute has no lexical claim on what was said -- nobody asked
+       * for Dhara when they said Fortune. It is offered because the shelf
+       * is empty, and `fuzzy` records that honestly rather than borrowing
+       * the original's score.
+       */
+      fuzzy: 0,
       method: 'SUBSTITUTED',
     });
   }

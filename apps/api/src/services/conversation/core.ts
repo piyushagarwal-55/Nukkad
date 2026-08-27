@@ -1,5 +1,6 @@
 import { prisma } from '@nukkad/db';
-import type { InboundMessage, OutboundMessage, ResolvedLine, Sku } from '@nukkad/shared';
+import { rupeeLabel } from '@nukkad/shared';
+import type { InboundMessage, OutboundMessage, ResolvedLine } from '@nukkad/shared';
 import { transcribe } from '../asr/index.js';
 import { isAudio, isImage } from '../asr/audio.js';
 import { extractOrder } from '../extraction/extract.js';
@@ -9,8 +10,9 @@ import { rankLine, DEFAULT_RANK } from '../resolver/rank.js';
 import { findSubstitutes } from '../substitution/substitute.js';
 import { hasVision } from '../../config/env.js';
 import { readAnswer } from './reply.js';
+import { compose, type Facts } from './compose.js';
 import {
-  loadConvo, setPending, clearPending, flatten, isStale,
+  loadConvo, save, flatten, isStale,
   type Convo, type Pending, type PendingLine, type OrderMeta,
 } from './state.js';
 import * as copy from './messages.js';
@@ -22,16 +24,28 @@ import * as copy from './messages.js';
  * takes an InboundMessage and returns OutboundMessages. That is exactly
  * what lets the web simulator run the identical pipeline as a real phone.
  *
- * IT IS ALSO A STATE MACHINE, which it was not until recently. See
- * ./state.ts for why that was the single biggest hole in the WhatsApp
- * agent: every card offered numbered taps and no tap did anything.
+ * TWO THINGS DECIDE THE SHAPE OF EVERY TURN.
  *
- * The shape of a turn is:
+ * It is a STATE MACHINE, because a bot that asks a question and cannot
+ * hear the answer is not an agent. See ./state.ts.
+ *
+ * And it does not WRITE any of what it says. Every buyer-facing sentence
+ * goes through ./compose.ts, which phrases it in the customer's own
+ * register. What survives here is the deciding: which SKU, which price,
+ * which total, in stock or not, confirmed or not. The model gets those as
+ * facts and is barred from inventing any of them.
+ *
+ * That split is why the numbered menu is gone. "1 = Pichhla order dobara
+ * bhejo" was never a design choice, it was the absence of one -- the
+ * system had a branch and no way to talk about it. Now REPEAT and ACCOUNT
+ * are intents, recognised from what someone actually says.
+ *
+ * The order of a turn:
  *
  *   route to shop and household
  *   turn whatever arrived into text
  *   IF a question is outstanding, try to read this as the ANSWER
- *   otherwise, or if that fails, treat it as a NEW ORDER
+ *   otherwise, or if that fails, read the INTENT and act on it
  *
  * The "or if that fails" is load-bearing. A customer staring at a confirm
  * card who types "aur ek kilo chini bhi" has not answered anything, and a
@@ -40,6 +54,37 @@ import * as copy from './messages.js';
 
 /** Twilio's shared sandbox sender. Identifies no particular shop. */
 const SANDBOX_NUMBER = '+14155238886';
+
+/** everything a handler needs, so signatures stay readable */
+interface Ctx {
+  convo: Convo;
+  kiranaId: string;
+  householdId: string;
+  buyerName: string;
+  shopName: string;
+  /** what the buyer sent this turn, so the voice can mirror their register */
+  said: string;
+  meta: OrderMeta;
+}
+
+/** say something true, in the customer's own words */
+async function speak(
+  ctx: Pick<Ctx, 'convo' | 'buyerName' | 'shopName' | 'said'>,
+  facts: Facts,
+  fallback: string,
+  card?: string,
+): Promise<OutboundMessage[]> {
+  const text = await compose({
+    facts,
+    said: ctx.said,
+    buyerName: ctx.buyerName,
+    shopName: ctx.shopName,
+    recent: ctx.convo.recent,
+    card,
+    fallback,
+  });
+  return [{ text }];
+}
 
 export async function handle(msg: InboundMessage): Promise<OutboundMessage[]> {
   const started = Date.now();
@@ -89,7 +134,13 @@ export async function handle(msg: InboundMessage): Promise<OutboundMessage[]> {
   });
 
   if (!household) {
-    return [{ text: 'Aapka number register nahi hai. Apne dukaandaar se poochhein.' }];
+    // No conversation row for an unknown number, so this one reply is
+    // composed without any history to draw on.
+    return speak(
+      { convo: { id: '', pending: null, recent: [] }, buyerName: 'ji', shopName: kirana.name, said: msg.text ?? '' },
+      { kind: 'NOT_REGISTERED' },
+      copy.NOT_REGISTERED,
+    );
   }
 
   const convo = await loadConvo(msg.channel, msg.senderId, household.id, kirana.id);
@@ -107,38 +158,62 @@ export async function handle(msg: InboundMessage): Promise<OutboundMessage[]> {
     text = t.text;
   }
 
+  const ctx: Ctx = {
+    convo,
+    kiranaId: kirana.id,
+    householdId: household.id,
+    buyerName: household.name,
+    shopName: kirana.name,
+    said: text,
+    meta: {
+      source: audio ? 'VOICE' : 'TEXT',
+      rawText: msg.text ?? null,
+      transcript,
+      asrEngine,
+      mediaPath: audio?.localPath ?? null,
+      startedAt: started,
+    },
+  };
+
+  const out = await turn(ctx, msg);
+
+  /**
+   * ONE WRITE, at the end.
+   *
+   * The transcript is what stops the voice repeating itself, which is the
+   * single most bot-like thing a bot does. Recording it here rather than in
+   * each handler means no branch can forget to.
+   */
+  if (text.trim()) convo.recent.push({ role: 'user', text });
+  for (const o of out) convo.recent.push({ role: 'shop', text: o.text });
+  await save(convo);
+
+  return out;
+}
+
+async function turn(ctx: Ctx, msg: InboundMessage): Promise<OutboundMessage[]> {
   const image = msg.media.find((m) => isImage(m.mime));
   if (image && !hasVision) {
     // No multimodal model exists on this Groq account, so photo input is
     // out of scope rather than silently broken. Say so plainly.
-    return [{ text: 'Abhi photo nahi padh sakte. Bol kar ya likh kar bhej dijiye.' }];
+    return speak(ctx, { kind: 'NO_PHOTO' }, copy.NO_PHOTO);
   }
 
-  const meta: OrderMeta = {
-    source: audio ? 'VOICE' : 'TEXT',
-    rawText: msg.text ?? null,
-    transcript,
-    asrEngine,
-    mediaPath: audio?.localPath ?? null,
-    startedAt: started,
-  };
-
-  // ---- 2. is an answer outstanding? -----------------------------------
-  let pending = convo.pending;
+  // ---- is an answer outstanding? --------------------------------------
+  let pending = ctx.convo.pending;
 
   if (pending && isStale(pending)) {
     // Six hours on, this is not an answer to anything. Retire it rather
     // than leave the order sitting in the shop's pending count forever.
-    await expire(convo, pending);
-    pending = null;
+    await expire(pending);
+    pending = ctx.convo.pending = null;
   }
 
-  if (!text.trim()) {
-    // An empty message cannot answer a question either, so re-ask rather
-    // than dropping whatever was outstanding.
-    if (pending) return [reAsk(pending)];
-    await setPending(convo.id, { kind: 'MENU', askedAt: new Date().toISOString() });
-    return [{ text: copy.menu(household.name), quickReplies: copy.MENU_OPTIONS }];
+  if (!ctx.said.trim()) {
+    // An empty message cannot answer a question, so re-ask rather than
+    // drop whatever was outstanding.
+    if (pending) return reAsk(ctx, pending);
+    return speak(ctx, { kind: 'GREETING' }, copy.GREETING);
   }
 
   /**
@@ -148,9 +223,9 @@ export async function handle(msg: InboundMessage): Promise<OutboundMessage[]> {
   let carried: PendingLine[] = [];
 
   if (pending) {
-    const answered = await answer(convo, pending, text, kirana.id, household.id);
+    const answered = await answer(ctx, pending);
     // null means "this was not an answer" -- fall through and read it as
-    // a new order, which is nearly always what the customer meant
+    // a new instruction, which is nearly always what the customer meant
     if (answered) return answered;
 
     /**
@@ -170,45 +245,61 @@ export async function handle(msg: InboundMessage): Promise<OutboundMessage[]> {
      * by natural language is neither.
      */
     if (pending.kind === 'CONFIRM') carried = await supersede(pending.orderId);
-    await clearPending(convo.id);
+    ctx.convo.pending = null;
   }
 
-  // ---- 3. segment. The model does NOT pick products. ------------------
-  return newOrder(convo, text, meta, kirana.id, household.id, household.name, carried);
+  return act(ctx, carried);
 }
 
-// ---------------------------------------------------------------- ordering
+// ---------------------------------------------------------------- intents
 
-async function newOrder(
-  convo: Convo,
-  text: string,
-  meta: OrderMeta,
-  kiranaId: string,
-  householdId: string,
-  householdName: string,
-  carried: PendingLine[] = [],
-): Promise<OutboundMessage[]> {
-  const extraction = await extractOrder(text);
+/**
+ * Read what they want and do it.
+ *
+ * This is where the four-item menu used to be. Every branch below was
+ * previously a number the customer had to find and type.
+ */
+async function act(ctx: Ctx, carried: PendingLine[]): Promise<OutboundMessage[]> {
+  const extraction = await extractOrder(ctx.said);
 
-  if (extraction.intent === 'CANCEL') {
-    return [{ text: 'Theek hai, cancel kar diya.' }];
+  switch (extraction.intent) {
+    case 'CANCEL':
+      if (carried.length) {
+        // they were mid-order and changed their mind about all of it
+        return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
+      }
+      return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
+
+    case 'REPEAT':
+      return repeatLast(ctx);
+
+    case 'ACCOUNT':
+      return account(ctx);
+
+    case 'GREETING':
+      if (carried.length) return placeOrder(ctx, carried, true);
+      return speak(ctx, { kind: 'GREETING' }, copy.GREETING);
+
+    case 'QUESTION':
+      return question(ctx, extraction.items.map((i) => i.text), carried);
+
+    default:
+      break;
   }
+
   if (!extraction.items.length) {
     // Anything carried from a superseded order is put back rather than
     // dropped: failing to parse the amendment is no reason to lose what
     // the customer had already agreed to.
-    if (carried.length) {
-      return placeOrder(convo, carried, meta, kiranaId, householdId, true);
-    }
-    await setPending(convo.id, { kind: 'MENU', askedAt: new Date().toISOString() });
-    return [{ text: copy.menu(householdName), quickReplies: copy.MENU_OPTIONS }];
+    if (carried.length) return placeOrder(ctx, carried, true);
+    return speak(ctx, { kind: 'NOT_UNDERSTOOD' }, copy.NOT_UNDERSTOOD);
   }
 
   // ---- rank against THIS shop's catalogue, with THIS household's prior
   const [catalog, stock, prior] = await Promise.all([
-    getCatalog(kiranaId),
-    getStockMap(kiranaId),
-    buildPrior(householdId),
+    getCatalog(ctx.kiranaId),
+    getStockMap(ctx.kiranaId),
+    buildPrior(ctx.householdId),
   ]);
 
   const resolved: ResolvedLine[] = extraction.items.map((it) =>
@@ -216,19 +307,110 @@ async function newOrder(
   );
 
   // ---- stock check and substitution BEFORE the card, never after ------
+  const substituted: string[] = [];
   for (const line of resolved) {
     if (!line.chosen) continue;
     if ((stock.get(line.chosen.sku.id) ?? 0) >= line.quantity) continue;
 
     const subs = findSubstitutes(line.chosen.sku, catalog, stock, prior);
     if (subs.length) {
+      substituted.push(line.chosen.sku.name);
       line.alternates = [line.chosen, ...line.alternates].slice(0, 2);
       line.chosen = subs[0]!;
     }
   }
 
-  return advance(convo, merge(carried, resolved.map(flatten)), meta, kiranaId, householdId, catalog, carried.length > 0);
+  return advance(
+    ctx,
+    merge(carried, resolved.map(flatten)),
+    carried.length > 0,
+    substituted,
+  );
 }
+
+/**
+ * "Atta hai kya?" gets a real answer, because the shop knows.
+ *
+ * Deflecting a stock question to the shopkeeper when the catalogue is
+ * sitting right there is the sort of thing that makes an assistant feel
+ * useless. Anything NOT about a stocked product still deflects, honestly,
+ * rather than inventing shop timings.
+ */
+async function question(
+  ctx: Ctx,
+  spans: string[],
+  carried: PendingLine[],
+): Promise<OutboundMessage[]> {
+  const card = carried.length ? copy.orderCard(carried) : undefined;
+
+  if (spans.length) {
+    const [catalog, stock, prior] = await Promise.all([
+      getCatalog(ctx.kiranaId),
+      getStockMap(ctx.kiranaId),
+      buildPrior(ctx.householdId),
+    ]);
+    const line = rankLine(spans[0]!, 1, null, catalog, prior, DEFAULT_RANK);
+
+    if (line.chosen && !line.needsDisambiguation) {
+      const sku = line.chosen.sku;
+      return speak(ctx, {
+        kind: 'STOCK_ANSWER',
+        name: sku.name,
+        inStock: (stock.get(sku.id) ?? 0) > 0,
+        price: rupeeLabel(sku.sellPaise),
+      }, copy.stockAnswer(sku.name, (stock.get(sku.id) ?? 0) > 0), card);
+    }
+  }
+
+  return speak(ctx, { kind: 'QUESTION' }, copy.QUESTION, card);
+}
+
+async function repeatLast(ctx: Ctx): Promise<OutboundMessage[]> {
+  const last = await prisma.order.findFirst({
+    where: { householdId: ctx.householdId, status: { in: ['CONFIRMED', 'FULFILLED'] } },
+    orderBy: { createdAt: 'desc' },
+    include: { lines: { include: { sku: true } } },
+  });
+
+  if (!last?.lines.length) {
+    return speak(ctx, { kind: 'NO_PREVIOUS_ORDER' }, copy.NO_PREVIOUS_ORDER);
+  }
+
+  const lines: PendingLine[] = last.lines
+    .filter((l) => l.sku)
+    .map((l) => ({
+      sourceText: l.sourceText,
+      quantity: l.quantity,
+      unitHint: l.unitHint,
+      skuId: l.skuId,
+      name: l.sku!.name,
+      // repriced from today's catalogue, not copied from the old row
+      unitPricePaise: l.sku!.sellPaise,
+      method: 'PRIOR',
+      confidence: 1,
+      wasSubstituted: false,
+      alternates: [],
+      needsDisambiguation: false,
+    }));
+
+  return placeOrder(ctx, lines, false);
+}
+
+async function account(ctx: Ctx): Promise<OutboundMessage[]> {
+  const where = {
+    householdId: ctx.householdId,
+    status: { in: ['CONFIRMED' as const, 'FULFILLED' as const] },
+  };
+  const [orders, spend] = await Promise.all([
+    prisma.order.count({ where }),
+    prisma.order.aggregate({ where, _sum: { totalPaise: true } }),
+  ]);
+  const spent = rupeeLabel(spend._sum?.totalPaise ?? 0);
+
+  return speak(ctx, { kind: 'ACCOUNT', orders, spent }, copy.account(orders, spent));
+}
+
+// ---------------------------------------------------------------- ordering
 
 /**
  * Fold an amendment into the order it amends, keyed by SKU.
@@ -260,13 +442,10 @@ function merge(carried: PendingLine[], fresh: PendingLine[]): PendingLine[] {
  * questions are asked one at a time until they run out.
  */
 async function advance(
-  convo: Convo,
+  ctx: Ctx,
   lines: PendingLine[],
-  meta: OrderMeta,
-  kiranaId: string,
-  householdId: string,
-  catalog: Sku[],
-  amended = false,
+  amended: boolean,
+  substituted: string[] = [],
 ): Promise<OutboundMessage[]> {
   const index = lines.findIndex((l) => l.needsDisambiguation);
 
@@ -282,56 +461,58 @@ async function advance(
     if (!options.length) {
       line.needsDisambiguation = false;
       line.skuId = null;
-      return advance(convo, lines, meta, kiranaId, householdId, catalog, amended);
+      return advance(ctx, lines, amended, substituted);
     }
 
-    await setPending(convo.id, {
+    ctx.convo.pending = {
       kind: 'DISAMBIGUATE',
-      lines, index, options, meta,
+      lines, index, options, meta: ctx.meta,
       askedAt: new Date().toISOString(),
-    });
-    return [{
-      text: copy.disambiguation(line.sourceText, options.map((o) => o.name)),
-      quickReplies: options.map((o, i) => ({ id: String(i + 1), label: o.name })),
-    }];
+    };
+
+    const names = options.map((o) => o.name);
+    return speak(
+      ctx,
+      { kind: 'ASK_WHICH', sourceText: line.sourceText, options: names },
+      copy.askWhich(line.sourceText, names),
+    );
   }
 
-  return placeOrder(convo, lines, meta, kiranaId, householdId, amended);
+  return placeOrder(ctx, lines, amended, substituted);
 }
 
 /**
- * Writes the Order at AWAITING and asks for the tap that confirms it.
+ * Writes the Order at AWAITING and asks whether to send it.
  *
  * The row is written HERE and not before, because until the questions are
  * answered there is no order -- only a conversation. Half-finished ones
  * used to be persisted anyway and then counted in the shop's pending total.
  */
 async function placeOrder(
-  convo: Convo,
+  ctx: Ctx,
   lines: PendingLine[],
-  meta: OrderMeta,
-  kiranaId: string,
-  householdId: string,
-  amended = false,
+  amended: boolean,
+  substituted: string[] = [],
 ): Promise<OutboundMessage[]> {
   const kept = lines.filter((l) => l.skuId);
   if (!kept.length) {
-    await clearPending(convo.id);
-    return [{ text: copy.nothingUnderstood() }];
+    ctx.convo.pending = null;
+    return speak(ctx, { kind: 'NOT_UNDERSTOOD' }, copy.NOT_UNDERSTOOD);
   }
 
   const total = kept.reduce((sum, l) => sum + l.unitPricePaise * l.quantity, 0);
 
   const order = await prisma.order.create({
     data: {
-      kiranaId, householdId,
+      kiranaId: ctx.kiranaId,
+      householdId: ctx.householdId,
       status: 'AWAITING',
-      source: meta.source,
-      rawText: meta.rawText,
-      transcript: meta.transcript,
-      asrEngine: meta.asrEngine,
-      mediaPath: meta.mediaPath,
-      latencyMs: Date.now() - meta.startedAt,
+      source: ctx.meta.source,
+      rawText: ctx.meta.rawText,
+      transcript: ctx.meta.transcript,
+      asrEngine: ctx.meta.asrEngine,
+      mediaPath: ctx.meta.mediaPath,
+      latencyMs: Date.now() - ctx.meta.startedAt,
       totalPaise: Math.round(total),
       lines: {
         create: kept.map((l) => ({
@@ -350,41 +531,40 @@ async function placeOrder(
     },
   });
 
-  await setPending(convo.id, {
+  ctx.convo.pending = {
     kind: 'CONFIRM', orderId: order.id, askedAt: new Date().toISOString(),
-  });
+  };
 
-  return [{
-    text: copy.confirmCard(kept, Math.round(total), amended) + `\n\n(#${order.id.slice(-6)})`,
-    quickReplies: copy.CONFIRM_OPTIONS,
-  }];
+  /**
+   * The card is rendered by code and appended AFTER whatever the voice
+   * says. Quantities, prices and the total never pass through a model,
+   * here or anywhere else.
+   */
+  const card = `${copy.orderCard(kept)}\n(#${order.id.slice(-6)})`;
+
+  return speak(
+    ctx,
+    amended
+      ? { kind: 'ORDER_AMENDED' }
+      : { kind: 'ORDER_DRAFT', substituted },
+    copy.readyToSend(),
+    card,
+  );
 }
 
 // ---------------------------------------------------------------- answering
 
 /**
- * Reads `text` as the answer to whatever is outstanding.
+ * Reads what they said as the answer to whatever is outstanding.
  *
  * Returns null when it is not an answer at all, which is the signal to the
- * caller to treat the message as a new order instead. That is the whole
- * escape hatch, and it is why the vocabulary in ./reply.ts can stay short.
+ * caller to read the message as a new instruction instead. That is the
+ * whole escape hatch, and it is why the vocabulary in ./reply.ts can stay
+ * short.
  */
-async function answer(
-  convo: Convo,
-  pending: Pending,
-  text: string,
-  kiranaId: string,
-  householdId: string,
-): Promise<OutboundMessage[] | null> {
-  if (pending.kind === 'MENU') {
-    const a = readAnswer(text, copy.MENU_OPTIONS.length);
-    if (a.kind !== 'CHOICE') return null;
-    return menuChoice(convo, a.index, kiranaId, householdId);
-  }
-
+async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | null> {
   if (pending.kind === 'CONFIRM') {
-    // three numbered options on the card: send / change / cancel
-    const a = readAnswer(text, copy.CONFIRM_OPTIONS.length);
+    const a = readAnswer(ctx.said, 3);
 
     const yes = a.kind === 'YES' || (a.kind === 'CHOICE' && a.index === 0);
     const change = a.kind === 'CHANGE' || (a.kind === 'CHOICE' && a.index === 1);
@@ -395,8 +575,12 @@ async function answer(
         where: { id: pending.orderId },
         data: { status: 'CONFIRMED', confirmedAt: new Date() },
       });
-      await clearPending(convo.id);
-      return [{ text: copy.confirmed(order.totalPaise, order.id.slice(-6)) }];
+      ctx.convo.pending = null;
+      return speak(
+        ctx,
+        { kind: 'ORDER_CONFIRMED', ref: order.id.slice(-6) },
+        copy.confirmed(order.totalPaise, order.id.slice(-6)),
+      );
     }
 
     if (no) {
@@ -404,8 +588,8 @@ async function answer(
         where: { id: pending.orderId },
         data: { status: 'CANCELLED', cancelledAt: new Date() },
       });
-      await clearPending(convo.id);
-      return [{ text: copy.cancelled() }];
+      ctx.convo.pending = null;
+      return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
     }
 
     if (change) {
@@ -421,24 +605,25 @@ async function answer(
         where: { id: pending.orderId },
         data: { status: 'CANCELLED', cancelledAt: new Date() },
       });
-      await clearPending(convo.id);
-      return [{ text: copy.sendAgain() }];
+      ctx.convo.pending = null;
+      return speak(ctx, { kind: 'ORDER_REPLACED' }, copy.SEND_AGAIN);
     }
 
     return null;
   }
 
   // ---- disambiguation --------------------------------------------------
-  // options plus one more for "none of these"
-  const a = readAnswer(text, pending.options.length + 1);
-  if (a.kind !== 'CHOICE') return null;
+  const names = pending.options.map((o) => o.name);
+  const a = readAnswer(ctx.said, pending.options.length, names);
+
+  if (a.kind !== 'CHOICE' && a.kind !== 'NONE_OF_THESE') return null;
 
   const lines = pending.lines;
   const line = lines[pending.index]!;
-  const picked = pending.options[a.index];
-  const catalog = await getCatalog(kiranaId);
 
-  if (picked) {
+  if (a.kind === 'CHOICE') {
+    const picked = pending.options[a.index]!;
+    const catalog = await getCatalog(ctx.kiranaId);
     const sku = catalog.find((s) => s.id === picked.skuId);
     line.skuId = picked.skuId;
     line.name = picked.name;
@@ -447,72 +632,14 @@ async function answer(
     line.method = 'DISAMBIGUATED';
     line.confidence = 1;
   } else {
-    // the trailing "koi nahi" option: drop the line entirely
     line.skuId = null;
   }
   line.needsDisambiguation = false;
 
-  return advance(convo, lines, pending.meta, kiranaId, householdId, catalog);
-}
-
-async function menuChoice(
-  convo: Convo,
-  index: number,
-  kiranaId: string,
-  householdId: string,
-): Promise<OutboundMessage[]> {
-  // 1 = repeat last order, 2 = new order, 3 = my account, 4 = automatic
-  if (index === 0) {
-    const last = await prisma.order.findFirst({
-      where: { householdId, status: { in: ['CONFIRMED', 'FULFILLED'] } },
-      orderBy: { createdAt: 'desc' },
-      include: { lines: { include: { sku: true } } },
-    });
-    if (!last?.lines.length) {
-      await clearPending(convo.id);
-      return [{ text: copy.noPreviousOrder() }];
-    }
-
-    const lines: PendingLine[] = last.lines
-      .filter((l) => l.sku)
-      .map((l) => ({
-        sourceText: l.sourceText,
-        quantity: l.quantity,
-        unitHint: l.unitHint,
-        skuId: l.skuId,
-        name: l.sku!.name,
-        // repriced from today's catalogue, not copied from the old row
-        unitPricePaise: l.sku!.sellPaise,
-        method: 'PRIOR',
-        confidence: 1,
-        wasSubstituted: false,
-        alternates: [],
-        needsDisambiguation: false,
-      }));
-
-    return placeOrder(convo, lines, {
-      source: 'TEXT', rawText: null, transcript: null, asrEngine: null,
-      mediaPath: null, startedAt: Date.now(),
-    }, kiranaId, householdId);
-  }
-
-  if (index === 2) {
-    const [orders, spend] = await Promise.all([
-      prisma.order.count({ where: { householdId, status: { in: ['CONFIRMED', 'FULFILLED'] } } }),
-      prisma.order.aggregate({
-        where: { householdId, status: { in: ['CONFIRMED', 'FULFILLED'] } },
-        _sum: { totalPaise: true },
-      }),
-    ]);
-    await clearPending(convo.id);
-    return [{ text: copy.account(orders, spend._sum.totalPaise ?? 0) }];
-  }
-
-  // 2 = new order and 4 = automatic both just wait for the next message.
-  // Automatic ordering is a tier change the shopkeeper sets, not something
-  // to switch on from a tap, so it says so rather than pretending.
-  await clearPending(convo.id);
-  return [{ text: index === 3 ? copy.autoOrderNotYet() : copy.askForOrder() }];
+  // meta comes from the pending context, not from this turn: the order
+  // belongs to the voice note that started it, not to the word "basmati"
+  ctx.meta = pending.meta;
+  return advance(ctx, lines, false);
 }
 
 // ---------------------------------------------------------------- upkeep
@@ -556,26 +683,24 @@ async function supersede(orderId: string): Promise<PendingLine[]> {
 }
 
 /** retire a question nobody answered, and any order hanging off it */
-async function expire(convo: Convo, pending: Pending): Promise<void> {
+async function expire(pending: Pending): Promise<void> {
   if (pending.kind === 'CONFIRM') {
     await prisma.order.updateMany({
       where: { id: pending.orderId, status: 'AWAITING' },
       data: { status: 'CANCELLED', cancelledAt: new Date() },
     });
   }
-  await clearPending(convo.id);
 }
 
-function reAsk(pending: Pending): OutboundMessage {
+function reAsk(ctx: Ctx, pending: Pending): Promise<OutboundMessage[]> {
   if (pending.kind === 'DISAMBIGUATE') {
     const line = pending.lines[pending.index]!;
-    return {
-      text: copy.disambiguation(line.sourceText, pending.options.map((o) => o.name)),
-      quickReplies: pending.options.map((o, i) => ({ id: String(i + 1), label: o.name })),
-    };
+    const names = pending.options.map((o) => o.name);
+    return speak(
+      ctx,
+      { kind: 'ASK_WHICH', sourceText: line.sourceText, options: names },
+      copy.askWhich(line.sourceText, names),
+    );
   }
-  if (pending.kind === 'CONFIRM') {
-    return { text: copy.stillWaiting(), quickReplies: copy.CONFIRM_OPTIONS };
-  }
-  return { text: copy.menuAgain(), quickReplies: copy.MENU_OPTIONS };
+  return speak(ctx, { kind: 'STILL_WAITING' }, copy.STILL_WAITING);
 }

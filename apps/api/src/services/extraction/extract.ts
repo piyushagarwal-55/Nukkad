@@ -18,7 +18,7 @@ import { extractionSchema, type Extraction } from '@nukkad/shared';
 const SYSTEM = [
   'You segment Indian grocery orders. Return ONLY JSON matching:',
   '{"items":[{"text":"<verbatim span naming the product>","quantity":<number>,"unit":"<unit or null>"}],',
-  '"intent":"ORDER|CANCEL|MODIFY|QUESTION|CONFIRM|UNKNOWN"}',
+  '"intent":"ORDER|REPEAT|ACCOUNT|CANCEL|MODIFY|CONFIRM|GREETING|QUESTION|UNKNOWN"}',
   'RULES:',
   '- Copy the product span VERBATIM from the input. Do not translate it,',
   '  do not normalise spelling, do not guess or add a brand.',
@@ -26,6 +26,16 @@ const SYSTEM = [
   '- Convert Hinglish number words to digits: do=2, teen=3, chaar=4, paanch=5,',
   '  das=10, adha=0.5, dedh=1.5, dhai=2.5, sava=1.25.',
   '- If the message is not an order, return items:[] and the right intent.',
+  'INTENT NOTES:',
+  '- REPEAT: wants the previous order again. "wahi wala bhej do",',
+  '  "pichhli baar wala", "same as last time". Return items:[] for these,',
+  '  the previous order is looked up downstream.',
+  '- ACCOUNT: asking about their own spending or order history.',
+  '  "kitna hua", "mera hisaab", "how much do I owe".',
+  '- GREETING: hello, namaste, kya haal hai, thanks, ok.',
+  '- QUESTION: asking the SHOP something. Timings, whether something is in',
+  '  stock, what a price is. Still return any product span in items so the',
+  '  question can be answered about the right thing.',
 ].join('\n');
 
 export async function extractOrder(text: string, fast = false): Promise<Extraction> {
