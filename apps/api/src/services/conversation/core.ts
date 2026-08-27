@@ -12,7 +12,7 @@ import { rankLine, DEFAULT_RANK, stripQuantity } from '../resolver/rank.js';
 import { fuzzyScore } from '../resolver/fuzzy.js';
 import { fitPack, displayNames, withoutPack } from '../resolver/pack.js';
 import { findSubstitutes } from '../substitution/substitute.js';
-import { hasVision } from '../../config/env.js';
+import { hasVision, env } from '../../config/env.js';
 import { readAnswer } from './reply.js';
 import { resolve, pickFrom } from '../resolver/resolve.js';
 import { decide, type PolicyAction } from '../policy/decide.js';
@@ -63,8 +63,17 @@ import * as copy from './messages.js';
  * machine that insists on a digit would throw that away.
  */
 
-/** Twilio's shared sandbox sender. Identifies no particular shop. */
-const SANDBOX_NUMBER = '+14155238886';
+/**
+ * The sandbox sender, read from config rather than written down.
+ *
+ * It was hardcoded to +1 415 523 8886, which was true of the old shared
+ * sandbox and false of the newer per-trial ones -- a new account gets its
+ * own number, inbound messages arrive addressed to THAT, and the fallback
+ * below stops firing. The symptom is silence: every message resolves to
+ * no shop and the handler returns nothing, which looks identical to the
+ * webhook not being wired.
+ */
+const SANDBOX_NUMBER = env.TWILIO_WHATSAPP_FROM.replace('whatsapp:', '');
 
 /** everything a handler needs, so signatures stay readable */
 interface Ctx {
