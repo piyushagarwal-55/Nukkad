@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import sharp from 'sharp';
 import { groq } from '../../lib/groq.js';
 import { env } from '../../config/env.js';
 import { z } from 'zod';
@@ -122,6 +123,58 @@ export const PROMPT = [
   '  a quantity but no amount. Leave its amountPaise null.',
 ].join('\n');
 
+/**
+ * Groq bills vision by input size, and the account here is on 8000 tokens
+ * per MINUTE. A 1357x1920 phone photo of an invoice costs about 3210 of
+ * them, so three bills in a minute is a 429 and a demo that stalls for
+ * thirty seconds.
+ *
+ * Capping the long edge cuts that materially. Measured on the same
+ * invoice: 1357x1920 and 777x1100 both return three lines with the total
+ * read correctly, in 1409ms and 1286ms. The pixels above this cap were
+ * paying rent and doing nothing.
+ */
+const MAX_EDGE = 1100;
+
+async function prepare(path: string): Promise<{ b64: string; mime: string }> {
+  const raw = await readFile(path);
+  try {
+    const meta = await sharp(raw, { failOn: 'none' }).metadata();
+    const edge = Math.max(meta.width ?? 0, meta.height ?? 0);
+    if (!edge || edge <= MAX_EDGE) {
+      return { b64: raw.toString('base64'), mime: mimeOf(meta.format) };
+    }
+
+    /**
+     * JPEG out, not PNG. A phone photo re-encoded losslessly grows: this
+     * invoice went 85KB to 291KB as a PNG for no gain, since the token cost
+     * follows the pixel dimensions and the extra bytes only slow the upload.
+     * Quality 88 is indistinguishable on printed text.
+     */
+    const out = await sharp(raw, { failOn: 'none' })
+      .resize({ width: MAX_EDGE, height: MAX_EDGE, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 88 })
+      .toBuffer();
+    return { b64: out.toString('base64'), mime: 'image/jpeg' };
+  } catch {
+    // an exotic format sharp cannot open still deserves a read attempt
+    return { b64: raw.toString('base64'), mime: 'image/png' };
+  }
+}
+
+function mimeOf(format?: string): string {
+  if (format === 'jpeg' || format === 'jpg') return 'image/jpeg';
+  if (format === 'webp') return 'image/webp';
+  return 'image/png';
+}
+
+/** A rate limit is not a reading failure and must not be treated as one. */
+export class RateLimited extends Error {
+  constructor(public readonly retryAfterMs: number) {
+    super('rate limited');
+  }
+}
+
 export interface ParseResult {
   bill: ParsedBill;
   model: string;
@@ -132,10 +185,12 @@ export async function parseBill(imagePath: string, mime: string, fast = false): 
   const model = fast ? (env.GROQ_VISION_MODEL_FAST ?? env.GROQ_VISION_MODEL!) : env.GROQ_VISION_MODEL!;
   if (!model) throw new Error('GROQ_VISION_MODEL is not set');
 
-  const b64 = (await readFile(imagePath)).toString('base64');
+  const { b64, mime: sendMime } = await prepare(imagePath);
   const t0 = Date.now();
 
-  const res = await groq.chat.completions.create({
+  let res;
+  try {
+    res = await groq.chat.completions.create({
     model,
     temperature: 0,
     response_format: { type: 'json_object' },
@@ -143,10 +198,28 @@ export async function parseBill(imagePath: string, mime: string, fast = false): 
       role: 'user',
       content: [
         { type: 'text', text: PROMPT },
-        { type: 'image_url', image_url: { url: `data:${mime};base64,${b64}` } },
+        { type: 'image_url', image_url: { url: `data:${sendMime};base64,${b64}` } },
       ],
     }],
-  });
+    });
+  } catch (err) {
+    /**
+     * Separate a rate limit from a bad read.
+     *
+     * They arrive as the same rejected promise and mean opposite things. A
+     * 429 says the account is out of tokens this minute; the model was
+     * never asked and has done nothing wrong. Falling back to a weaker
+     * model there is the wrong answer to the wrong question, and it showed:
+     * a rate-limited run demoted itself to qwen3.6, which then read one
+     * line of a three line bill.
+     */
+    const e = err as { status?: number; message?: string };
+    if (e.status === 429) {
+      const m = /try again in ([\d.]+)s/i.exec(e.message ?? '');
+      throw new RateLimited(Math.ceil((m ? Number(m[1]) : 3) * 1000) + 250);
+    }
+    throw err;
+  }
 
   const raw = res.choices[0]?.message?.content ?? '{}';
 

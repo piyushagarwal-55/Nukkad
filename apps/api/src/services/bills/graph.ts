@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { prisma } from '@nukkad/db';
 import { groq } from '../../lib/groq.js';
 import { env } from '../../config/env.js';
-import { parseBill, type ParsedBill } from './parse.js';
+import { parseBill, RateLimited, type ParsedBill } from './parse.js';
 import {
   retrieveKb, retrieveSkus, normaliseBillName, packConflict, MATCH,
   type KbHit, type SkuHit,
@@ -215,6 +215,25 @@ async function extract(s: State): Promise<Partial<State>> {
       }],
     };
   } catch (err) {
+    /**
+     * A rate limit is waited out on the SAME model. Switching models here
+     * answers a question nobody asked and lands the bill on a weaker
+     * reader for a reason that had nothing to do with reading.
+     */
+    if (err instanceof RateLimited && attempt < 3) {
+      await new Promise((r) => setTimeout(r, err.retryAfterMs));
+      return {
+        // not counted as a read attempt: nothing was read
+        attempts: s.attempts,
+        steps: [{
+          node: 'extract',
+          status: 'RETRY',
+          ms: Date.now() - t0,
+          note: `out of tokens for this minute, waited ${(err.retryAfterMs / 1000).toFixed(1)}s and asked the same model again`,
+        }],
+      };
+    }
+
     return {
       attempts: attempt,
       failure: (err as Error).message,
