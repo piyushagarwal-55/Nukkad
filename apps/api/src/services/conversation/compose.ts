@@ -139,6 +139,15 @@ export type Facts =
    * dals sat in the catalogue it had just searched.
    */
   | { kind: 'LISTING'; asked: string; options: string[] }
+  /**
+   * A PRICE question that matched several products.
+   *
+   * "atta ka kya rate h" was answered with four atta NAMES and no price,
+   * which is not what was asked. Listing and pricing are both listing
+   * questions in MG-ShopDial's schema, and the shop needs to tell them
+   * apart: one wants to know what you stock, the other what it costs.
+   */
+  | { kind: 'PRICES'; asked: string; items: Array<{ name: string; price: string }> }
   /** what the shop sells at all, for "kya kya hai" */
   | { kind: 'CATALOGUE'; categories: string[] }
   | { kind: 'QUESTION' }
@@ -315,6 +324,14 @@ function brief(f: Facts): string {
         'Name them all. This is the answer to their question, not a menu,',
         'so do NOT number them and do not ask them to pick yet -- though',
         'you may add that they can just say which one.',
+      ].join(' ');
+
+    case 'PRICES':
+      return [
+        `They asked the price of "${f.asked}" and the shop has more than`,
+        `one: ${f.items.map((i) => `${i.name} ${i.price}`).join(', ')}.`,
+        'Give every name WITH its price, exactly as written above -- the',
+        'prices are the answer, not decoration. Do NOT number them.',
       ].join(' ');
 
     case 'CATALOGUE':
@@ -496,6 +513,10 @@ function allowedDigits(f: Facts): Set<string> {
   if (f.kind === 'REJECTED') source.push(...f.options, f.rejected);
   if (f.kind === 'NOT_STOCKED') source.push(f.product);
   if (f.kind === 'LISTING') source.push(...f.options, f.asked);
+  if (f.kind === 'PRICES') {
+    for (const i of f.items) source.push(i.name, i.price);
+    source.push(f.asked);
+  }
   if (f.kind === 'CATALOGUE') source.push(...f.categories);
   if (f.kind === 'STOCK_ANSWER') source.push(f.name, f.price);
   if (f.kind === 'ACCOUNT') source.push(String(f.orders), f.spent);

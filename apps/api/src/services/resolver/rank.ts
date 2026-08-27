@@ -1,5 +1,5 @@
 import type { Sku, Candidate, ResolvedLine, ResolutionMethod } from '@nukkad/shared';
-import { fuzzyScore } from './fuzzy.js';
+import { fuzzyMatch } from './fuzzy.js';
 import { normalise } from './normalise.js';
 import type { Prior } from './prior.js';
 
@@ -154,7 +154,19 @@ export function rankLine(
    * so a dal question matches three SKUs at 1.00 each -- but "moong dal"
    * is two words and both are present, and that is the stronger claim.
    */
-  interface Claim { sku: Sku; fuzzy: number; specificity: number; method: ResolutionMethod }
+  interface Claim {
+    sku: Sku;
+    fuzzy: number;
+    /**
+     * ONE number for "how particular was this claim": words of the
+     * winning name that matched, plus words of the SENTENCE this SKU
+     * accounts for. Kept as one figure because every consumer wants the
+     * same thing from it, and splitting it is what let the prior slip
+     * past the tie rule below.
+     */
+    particularity: number;
+    method: ResolutionMethod;
+  }
   const claims: Claim[] = [];
 
   for (const sku of catalog) {
@@ -169,18 +181,52 @@ export function rankLine(
 
     for (const name of names) {
       const isExact = normalise(name) === query;
-      const hit = isExact ? 1 : opts.useFuzzy ? fuzzyScore(name, spoken) : 0;
-      if (hit <= 0) continue;
+      const m = isExact
+        ? { score: 1, matched: name.split(/\s+/).length }
+        : opts.useFuzzy ? fuzzyMatch(name, spoken) : { score: 0, matched: 0 };
+      if (m.score <= 0) continue;
 
-      const words = name.split(/\s+/).filter((w) => w.length >= 3).length;
-      if (hit > fuzzy || (hit === fuzzy && words > specificity)) {
-        fuzzy = hit;
-        specificity = Math.max(specificity, words);
+      /**
+       * SPECIFICITY IS MATCHED WORDS, not words in the name, and the
+       * difference is a wrong product on a real customer's card.
+       *
+       * Asked for "ashirwaad besan", three SKUs scored 0.89: the besan
+       * because two of its three words were there, and two attas because
+       * their one-word alias "aashirvaad" nearly matched. Counting words
+       * in the NAME made "Aashirvaad Whole Wheat Atta 5kg" the most
+       * specific at five, though only one of those five appeared, and the
+       * shop put atta in the basket.
+       *
+       * Both figures must also come from the SAME name. They did not: the
+       * score came from the winning alias while specificity was a running
+       * maximum over every name that scored at all, so a long name could
+       * lend its length to a short name's match.
+       */
+      if (m.score > fuzzy || (m.score === fuzzy && m.matched > specificity)) {
+        fuzzy = m.score;
+        specificity = m.matched;
         method = isExact ? 'EXACT' : 'FUZZY';
       }
     }
 
-    if (fuzzy > 0) claims.push({ sku, fuzzy, specificity, method });
+    /**
+     * HOW MUCH OF WHAT THEY SAID THIS SKU ACCOUNTS FOR.
+     *
+     * The other direction, computed once, and it is the tiebreak that
+     * name-into-text cannot supply on its own. Scoring names into text
+     * favours SHORT names: asked for "ashirwaad besan", the atta's
+     * one-word alias "aashirvaad" scored 0.89 by nearly matching a single
+     * token, edging out "Ashirwad Besan 1kg" at 0.87 which had matched
+     * BOTH words the customer said -- and the shop put atta in the
+     * basket.
+     *
+     * Neither direction is right alone. Name-into-text decides whether a
+     * product was named at all; this decides which of two near-equal
+     * claims explains more of the sentence.
+     */
+    const explains = fuzzyMatch(spoken, names.join(' ')).matched;
+
+    if (fuzzy > 0) claims.push({ sku, fuzzy, particularity: specificity + explains, method });
   }
 
   /**
@@ -204,12 +250,24 @@ export function rankLine(
    */
   const bestFuzzy = Math.max(0, ...claims.map((c) => c.fuzzy));
   const tied = claims.filter((c) => c.fuzzy >= bestFuzzy - TIE_EPSILON);
-  const bestSpecificity = Math.max(0, ...tied.map((c) => c.specificity));
+  const bestParticularity = Math.max(0, ...tied.map((c) => c.particularity));
 
   for (const c of claims) {
+    /**
+     * Eligibility is judged on PARTICULARITY, not on matched name words
+     * alone, and that distinction cost a wrong product on a live card.
+     *
+     * Ashirwad Besan and Aashirvaad Atta share a brand, so "ashirwaad
+     * besan" scored both at 0.893 through the word Aashirvaad and both
+     * matched exactly one name word -- a tie by the old test. Both became
+     * eligible, the household buys atta constantly, and history put ATTA
+     * in the basket for a customer who had said besan. Besan explains
+     * both words of that sentence and the atta explains one; on the
+     * fuller measure they never tie, and history never gets a vote.
+     */
     const ties =
       c.fuzzy >= bestFuzzy - TIE_EPSILON &&
-      c.specificity >= bestSpecificity &&
+      c.particularity >= bestParticularity &&
       c.fuzzy >= MIN_LEXICAL_FOR_PRIOR;
 
     const p = opts.usePrior && ties ? (prior.get(c.sku.id) ?? 0) : 0;
@@ -217,7 +275,9 @@ export function rankLine(
 
     const score = W_FUZZY * c.fuzzy + W_PRIOR * p;
     if (score > 0.05) {
-      scored.push({ sku: c.sku, score, fuzzy: c.fuzzy, specificity: c.specificity, method: c.method });
+      scored.push({
+        sku: c.sku, score, fuzzy: c.fuzzy, specificity: c.particularity, method: c.method,
+      });
     }
   }
 
@@ -229,6 +289,24 @@ export function rankLine(
    * alias like "dal" has put three products level.
    */
   scored.sort((a, b) => b.score - a.score || b.specificity - a.specificity);
+
+  /**
+   * Among candidates too close to separate on score, the one that
+   * explains MORE of the sentence comes first. Applied as a reorder
+   * rather than folded into the sort, because a comparator that treats
+   * near-equal scores as equal is not transitive and will sort
+   * differently depending on input order.
+   */
+  if (scored.length > 1) {
+    const lead = scored[0]!.score;
+    const close = scored.filter((c) => lead - c.score <= TIE_EPSILON);
+    if (close.length > 1) {
+      close.sort((a, b) => b.specificity - a.specificity);
+      const rest = scored.filter((c) => !close.includes(c));
+      scored.length = 0;
+      scored.push(...close, ...rest);
+    }
+  }
   const top = scored.slice(0, opts.topK);
   const chosen = top[0] ?? null;
 

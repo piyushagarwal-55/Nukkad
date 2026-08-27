@@ -115,6 +115,9 @@ export const notStocked = (product: string): string =>
 export const rejected = (name: string): string =>
   `Theek hai, ${name} nahi. Aur kya dekhun?`;
 
+export const prices = (items: Array<{ name: string; price: string }>): string =>
+  `${items.map((i) => `${i.name} ${i.price}`).join(', ')}. Kaun sa chahiye?`;
+
 export const listing = (names: string[]): string =>
   `${names.join(', ')} hai. Kaun sa chahiye?`;
 

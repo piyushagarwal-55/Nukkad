@@ -139,6 +139,7 @@ function label(f: Facts): { intent: string; goal: string } {
       return { intent: 'CLARIFICATION_QUESTION', goal: 'ORDERING' };
     case 'STOCK_ANSWER':
     case 'LISTING':
+    case 'PRICES':
     case 'CATALOGUE':
       return { intent: 'ANSWER', goal: 'QA' };
     case 'ACCOUNT':
@@ -853,10 +854,25 @@ async function question(ctx: Ctx, spans: string[]): Promise<OutboundMessage[]> {
 
     if (found.length > 1) {
       remember(ctx, found);
+      const shown = displayNames(found.map((x) => x.name));
+
+      /**
+       * "kaunsi kaunsi hai" and "kya rate hai" are both listing
+       * questions, and answering them the same way answers only one.
+       * Asked the rate of atta the shop replied with four atta names and
+       * no prices at all.
+       */
+      if (asksPrice(ctx.said)) {
+        const items = found.map((sku, i) => ({
+          name: shown[i]!, price: rupeeLabel(sku.sellPaise),
+        }));
+        return speak(ctx, { kind: 'PRICES', asked, items }, copy.prices(items), card);
+      }
+
       return speak(
         ctx,
-        { kind: 'LISTING', asked, options: displayNames(found.map((x) => x.name)) },
-        copy.listing(displayNames(found.map((x) => x.name))),
+        { kind: 'LISTING', asked, options: shown },
+        copy.listing(shown),
         card,
       );
     }
@@ -936,6 +952,23 @@ function matching(span: string, catalog: Sku[], stock: Map<string, number>): Sku
   if (best && (!scored[1] || scored[1].specific < best.specific)) return [best.s];
 
   return scored.slice(0, 8).map((x) => x.s);
+}
+
+/**
+ * Are they asking what it COSTS, rather than what there is.
+ *
+ * A closed set of words, matched whole, and it stays a list rather than
+ * a model call for the same reason the yes/no vocabulary does: the
+ * failure mode of asking a model is that it answers the question you
+ * asked instead of the one you meant, and here a wrong answer means
+ * reciting the catalogue at someone who wanted a number.
+ */
+const PRICE_WORDS = new Set([
+  'rate', 'price', 'daam', 'dam', 'kimat', 'keemat', 'bhav', 'cost', 'mrp',
+]);
+
+function asksPrice(text: string): boolean {
+  return text.toLowerCase().split(/[^a-z]+/).some((w) => PRICE_WORDS.has(w));
 }
 
 /** high, because a list is a claim about everything the shop has */

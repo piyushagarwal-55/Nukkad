@@ -30,6 +30,40 @@ const ratio = (a: string, b: string): number => {
  * 'aashirvaad atta 10kg' and 'atta aashirvaad' are the same intent, and
  * ASR reorders things.
  */
+/**
+ * The score, plus HOW MANY of the query's words were actually found.
+ *
+ * The count is what tells a particular claim from a lucky one. Scoring
+ * "ashirwaad besan" against a catalogue, the alias "aashirvaad" and the
+ * name "Ashirwad Besan 1kg" both come out around 0.89 -- one because its
+ * single word nearly matched, the other because two of its three did.
+ * Only the second is evidence about which product was meant.
+ */
+export function fuzzyMatch(query: string, target: string): { score: number; matched: number } {
+  const q = tokens(query);
+  const t = tokens(target);
+  if (!q.length || !t.length) return { score: 0, matched: 0 };
+
+  let sum = 0;
+  let matched = 0;
+  for (const qt of q) {
+    let best = 0;
+    for (const tt of t) {
+      const r = qt === tt ? 1 : ratio(qt, tt);
+      if (r > best) best = r;
+      if (best === 1) break;
+    }
+    if (best >= 0.7) {
+      sum += best;
+      matched++;
+    }
+  }
+
+  const coverage = sum / q.length;
+  const whole = ratio(normalise(query), normalise(target));
+  return { score: 0.75 * coverage + 0.25 * whole, matched };
+}
+
 export function fuzzyScore(query: string, target: string): number {
   const q = tokens(query);
   const t = tokens(target);
