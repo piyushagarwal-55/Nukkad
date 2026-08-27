@@ -12,7 +12,38 @@ export type Prior = Map<string, number>;
 
 const HALF_LIFE_DAYS = 45;
 
+/**
+ * CACHED, because it was the most expensive thing on the hot path.
+ *
+ * Measured at ~700ms a turn -- a joined query over five hundred order
+ * lines, ordered by order date, run again for every single message. And
+ * the answer only changes when an order is CONFIRMED, which happens in
+ * exactly one place: payments/settle.ts, which invalidates.
+ *
+ * The TTL is a backstop for orders confirmed by some other route. Sixty
+ * seconds is far shorter than the half-life the weighting uses, so a
+ * stale prior is indistinguishable from a fresh one in its effect on
+ * ranking.
+ */
+interface Entry { prior: Prior; loadedAt: number }
+
+const cache = new Map<string, Entry>();
+const TTL_MS = 60_000;
+
+export function invalidatePrior(householdId?: string): void {
+  if (householdId) cache.delete(householdId);
+  else cache.clear();
+}
+
 export async function buildPrior(householdId: string): Promise<Prior> {
+  const hit = cache.get(householdId);
+  if (hit && Date.now() - hit.loadedAt < TTL_MS) return hit.prior;
+
+  return cache.set(householdId, { prior: await load(householdId), loadedAt: Date.now() })
+    .get(householdId)!.prior;
+}
+
+async function load(householdId: string): Promise<Prior> {
   const lines = await prisma.orderLine.findMany({
     where: {
       skuId: { not: null },

@@ -1,6 +1,8 @@
 import { prisma } from '@nukkad/db';
 import { rupeeLabel } from '@nukkad/shared';
 import { razorpay } from './razorpay.js';
+import { invalidateStock } from '../catalog/cache.js';
+import { invalidatePrior } from '../resolver/prior.js';
 
 /**
  * THE ONLY DOOR TO PAYMENT SUCCESS.
@@ -113,6 +115,15 @@ export async function settle(orderId: string, paidPaise: number): Promise<Settle
       data: { quantity: { decrement: line.quantity } },
     });
   }
+
+  /**
+   * The two caches that just went stale, cleared at the moment they did.
+   * Stock came down above and this order is now CONFIRMED, which is what
+   * the household prior is built from. See catalog/cache.ts and
+   * resolver/prior.ts for why either is cached at all.
+   */
+  invalidateStock(order.kiranaId);
+  invalidatePrior(order.householdId);
 
   /**
    * The basket is cleared HERE and not at checkout, so a customer who

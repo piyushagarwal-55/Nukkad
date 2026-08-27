@@ -42,8 +42,36 @@ export function invalidateCatalog(kiranaId: string): void {
   cache.delete(kiranaId);
 }
 
-/** Stock is volatile, so it is read fresh and NOT cached with the catalogue. */
+/**
+ * Stock, cached briefly and invalidated on the one write that matters.
+ *
+ * "Volatile, so read it fresh" was the right instinct and the wrong
+ * conclusion. Measured at 300ms a turn from India to Seoul, and stock
+ * only moves in payments/settle.ts -- so a short TTL plus an explicit
+ * invalidation there is fresher than a re-read, not staler: settle()
+ * clears this the instant it decrements, while a plain re-read would
+ * happily serve a value from 299ms ago.
+ *
+ * The TTL is the floor for how wrong it can be when something OUTSIDE
+ * this process writes stock -- a manual edit in the dashboard, say.
+ * Ten seconds is well inside the time it takes a customer to type.
+ */
+interface StockEntry { map: Map<string, number>; loadedAt: number }
+
+const stockCache = new Map<string, StockEntry>();
+const STOCK_TTL_MS = 10_000;
+
 export async function getStockMap(kiranaId: string): Promise<Map<string, number>> {
+  const hit = stockCache.get(kiranaId);
+  if (hit && Date.now() - hit.loadedAt < STOCK_TTL_MS) return hit.map;
+
   const rows = await prisma.stock.findMany({ where: { sku: { kiranaId } } });
-  return new Map(rows.map((r) => [r.skuId, r.quantity]));
+  const map = new Map(rows.map((r) => [r.skuId, r.quantity]));
+  stockCache.set(kiranaId, { map, loadedAt: Date.now() });
+  return map;
+}
+
+export function invalidateStock(kiranaId?: string): void {
+  if (kiranaId) stockCache.delete(kiranaId);
+  else stockCache.clear();
 }
