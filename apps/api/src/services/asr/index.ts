@@ -1,9 +1,13 @@
 import { createReadStream } from 'node:fs';
 import { groq } from '../../lib/groq.js';
 import { env, hasSarvam } from '../../config/env.js';
+import { romanise, isRoman } from '../lang/romanise.js';
 
 export interface Transcription {
+  /** Roman, ready for the resolver */
   text: string;
+  /** exactly what the engine returned, script and all. Never overwritten. */
+  raw: string;
   engine: string;
   latencyMs: number;
 }
@@ -27,7 +31,17 @@ export async function transcribeGroq(path: string, fast = false): Promise<Transc
     language: env.GROQ_ASR_LANGUAGE,
     temperature: 0,
   });
-  return { text: (res as { text: string }).text.trim(), engine: model, latencyMs: Date.now() - t0 };
+  const raw = (res as { text: string }).text.trim();
+
+  /**
+   * language=hi returns DEVANAGARI, and the resolver strips it to nothing.
+   * Converting here rather than at every call site means one boundary
+   * instead of four, and the original stays on `raw` so the orders page
+   * can show what was actually heard.
+   */
+  const text = isRoman(raw) ? raw : await romanise(raw);
+
+  return { text, raw, engine: model, latencyMs: Date.now() - t0 };
 }
 
 /**
@@ -51,8 +65,13 @@ export async function transcribeSarvam(path: string): Promise<Transcription | nu
   });
   if (!res.ok) return null;
   const j = (await res.json()) as { transcript?: string };
+  const raw = (j.transcript ?? '').trim();
+
+  // Sarvam's codemix mode usually returns Roman already, but not always,
+  // and the resolver cannot tell the difference. Same boundary either way.
   return {
-    text: (j.transcript ?? '').trim(),
+    text: isRoman(raw) ? raw : await romanise(raw),
+    raw,
     engine: `${env.SARVAM_MODEL}:${env.SARVAM_MODE}`,
     latencyMs: Date.now() - t0,
   };
