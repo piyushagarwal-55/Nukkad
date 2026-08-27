@@ -73,8 +73,23 @@ const POINTERS = new Set([
   'uske', 'usi', 'isi', 'this', 'that', 'it', 'same', 'wahi', 'yehi',
 ]);
 
+/**
+ * Words that carry no product meaning and must not stop a phrase being
+ * read as a pointer. "yeh bhi" is "this one too" -- the bhi is the
+ * customer saying ALSO, and requiring every word to be a pointer meant
+ * that phrase fell through to the catalogue and matched Sugar, Tata Tea
+ * Gold and Red Label Tea. None of which had been mentioned.
+ */
+const FILLER = new Set([
+  'bhi', 'bhee', 'aur', 'zara', 'na', 'to', 'hi', 'ji', 'please', 'too',
+  'also', 'wala', 'wali', 'ka', 'ke', 'ki',
+]);
+
 export function isPointer(text: string): boolean {
-  const ws = stripQuantity(text).toLowerCase().split(/[^a-z]+/).filter(Boolean);
+  const ws = stripQuantity(text)
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .filter((w) => w && !FILLER.has(w));
   return ws.length > 0 && ws.every((w) => POINTERS.has(w));
 }
 
@@ -96,14 +111,42 @@ export function resolve(input: ResolveInput): Reference[] {
     const pointing = isPointer(span.text);
 
     /**
-     * A pointer with exactly one thing to point at becomes that thing.
-     * With none or several it stays unresolved and the caller asks --
-     * never guesses, because guessing here is how "yeh" became dry yeast.
+     * A POINTER RESOLVES TO AN ID, NOT TO A NAME TO RE-MATCH.
+     *
+     * The first version substituted the referent's NAME and ranked that,
+     * which threw away the one thing that made it certain. "Ashirwad
+     * Besan 1kg" went back through the matcher, collided with Aashirvaad
+     * Atta on the shared brand exactly as the original phrase had, and
+     * the shop asked which of three -- having itself named besan one
+     * message earlier.
+     *
+     * The shop already knows which SKU it was talking about. Use it.
      */
-    const text = pointing && referent ? referent.name : span.text;
+    const settled = pointing && referent
+      ? input.catalogue.find((s) => s.id === referent.skuId)
+      : undefined;
+
+    if (settled) {
+      return {
+        sourceText: span.text,
+        quantity: span.quantity,
+        unitHint: span.unit,
+        line: {
+          sourceText: span.text,
+          quantity: span.quantity,
+          unitHint: span.unit,
+          // the shop named it and they said "that one": nothing is in doubt
+          chosen: { sku: settled, score: 1, fuzzy: 1, specificity: 99, method: 'EXACT' },
+          alternates: [],
+          confidence: 1,
+          needsDisambiguation: false,
+        },
+        fromPointer: true,
+      };
+    }
 
     const line = rankLine(
-      text, span.quantity, span.unit, input.catalogue, input.prior, DEFAULT_RANK,
+      span.text, span.quantity, span.unit, input.catalogue, input.prior, DEFAULT_RANK,
     );
 
     return {

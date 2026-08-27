@@ -837,8 +837,25 @@ async function question(ctx: Ctx, spans: string[]): Promise<OutboundMessage[]> {
       lastNamed: ctx.convo.lastNamed,
     });
 
-    const found = ref?.line
-      ? [ref.line.chosen!.sku, ...ref.line.alternates.map((a) => a.sku)]
+    /**
+     * PEERS ONLY, and a peer is one that explains as much of the question.
+     *
+     * `alternates` is banded on raw score, which is right for offering a
+     * choice and wrong for answering a question. Asked "besan wala aata
+     * ka price", the besan came top and Aashirvaad Atta and Tata Salt
+     * cleared the band behind it -- so the shop treated a one-product
+     * question as a three-product listing, and REMEMBERED all three. When
+     * the customer then said "yeh bhi", there was no single thing they
+     * could have meant.
+     *
+     * Besan accounts for two words of that question; the other two
+     * account for one each. They are not alternatives to it.
+     */
+    const top = ref?.line?.chosen;
+    const found = top
+      ? [top.sku, ...ref!.line!.alternates
+          .filter((a) => a.specificity >= top.specificity)
+          .map((a) => a.sku)]
       : [];
 
     if (found.length === 1) {
