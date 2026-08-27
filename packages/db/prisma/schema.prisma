@@ -552,6 +552,14 @@ model SupplierBillLine {
   /// subnames the alias agent proposes for this line, grounded in the KB
   suggestedAliases String[] @default([])
 
+  /// Two readings of this line disagreed, or qty x rate did not equal the
+  /// printed amount. Set by the verify node and forced to AMBIGUOUS, because
+  /// a misread digit on a handwritten bill is silent: it does not look like
+  /// an error, it looks like a price.
+  disputed Boolean @default(false)
+  /// what specifically did not add up, shown to the owner
+  disputeNote String?
+
   bill SupplierBill @relation(fields: [billId], references: [id], onDelete: Cascade)
   sku  Sku?         @relation(fields: [skuId], references: [id])
 

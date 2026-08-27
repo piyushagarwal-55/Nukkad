@@ -259,6 +259,8 @@ async function readPlan(billId: string, kiranaId: string) {
       priceDeltaPaise: l.priceDeltaPaise,
       proposedSellPaise: l.proposedSellPaise,
       suggestedAliases: l.suggestedAliases,
+      disputed: l.disputed,
+      disputeNote: l.disputeNote,
     })),
   };
 }

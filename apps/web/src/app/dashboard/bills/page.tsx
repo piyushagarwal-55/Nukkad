@@ -29,6 +29,8 @@ interface Line {
   priceDeltaPaise: number | null;
   proposedSellPaise: number | null;
   suggestedAliases: string[];
+  disputed: boolean;
+  disputeNote: string | null;
 }
 interface Plan {
   billId: string;
@@ -45,6 +47,7 @@ interface Plan {
 const NODE_BLURB: Record<string, string> = {
   extract: 'Read the photograph into structured line items',
   retrieve: 'Pulled the nearest catalogue rows and knowledge base entries',
+  verify: 'Checked qty x rate against the printed amount, and read it twice where it did not close',
   reconcile: 'Decided restock, new, or too close to call',
   price: 'Compared every rate against what this shop last paid',
   alias: 'Proposed the local names customers will actually say',
@@ -124,7 +127,16 @@ function LineCard({
         </div>
       </div>
 
-      {/* the agent's reasoning and how sure it was */}
+      {/* a line whose NUMBERS are not trusted. Louder than the reasoning
+          line, because this is the one an owner must not skim past. */}
+      {line.disputed && line.disputeNote && (
+        <div className="mt-2.5 rounded-lg border-2 border-[var(--hot)] bg-[var(--hot)]/8 px-3 py-2">
+          <p className="text-[12px] font-semibold text-[var(--hot)]">Check this against the paper</p>
+          <p className="mt-0.5 text-[12px]">{line.disputeNote}</p>
+        </div>
+      )}
+
+      {/* the agent&apos;s reasoning and how sure it was */}
       {line.reasoning && (
         <div className="mt-2.5 flex items-center gap-3">
           <span className="conf-rail w-16 shrink-0">

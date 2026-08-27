@@ -19,7 +19,7 @@ import {
  * decision can be too close to call and must escalate to a human instead
  * of guessing.
  *
- *   extract ──▶ retrieve ──▶ reconcile ──▶ price ──▶ alias ──▶ critic ──▶ persist
+ *   extract ─▶ verify ─▶ retrieve ─▶ reconcile ─▶ price ─▶ alias ─▶ critic ─▶ persist
  *      │
  *      └─(unreadable, retries exhausted)─────────────────────────────────▶ fail
  *
@@ -60,6 +60,10 @@ export interface PlannedLine {
   priceDeltaPaise: number | null;
   proposedSellPaise: number;
   suggestedAliases: string[];
+
+  /** two readings disagreed, or the arithmetic on the line did not close */
+  disputed: boolean;
+  disputeNote: string | null;
 }
 
 export interface StepLog {
@@ -90,6 +94,8 @@ const BillState = Annotation.Root({
     reducer: (prev, next) => prev.concat(next),
     default: () => [],
   }),
+  /** bill-line index -> what did not add up about it */
+  disputes: Annotation<Record<number, string>>({ reducer: (_p, n) => n, default: () => ({}) }),
   attempts: Annotation<number>({ reducer: (_p, n) => n, default: () => 0 }),
   failure: Annotation<string | null>({ reducer: (_p, n) => n, default: () => null }),
 });
@@ -136,9 +142,124 @@ async function extract(s: State): Promise<Partial<State>> {
 }
 
 /** Retry once, then give up rather than burning tokens on an unreadable photo. */
-function afterExtract(s: State): 'retrieve' | 'extract' | typeof END {
-  if (s.parsed) return 'retrieve';
+function afterExtract(s: State): 'verify' | 'extract' | typeof END {
+  if (s.parsed) return 'verify';
   return s.attempts < 2 ? 'extract' : END;
+}
+
+/* ------------------------------------------------------------ node: verify */
+
+/**
+ * ARITHMETIC CROSS-CHECK, then a second opinion where it fails.
+ *
+ * This is the node that makes handwriting safe, and it is worth being
+ * precise about why. A vision model reading a printed bill fails loudly:
+ * it returns nothing, or garbage you can see. Reading HANDWRITING it fails
+ * QUIETLY -- a 7 read as a 1, a 6 read as a 5 -- and a misread rate does
+ * not look like an error downstream. It looks like a price. It gets
+ * written to the catalogue, and the shop sells at it.
+ *
+ * The fix is not a better OCR model. It is that a bill already carries its
+ * own redundancy: every line states quantity, rate AND amount, and the
+ * three have to agree. Checking qty x rate == amount catches single-digit
+ * misreads deterministically, with no model and no GPU.
+ *
+ * Only when that check fails do we spend a second vision call, on the
+ * OTHER model, and compare the two readings line by line. Agreement is
+ * evidence; disagreement is escalated to the owner rather than resolved by
+ * picking a favourite. Two models confidently disagreeing about a number
+ * is precisely the case where a machine should stop.
+ */
+
+/** paise, absolute, to absorb rounding in a rate like 46.67 */
+const ARITH_TOLERANCE = 200;
+
+function arithmeticOf(items: ParsedBill['items']) {
+  return items.map((it) => {
+    const expected = Math.round(it.qty * it.ratePaise);
+    // a bill that omits the amount column cannot be cross-checked this way
+    if (!it.amountPaise) return { ok: true, note: null as string | null };
+    const off = Math.abs(expected - it.amountPaise);
+    return off <= ARITH_TOLERANCE
+      ? { ok: true, note: null }
+      : {
+          ok: false,
+          note: `${it.qty} x ${(it.ratePaise / 100).toFixed(2)} is ${(expected / 100).toFixed(2)}, but the bill says ${(it.amountPaise / 100).toFixed(2)}`,
+        };
+  });
+}
+
+async function verify(s: State): Promise<Partial<State>> {
+  const t0 = Date.now();
+  const items = s.parsed?.items ?? [];
+  if (!items.length) {
+    return { steps: [{ node: 'verify', status: 'SKIP', ms: Date.now() - t0, note: 'nothing to check' }] };
+  }
+
+  const arith = arithmeticOf(items);
+  const bad = arith.filter((a) => !a.ok).length;
+
+  // everything adds up: the reading is self-consistent, no second call
+  if (bad === 0) {
+    return {
+      disputes: {},
+      steps: [{
+        node: 'verify',
+        status: 'OK',
+        ms: Date.now() - t0,
+        note: `all ${items.length} lines add up (qty x rate = amount)`,
+      }],
+    };
+  }
+
+  // something did not close. Read it again on the other model and compare.
+  let second: ParsedBill | null = null;
+  try {
+    const r = await parseBill(s.imagePath, s.mime, true);
+    second = r.bill;
+  } catch {
+    /* second opinion unavailable; the arithmetic flags still stand */
+  }
+
+  const disputes: Record<number, string> = {};
+
+  items.forEach((it, i) => {
+    const notes: string[] = [];
+    if (!arith[i]!.ok) notes.push(arith[i]!.note!);
+
+    if (second) {
+      // match by position first, then by name, because a model can drop a
+      // line entirely and positions then slide
+      const other =
+        second.items[i] && normaliseBillName(second.items[i]!.name) === normaliseBillName(it.name)
+          ? second.items[i]
+          : second.items.find((o) => normaliseBillName(o.name) === normaliseBillName(it.name));
+
+      if (!other) {
+        notes.push('the second reading did not find this line at all');
+      } else {
+        if (other.qty !== it.qty) notes.push(`quantity read as ${it.qty} and ${other.qty}`);
+        if (other.ratePaise !== it.ratePaise) {
+          notes.push(`rate read as ${(it.ratePaise / 100).toFixed(2)} and ${(other.ratePaise / 100).toFixed(2)}`);
+        }
+      }
+    }
+
+    if (notes.length) disputes[i] = notes.join('; ');
+  });
+
+  const n = Object.keys(disputes).length;
+  return {
+    disputes,
+    steps: [{
+      node: 'verify',
+      status: n ? 'RETRY' : 'OK',
+      ms: Date.now() - t0,
+      note: second
+        ? `${bad} line${bad === 1 ? '' : 's'} did not add up, so it was read again on the second model: ${n} still disputed`
+        : `${bad} line${bad === 1 ? '' : 's'} did not add up and no second opinion was available`,
+    }],
+  };
 }
 
 /* ----------------------------------------------------------- node: retrieve */
@@ -153,7 +274,7 @@ async function retrieve(s: State): Promise<Partial<State>> {
   const items = s.parsed?.items ?? [];
 
   const lines: PlannedLine[] = await Promise.all(
-    items.map(async (it) => {
+    items.map(async (it, idx) => {
       const [skus, kb] = await Promise.all([
         retrieveSkus(s.kiranaId, it.name),
         retrieveKb(it.name),
@@ -174,6 +295,8 @@ async function retrieve(s: State): Promise<Partial<State>> {
         priceDeltaPaise: null,
         proposedSellPaise: 0,
         suggestedAliases: [],
+        disputed: !!s.disputes[idx],
+        disputeNote: s.disputes[idx] ?? null,
         _skus: skus,
         _kb: kb,
       } as PlannedLine & { _skus: SkuHit[]; _kb: KbHit[] };
@@ -234,6 +357,20 @@ async function reconcile(s: State): Promise<Partial<State>> {
     s.lines.map(async (line) => {
       const cands = line.candidates;
       const top = cands[0];
+
+      // The numbers on this line are not trusted, so no decision taken from
+      // them can be either. Matching the NAME is not the issue; applying a
+      // quantity or a rate nobody has confirmed is.
+      if (line.disputed) {
+        return {
+          ...line,
+          decision: 'AMBIGUOUS' as Decision,
+          confidence: 0,
+          skuId: top && top.score >= MATCH.AUTO ? top.id : null,
+          matchedName: top && top.score >= MATCH.AUTO ? top.name : null,
+          reasoning: `Needs your eyes: ${line.disputeNote}`,
+        };
+      }
 
       if (!top || top.score < MATCH.REVIEW) {
         return { ...line, decision: 'NEW' as Decision, confidence: top ? 1 - top.score : 1,
@@ -559,6 +696,8 @@ async function persist(s: State): Promise<Partial<State>> {
           priceDeltaPaise: l.priceDeltaPaise,
           proposedSellPaise: l.proposedSellPaise,
           suggestedAliases: l.suggestedAliases,
+          disputed: l.disputed,
+          disputeNote: l.disputeNote,
         },
       });
     }
@@ -595,6 +734,7 @@ async function persist(s: State): Promise<Partial<State>> {
 
 const workflow = new StateGraph(BillState)
   .addNode('extract', extract)
+  .addNode('verify', verify)
   .addNode('retrieve', retrieve)
   .addNode('reconcile', reconcile)
   .addNode('price', price)
@@ -602,7 +742,8 @@ const workflow = new StateGraph(BillState)
   .addNode('critic', critic)
   .addNode('persist', persist)
   .addEdge(START, 'extract')
-  .addConditionalEdges('extract', afterExtract, ['retrieve', 'extract', END])
+  .addConditionalEdges('extract', afterExtract, ['verify', 'extract', END])
+  .addEdge('verify', 'retrieve')
   .addEdge('retrieve', 'reconcile')
   .addEdge('reconcile', 'price')
   .addEdge('price', 'alias')
