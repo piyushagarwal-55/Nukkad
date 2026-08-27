@@ -73,6 +73,43 @@ match before it is trusted. Anything still unclear is left for the owner
 rather than guessed, because a wrong merge corrupts a stock count and a price
 at once.
 
+### Measuring the bill agent
+
+The resolver has always had an ablation ladder; the bill agent had nothing,
+so every claim about what its nodes were worth was a story. `apps/eval/src/bill.ts`
+runs each fixture through the graph once per rung and scores against ground
+truth the fixture generator writes alongside the images:
+
+```bash
+npm run eval:bill
+npm run eval:bill -- bill-devanagari.png
+```
+
+On a Devanagari bill whose Rate column is blank -- eleven lines, five read:
+
+| rung | found | qty | rate | amount | **complete** |
+| --- | --- | --- | --- | --- | --- |
+| extract-only | 0% | 0% | 0% | 0% | **0%** |
+| plus-normalise | 45% | 45% | 0% | 45% | **0%** |
+| plus-repair | 45% | 45% | 45% | 45% | **45%** |
+| plus-verify | 45% | 45% | 45% | 45% | **45%** |
+| plus-critic | 45% | 45% | 45% | 45% | **45%** |
+
+*complete* counts a line only when it was found AND quantity, rate and amount
+are all exact. Partial credit would hide the failure that matters: a
+confident wrong number written into a shop's prices.
+
+Two design points the numbers depend on. The photograph is read ONCE and
+that reading is reused by every rung -- re-reading per rung measures how much
+the vision model varies between calls, not the node under test, and the first
+version of this harness showed `critic` taking a fixture from 40% to 100%,
+which is impossible. And `normalise` is ordered before `repair`, because
+while the names are still in Devanagari nothing matches, every metric reads
+zero, and repair's contribution hides underneath a matching failure.
+
+The 45% ceiling is extraction: only five of eleven lines were read off this
+fixture. Nothing downstream can recover a line that was never seen.
+
 ### The product knowledge base
 
 `packages/shared/src/constants/product-kb.ts` is the retrieval corpus: 426

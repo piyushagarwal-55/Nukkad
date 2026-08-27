@@ -6,7 +6,8 @@
   "scripts": {
     "eval": "tsx src/run.ts",
     "type-check": "tsc --noEmit",
-    "clean": "rm -rf dist out"
+    "clean": "rm -rf dist out",
+    "eval:bill": "dotenv -e ../../.env -- tsx src/bill.ts"
   },
   "dependencies": {
     "@nukkad/api": "*",

@@ -19,6 +19,7 @@
     "db:seed:kb": "npm run seed:kb --workspace=@nukkad/db",
     "db:studio": "npm run studio --workspace=@nukkad/db",
     "eval": "npm run eval --workspace=@nukkad/eval",
+    "eval:bill": "npm run eval:bill --workspace=@nukkad/eval",
     "clean": "turbo clean && rm -rf node_modules"
   },
   "devDependencies": {

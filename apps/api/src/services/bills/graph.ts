@@ -84,6 +84,40 @@ export interface StepLog {
   detail?: unknown;
 }
 
+/* -------------------------------------------------------------- ablation */
+
+/**
+ * Which nodes run. Exists so the eval harness can measure what each one is
+ * actually worth rather than asserting it, the same way the resolver's
+ * ablation ladder does for matching.
+ */
+export interface Ablation {
+  normalise: boolean;
+  repair: boolean;
+  verify: boolean;
+  critic: boolean;
+}
+
+export const FULL: Ablation = { normalise: true, repair: true, verify: true, critic: true };
+
+/** The ladder, each rung adding one node to the one before it. */
+/**
+ * ORDER MATTERS, and getting it wrong hides the thing you are measuring.
+ *
+ * normalise comes before repair on purpose. With a Devanagari bill still in
+ * Devanagari, no line matches anything, so every metric reads zero and
+ * repair's contribution is invisible underneath a matching failure. Unlock
+ * matching first, and then repair's rate derivation is the only thing that
+ * moves.
+ */
+export const BILL_ABLATIONS: Record<string, Ablation> = {
+  'extract-only':   { normalise: false, repair: false, verify: false, critic: false },
+  'plus-normalise': { normalise: true,  repair: false, verify: false, critic: false },
+  'plus-repair':    { normalise: true,  repair: true,  verify: false, critic: false },
+  'plus-verify':    { normalise: true,  repair: true,  verify: true,  critic: false },
+  'plus-critic':    FULL,
+};
+
 /* ------------------------------------------------------------------ state */
 
 const BillState = Annotation.Root({
@@ -92,8 +126,25 @@ const BillState = Annotation.Root({
   imagePath: Annotation<string>,
   mime: Annotation<string>,
   markupPct: Annotation<number>,
+  /**
+   * Which nodes are allowed to run. Every node reads this and reports SKIP
+   * rather than branching the graph, so an ablated run walks exactly the
+   * same path and the only variable is the node under test.
+   */
+  enable: Annotation<Ablation>({ reducer: (_p, n) => n, default: () => FULL }),
 
   parsed: Annotation<ParsedBill | null>,
+  /**
+   * A reading supplied from outside, which makes extract a no-op.
+   *
+   * Exists for the ablation harness. Re-reading the photograph on every
+   * rung means each rung sees a slightly different extraction, so the
+   * ladder measures vision variance instead of the node under test -- the
+   * first version of this harness showed critic taking a fixture from 40%
+   * to 100%, which is impossible, since critic cannot change which lines
+   * were found. Pinning the extraction makes the node the only variable.
+   */
+  preParsed: Annotation<ParsedBill | null>({ reducer: (_p, n) => n, default: () => null }),
   lines: Annotation<PlannedLine[]>({
     reducer: (_prev, next) => next,
     default: () => [],
@@ -127,6 +178,16 @@ type State = typeof BillState.State;
  */
 async function extract(s: State): Promise<Partial<State>> {
   const t0 = Date.now();
+
+  if (s.preParsed) {
+    return {
+      parsed: s.preParsed,
+      attempts: 1,
+      failure: null,
+      steps: [{ node: 'extract', status: 'SKIP', ms: 0, note: 'reading supplied by the caller' }],
+    };
+  }
+
   const attempt = s.attempts + 1;
 
   try {
@@ -162,6 +223,43 @@ function afterExtract(s: State): 'normalise' | 'extract' | typeof END {
   if (s.parsed) return 'normalise';
   return s.attempts < 2 ? 'extract' : END;
 }
+
+/* ------------------------------------------------------------ concurrency */
+
+/**
+ * Run an async map with a ceiling on how many are in flight.
+ *
+ * Promise.all over the lines of a bill looks harmless until the bill has
+ * eleven of them: retrieve issues two queries per line, so twenty-two
+ * connections open at once and the Supabase session pooler -- fifteen
+ * clients, and that is the plan's limit, not a setting -- starts refusing
+ * them. The eval harness surfaced this on the first Devanagari run; a shop
+ * photographing a full page of stock would have hit it in production.
+ *
+ * Four at a time keeps the pool comfortable and costs almost nothing in
+ * wall clock, because each unit is dominated by network latency anyway.
+ */
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i]!, i);
+    }
+  });
+
+  await Promise.all(workers);
+  return out;
+}
+
+const DB_CONCURRENCY = 4;
 
 /* --------------------------------------------------------- node: normalise */
 
@@ -207,6 +305,9 @@ const isRoman = (t: string) => !/[^\u0000-\u024F]/.test(t);
  * review screen shows the owner the original beside what we made of it.
  */
 async function normalise(s: State): Promise<Partial<State>> {
+  if (!s.enable.normalise) {
+    return { script: {}, steps: [{ node: 'normalise', status: 'SKIP', ms: 0, note: 'disabled for this run' }] };
+  }
   const t0 = Date.now();
   const items = s.parsed?.items ?? [];
   const foreign = items.filter((i) => !isRoman(i.name));
@@ -221,7 +322,7 @@ async function normalise(s: State): Promise<Partial<State>> {
   const out: Record<number, { roman: string; english: string; unit: string | null; agreed: boolean }> = {};
   let agreed = 0;
 
-  await Promise.all(items.map(async (it, i) => {
+  await mapLimit(items, DB_CONCURRENCY, async (it, i) => {
     if (isRoman(it.name)) return;
     try {
       const res = await groq.chat.completions.create({
@@ -249,7 +350,7 @@ async function normalise(s: State): Promise<Partial<State>> {
     } catch {
       /* leave the line in its original script; retrieval will simply miss */
     }
-  }));
+  });
 
   const done = Object.keys(out).length;
   return {
@@ -283,6 +384,9 @@ async function normalise(s: State): Promise<Partial<State>> {
  * is a distinction they are entitled to.
  */
 async function repair(s: State): Promise<Partial<State>> {
+  if (!s.enable.repair) {
+    return { repairs: {}, steps: [{ node: 'repair', status: 'SKIP', ms: 0, note: 'disabled for this run' }] };
+  }
   const t0 = Date.now();
   const items = s.parsed?.items ?? [];
 
@@ -374,6 +478,9 @@ function arithmeticOf(items: ParsedBill['items'], repairs: Record<number, string
 }
 
 async function verify(s: State): Promise<Partial<State>> {
+  if (!s.enable.verify) {
+    return { disputes: {}, steps: [{ node: 'verify', status: 'SKIP', ms: 0, note: 'disabled for this run' }] };
+  }
   const t0 = Date.now();
   const items = s.parsed?.items ?? [];
   if (!items.length) {
@@ -486,8 +593,7 @@ async function retrieve(s: State): Promise<Partial<State>> {
   const t0 = Date.now();
   const items = s.parsed?.items ?? [];
 
-  const lines: PlannedLine[] = await Promise.all(
-    items.map(async (it, idx) => {
+  const lines: PlannedLine[] = await mapLimit(items, DB_CONCURRENCY, async (it, idx) => {
       // retrieval runs on the ROMAN working form. rawName keeps the
       // original script for the review screen.
       const sc = s.script[idx];
@@ -520,9 +626,8 @@ async function retrieve(s: State): Promise<Partial<State>> {
         disputeNote: s.disputes[idx] ?? null,
         _skus: skus,
         _kb: kb,
-      } as PlannedLine & { _skus: SkuHit[]; _kb: KbHit[] };
-    }),
-  );
+    } as PlannedLine & { _skus: SkuHit[]; _kb: KbHit[] };
+  });
 
   const withCandidates = lines.filter((l) => l.candidates.length > 0).length;
 
@@ -574,8 +679,7 @@ async function reconcile(s: State): Promise<Partial<State>> {
   const t0 = Date.now();
   let adjudicated = 0;
 
-  const lines = await Promise.all(
-    s.lines.map(async (line) => {
+  const lines = await mapLimit(s.lines, DB_CONCURRENCY, async (line) => {
       const cands = line.candidates;
       const top = cands[0];
 
@@ -642,8 +746,7 @@ async function reconcile(s: State): Promise<Partial<State>> {
         return { ...line, decision: 'AMBIGUOUS' as Decision, confidence: top.score,
           reasoning: `Could not adjudicate automatically; "${top.name}" is the closest.` };
       }
-    }),
-  );
+  });
 
   const n = (d: Decision) => lines.filter((l) => l.decision === d).length;
   return {
@@ -762,8 +865,7 @@ async function alias(s: State): Promise<Partial<State>> {
   let generated = 0;
   let grounded = 0;
 
-  const lines = await Promise.all(
-    s.lines.map(async (l) => {
+  const lines = await mapLimit(s.lines, DB_CONCURRENCY, async (l) => {
       // restocks already have their names; only new products need any
       if (l.decision !== 'NEW') return l;
 
@@ -800,8 +902,7 @@ async function alias(s: State): Promise<Partial<State>> {
       } catch {
         return l;
       }
-    }),
-  );
+  });
 
   const newCount = lines.filter((l) => l.decision === 'NEW').length;
   return {
@@ -829,6 +930,9 @@ async function alias(s: State): Promise<Partial<State>> {
  * "I am not sure" must not turn into a duplicate SKU either.
  */
 async function critic(s: State): Promise<Partial<State>> {
+  if (!s.enable.critic) {
+    return { steps: [{ node: 'critic', status: 'SKIP', ms: 0, note: 'disabled for this run' }] };
+  }
   const t0 = Date.now();
   const targets = s.lines.filter((l) => l.decision === 'RESTOCK' && l.confidence < 0.9);
 
@@ -839,7 +943,7 @@ async function critic(s: State): Promise<Partial<State>> {
   let demoted = 0;
   const checked = new Map<string, boolean>();
 
-  await Promise.all(targets.map(async (l) => {
+  await mapLimit(targets, DB_CONCURRENCY, async (l) => {
     try {
       const res = await groq.chat.completions.create({
         model: env.GROQ_LLM_MODEL_FAST,
@@ -869,7 +973,7 @@ async function critic(s: State): Promise<Partial<State>> {
     } catch {
       /* critic unavailable: leave the original decision alone */
     }
-  }));
+  });
 
   const lines = s.lines.map((l) =>
     checked.get(l.rawName)
@@ -995,6 +1099,8 @@ export async function planBill(input: {
   imagePath: string;
   mime: string;
   markupPct?: number;
+  enable?: Ablation;
+  preParsed?: ParsedBill;
 }): Promise<AgentResult> {
   const out = await billAgent.invoke({
     billId: input.billId,
@@ -1002,6 +1108,8 @@ export async function planBill(input: {
     imagePath: input.imagePath,
     mime: input.mime,
     markupPct: input.markupPct ?? 15,
+    enable: input.enable ?? FULL,
+    preParsed: input.preParsed ?? null,
   });
 
   return {

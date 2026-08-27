@@ -21,6 +21,8 @@ bill before believing the numbers.
 Needs Pillow:  pip install pillow
 Output:        media/  (gitignored)
 """
+import io
+import json
 import os
 import random
 import sys
@@ -122,7 +124,68 @@ def typed(name, header, city, rows, bill_no, gst=True):
     return name
 
 
+NIRMALA = [r"C:\Windows\Fonts\Nirmala.ttc"]
+
+
+def devanagari(name, rows, total):
+    """Mirrors a real bill: quantity + Devanagari description + amount only.
+
+    The Rate column is drawn but left BLANK, which is exactly what forces
+    the repair node to solve for it. Note that PIL has no Raqm here, so
+    conjuncts render imperfectly -- fine as a fixture, not a substitute for
+    photographing real paper.
+    """
+    random.seed(3)
+    ink = (25, 35, 115)
+    img = Image.new("RGB", (880, 150 + 40 * len(rows) + 90), (250, 248, 240))
+    d = ImageDraw.Draw(img)
+    dev = lambda sz: font(NIRMALA + TYPED, sz)
+
+    d.rectangle((40, 40, 840, 88), outline=(120, 90, 70), width=2)
+    for x, t in ((52, "Quantity"), (190, "Description of Product/Services"),
+                 (560, "Rate"), (700, "Amount")):
+        d.text((x, 56), t, font=font(TYPED, 15), fill=(60, 50, 40))
+    for x in (180, 550, 690):
+        d.line((x, 40, x, 140 + 40 * len(rows)), fill=(150, 120, 100))
+
+    y = 100
+    for qty_text, desc, amt in rows:
+        d.line((40, y, 840, y), fill=(190, 165, 145))
+        dy = random.randint(-3, 3)
+        d.text((52, y + 8 + dy), qty_text, font=dev(22), fill=ink)
+        d.text((196, y + 6 + dy), desc, font=dev(26), fill=ink)
+        d.text((700, y + 8 + dy), "{:,}/-".format(amt), font=dev(23), fill=ink)
+        y += 40
+
+    d.line((40, y, 840, y), fill=(120, 90, 70), width=2)
+    d.text((400, y + 14), "Total Assessable Value", font=font(TYPED, 15), fill=(60, 50, 40))
+    d.text((700, y + 10), "{:,}/-".format(total), font=dev(25), fill=ink)
+
+    img = img.rotate(-0.7, resample=Image.BICUBIC, fillcolor=(250, 248, 240))
+    img = img.filter(ImageFilter.GaussianBlur(0.35))
+    img.save(os.path.join(OUT, name))
+    return name
+
+
+# quantity cell, Devanagari description, amount in rupees
+DEVANAGARI_ROWS = [
+    ("1000kg", "\u0906\u091f\u093e", 27400),
+    ("200kg", "\u091a\u093e\u0935\u0932", 6400),
+    ("90kg", "\u091a\u0928\u093e \u0926\u093e\u0932", 5940),
+    ("90kg", "\u092e\u0938\u0942\u0930 \u0926\u093e\u0932", 7290),
+    ("90kg", "\u0905\u0930\u0939\u0930", 8550),
+    ("200pcs", "\u0939\u0932\u094d\u0926\u0940", 3000),
+    ("200pcs", "\u0927\u0928\u093f\u092f\u093e", 3000),
+    ("200pcs", "\u092e\u093f\u0930\u094d\u091a", 3000),
+    ("200", "\u0938\u0942\u091c\u0940", 2000),
+    ("200", "\u0938\u093e\u092c\u0941\u0928", 2000),
+    ("8 \u092a\u0947\u091f\u0940", "\u0924\u0947\u0932 500ml", 10560),
+]
+
 FIXTURES = {
+    # Devanagari, handwritten-style, and the Rate column deliberately blank
+    "devanagari": lambda: devanagari("bill-devanagari.png", DEVANAGARI_ROWS, 79140),
+
     # ALL CAPS against a title-case catalogue: the case-only match
     "printed": lambda: typed(
         "bill-printed.png", "SHREE BALAJI TRADERS",
@@ -159,6 +222,58 @@ FIXTURES = {
          ("TAMARIND SEEDLESS 500G", "12", "96.00", "1152.00")], "2291", gst=False),
 }
 
+def truth():
+    """Ground truth for the eval harness, amounts in paise.
+
+    Rates for the Devanagari bill are DERIVED (amount / quantity), because
+    the paper leaves that column blank. That is the whole point: without
+    the repair node those eleven rates are unrecoverable, and the ablation
+    ladder is what makes that visible rather than asserted.
+    """
+    def rows(rs):
+        out = []
+        for item, qty, rate, amt in rs:
+            q = float(qty)
+            a = round(float(amt) * 100)
+            out.append({
+                "name": item,
+                "qty": q,
+                "ratePaise": round(a / q) if rate is None else round(float(rate) * 100),
+                "amountPaise": a,
+            })
+        return out
+
+    # what a correct transliteration should produce, in order
+    roman = ["atta", "chawal", "chana dal", "masoor dal", "arhar", "haldi",
+             "dhaniya", "mirch", "suji", "sabun", "tel"]
+    dev = [(desc, qty.replace("kg", "").replace("pcs", "").split()[0], None, amt)
+           for qty, desc, amt in DEVANAGARI_ROWS]
+
+    return {
+        "bill-printed.png": {"totalPaise": None, "lines": rows([
+            ("AASHIRVAAD ATTA 5KG", "12", "268.00", "3216.00"),
+            ("AMUL BUTTER 500GM", "10", "258.00", "2580.00"),
+            ("CHANA DAL 1KG", "25", "88.00", "2200.00"),
+            ("MDH DEGGI MIRCH 100G", "8", "72.00", "576.00"),
+            ("AMUL TAAZA MILK 1L PCH", "40", "31.00", "1240.00")])},
+        "bill-handwritten.png": {"totalPaise": None, "lines": rows([
+            ("Atta Ashirvad 5kg", "12", "268", "3216"),
+            ("Sugar", "25", "46", "1150"),
+            ("Toor dal", "10", "142", "1420"),
+            ("Amul butter 500g", "6", "258", "1548"),
+            ("Chai patti 500g", "8", "270", "2160")])},
+        "bill-south.png": {"totalPaise": None, "lines": rows([
+            ("IDHAYAM GINGELLY OIL 1L", "6", "310.00", "1860.00"),
+            ("IDLI RICE PONNI 5KG", "10", "290.00", "2900.00"),
+            ("MTR RASAM POWDER 100G", "24", "48.00", "1152.00"),
+            ("TAMARIND SEEDLESS 500G", "12", "96.00", "1152.00")])},
+        "bill-devanagari.png": {
+            "totalPaise": 7914000,
+            "lines": [dict(r, roman=roman[i]) for i, r in enumerate(rows(dev))],
+        },
+    }
+
+
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     want = sys.argv[1:] or list(FIXTURES)
@@ -167,3 +282,7 @@ if __name__ == "__main__":
             print(f"unknown fixture: {key}. one of: {', '.join(FIXTURES)}")
             raise SystemExit(1)
         print("wrote media/" + FIXTURES[key]())
+
+    with io.open(os.path.join(OUT, "fixtures.json"), "w", encoding="utf-8") as fh:
+        json.dump(truth(), fh, indent=2, ensure_ascii=False)
+    print("wrote media/fixtures.json")
