@@ -6,10 +6,18 @@ import { z } from 'zod';
 /**
  * Supplier bill to structured line items.
  *
- * Verified 26 Aug against a 7-line wholesale bill: both Groq vision models
- * returned every item, quantity, rate and total correctly in about two
- * seconds. qwen3.6 is more faithful on verbatim names and allows 5 images
- * per request; qwen3.8 is roughly 25% faster with 3.
+ * MODEL CHOICE, measured rather than assumed. An earlier note here claimed
+ * qwen3.6 was the more faithful reader, and it was the primary for that
+ * reason. Once the prompt grew past about twenty lines -- docType, pack,
+ * MRP, list price, discount, tax, free items -- 3.6 began failing Groq's
+ * guided JSON decoder on EVERY call, and without guiding it returned
+ * prose that would not parse at all. Every bill was therefore burning a
+ * five second failure before the retry rescued it on 3.8.
+ *
+ * Measured on the same GST invoice: 3.6 guided fails in 4.8s and
+ * unguided produces nothing parseable; 3.8 succeeds either way in 1.4s
+ * with all three lines correct. So 3.8 is primary and 3.6 is the retry --
+ * a second opinion is only worth having from a DIFFERENT model.
  *
  * Money is parsed straight to INTEGER PAISE. Asking the model for paise
  * rather than rupees removes a whole class of float rounding bugs, and it
@@ -78,7 +86,7 @@ const billSchema = z.object({
 
 export type ParsedBill = z.infer<typeof billSchema>;
 
-const PROMPT = [
+export const PROMPT = [
   'This is a wholesale supplier bill for an Indian kirana shop.',
   'Extract every line item. Return ONLY JSON:',
   '{"supplier":"","billNo":"","date":"","items":[{"name":"",',
@@ -141,7 +149,24 @@ export async function parseBill(imagePath: string, mime: string, fast = false): 
   });
 
   const raw = res.choices[0]?.message?.content ?? '{}';
-  const parsed = billSchema.safeParse(JSON.parse(raw));
+
+  /**
+   * Take the first {...} block rather than trusting the whole response.
+   *
+   * Guided decoding usually returns bare JSON, but a model that ignores it
+   * wraps the object in a code fence or a sentence of preamble, and
+   * JSON.parse then throws on a response that was actually fine. zod is
+   * still the real gate; this only finds the object to hand it.
+   */
+  const block = raw.match(/\{[\s\S]*\}/)?.[0] ?? raw;
+  let json: unknown;
+  try {
+    json = JSON.parse(block);
+  } catch {
+    throw new Error('model did not return JSON: ' + raw.slice(0, 120));
+  }
+
+  const parsed = billSchema.safeParse(json);
   if (!parsed.success) throw new Error('bill did not match schema: ' + parsed.error.message);
 
   return { bill: parsed.data, model, latencyMs: Date.now() - t0 };

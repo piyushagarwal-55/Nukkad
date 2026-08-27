@@ -38,6 +38,51 @@ export interface SkuHit {
   score: number;
 }
 
+/**
+ * The pack size in a product string: "150g", "5 kg", "1L", "500 ml".
+ *
+ * normaliseBillName deliberately strips these so that ATTA 5KG and Atta 5 kg
+ * match, and that is right for finding CANDIDATES. It is dangerous for
+ * accepting one: with the size gone, "Toothpaste 150g" and "Colgate
+ * Toothpaste 200g" are the same string and score a perfect match, and
+ * restocking one into the other puts the wrong quantity at the wrong price
+ * against the wrong product.
+ *
+ * So the size is pulled out separately and compared afterwards.
+ */
+export function packOf(text: string): { size: number; unit: string } | null {
+  const m = text
+    .toLowerCase()
+    .match(/(\d+(?:\.\d+)?)\s*(kg|kgs|gm|gms|g|ltr|lt|l|ml|pkt|pcs|pc|dz)\b/);
+  if (!m) return null;
+
+  const size = Number(m[1]);
+  let unit = m[2]!;
+  // fold to a base unit so 1L and 1000ml compare, and g against kg
+  if (unit === 'kgs') unit = 'kg';
+  if (unit === 'gms' || unit === 'gm') unit = 'g';
+  if (unit === 'ltr' || unit === 'lt') unit = 'l';
+  if (unit === 'pcs') unit = 'pc';
+
+  if (unit === 'g') return { size: size / 1000, unit: 'kg' };
+  if (unit === 'ml') return { size: size / 1000, unit: 'l' };
+  return { size, unit };
+}
+
+/**
+ * Do two product strings state DIFFERENT pack sizes?
+ *
+ * Only a definite disagreement counts. If either side is silent about size
+ * this returns false, because absence is not evidence of difference.
+ */
+export function packConflict(a: string, b: string): boolean {
+  const pa = packOf(a);
+  const pb = packOf(b);
+  if (!pa || !pb) return false;
+  if (pa.unit !== pb.unit) return false;
+  return Math.abs(pa.size - pb.size) > 0.001;
+}
+
 /** Strip the noise a wholesale bill adds around the actual product name. */
 export function normaliseBillName(raw: string): string {
   return raw

@@ -5,7 +5,7 @@ import { groq } from '../../lib/groq.js';
 import { env } from '../../config/env.js';
 import { parseBill, type ParsedBill } from './parse.js';
 import {
-  retrieveKb, retrieveSkus, normaliseBillName, MATCH,
+  retrieveKb, retrieveSkus, normaliseBillName, packConflict, MATCH,
   type KbHit, type SkuHit,
 } from '../kb/retrieve.js';
 
@@ -817,6 +817,26 @@ async function reconcile(s: State): Promise<Partial<State>> {
       if (second && top.score - second.score < MATCH.RUNNER_UP_GAP && top.score < MATCH.AUTO) {
         return { ...line, decision: 'AMBIGUOUS' as Decision, confidence: top.score,
           reasoning: `"${top.name}" and "${second.name}" score within ${(MATCH.RUNNER_UP_GAP * 100) | 0}% of each other.` };
+      }
+
+      /**
+       * PACK SIZE OVERRIDES THE SCORE.
+       *
+       * Retrieval strips sizes so ATTA 5KG finds Atta 5 kg, which is right
+       * for finding candidates and wrong for accepting one. With the size
+       * gone, "Toothpaste 150g" scored a perfect 100% against "Colgate
+       * Toothpaste 200g" and was about to restock one into the other:
+       * wrong quantity, wrong price, wrong product, no warning.
+       *
+       * A stated size that disagrees is strong evidence of a different
+       * product, so it caps the decision at AMBIGUOUS however well the
+       * words matched. Silence on either side is not disagreement.
+       */
+      const billText = line.rawName + " " + (line.pack ?? "");
+      if (packConflict(billText, top.name)) {
+        return { ...line, decision: "AMBIGUOUS" as Decision, confidence: top.score,
+          skuId: null, matchedName: top.name,
+          reasoning: `The words match "${top.name}", but the pack sizes are different. Confirm before adding stock.` };
       }
 
       if (top.score >= MATCH.AUTO) {
