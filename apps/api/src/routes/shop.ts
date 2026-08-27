@@ -270,6 +270,138 @@ export async function shopRoutes(app: FastifyInstance) {
     };
   });
 
+  /**
+   * One order, with everything needed to explain it.
+   *
+   * The list view answers "what happened". This answers "why, and was it
+   * any good": how each line was matched and how sure of it, what the shop
+   * actually made on it, and how this order compares with the same
+   * household's usual. A resolver that cannot be audited per order is one
+   * nobody should let write a price.
+   */
+  app.get('/orders/:orderId', async (req, reply) => {
+    const { kiranaId } = requireSession(req);
+    const { orderId } = req.params as { orderId: string };
+
+    const order = await prisma.order.findFirst({
+      where: { id: orderId, kiranaId },
+      include: {
+        household: true,
+        lines: { include: { sku: true }, orderBy: { id: 'asc' } },
+        invoice: { include: { payments: { orderBy: { capturedAt: 'asc' } } } },
+      },
+    });
+    if (!order) return reply.code(404).send({ error: 'no such order' });
+
+    // what the same household usually does, for context on this one
+    const siblings = await prisma.order.findMany({
+      where: { householdId: order.householdId, status: { not: 'CANCELLED' } },
+      select: { id: true, totalPaise: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    const others = siblings.filter((o) => o.id !== order.id);
+    const avgPaise = others.length
+      ? Math.round(others.reduce((a, b) => a + b.totalPaise, 0) / others.length)
+      : null;
+    const previous = others.find((o) => o.createdAt < order.createdAt) ?? null;
+
+    /**
+     * Substituted names come from the SKU that was originally asked for.
+     * Fetched in one query rather than per line, because a ten line order
+     * would otherwise be ten more round trips to Seoul.
+     */
+    const fromIds = order.lines
+      .map((l) => l.substitutedFromSkuId)
+      .filter((x): x is string => !!x);
+    const fromSkus = fromIds.length
+      ? await prisma.sku.findMany({ where: { id: { in: fromIds } }, select: { id: true, name: true } })
+      : [];
+    const fromById = new Map(fromSkus.map((s) => [s.id, s.name]));
+
+    const lines = order.lines.map((l) => {
+      // Margin is only knowable where the SKU carries a cost basis, which
+      // it does once a supplier bill has been through it. Null is honest
+      // where a flat markup guess would not be.
+      const cost = l.sku?.costPaise ?? null;
+      const costTotal = cost === null ? null : Math.round(cost * l.quantity);
+      return {
+        id: l.id,
+        name: l.sku?.name ?? l.sourceText,
+        skuId: l.skuId,
+        sourceText: l.sourceText,
+        quantity: l.quantity,
+        unitHint: l.unitHint,
+        unitPricePaise: l.unitPricePaise,
+        linePaise: l.linePaise,
+        costPaise: costTotal,
+        marginPaise: costTotal === null ? null : l.linePaise - costTotal,
+        method: l.method,
+        confidence: l.confidence,
+        wasSubstituted: l.wasSubstituted,
+        substitutedFrom: l.substitutedFromSkuId ? fromById.get(l.substitutedFromSkuId) ?? null : null,
+        alternates: l.alternatesJson,
+      };
+    });
+
+    const known = lines.filter((l) => l.costPaise !== null);
+    const costTotal = known.reduce((a, b) => a + (b.costPaise ?? 0), 0);
+    const revenueOfKnown = known.reduce((a, b) => a + b.linePaise, 0);
+
+    return {
+      id: order.id,
+      status: order.status,
+      source: order.source,
+      totalPaise: order.totalPaise,
+      createdAt: order.createdAt,
+      confirmedAt: order.confirmedAt,
+      cancelledAt: order.cancelledAt,
+      transcript: order.transcript,
+      rawText: order.rawText,
+      asrEngine: order.asrEngine,
+      latencyMs: order.latencyMs,
+
+      household: {
+        id: order.household.id,
+        name: order.household.name,
+        phone: order.household.phone,
+        memberCount: order.household.memberCount,
+        autonomyTier: order.household.autonomyTier,
+        streak: order.household.streak,
+        orderCount: siblings.length,
+        avgPaise,
+        previousAt: previous?.createdAt ?? null,
+      },
+
+      lines,
+
+      margin: {
+        // only over the lines whose cost is actually known, and the count
+        // is returned so the screen can say so rather than imply the rest
+        knownLines: known.length,
+        totalLines: lines.length,
+        costPaise: costTotal,
+        revenuePaise: revenueOfKnown,
+        marginPaise: revenueOfKnown - costTotal,
+      },
+
+      invoice: order.invoice
+        ? {
+            status: order.invoice.status,
+            amountPaise: order.invoice.amountPaise,
+            amountPaidPaise: order.invoice.amountPaidPaise,
+            shortUrl: order.invoice.razorpayShortUrl,
+            acceptPartial: order.invoice.acceptPartial,
+            payments: order.invoice.payments.map((p) => ({
+              amountPaise: p.amountPaise,
+              method: p.method,
+              status: p.status,
+              at: p.capturedAt,
+            })),
+          }
+        : null,
+    };
+  });
+
   app.get('/households', async (req) => {
     const { kiranaId } = requireSession(req);
     const rows = await prisma.household.findMany({

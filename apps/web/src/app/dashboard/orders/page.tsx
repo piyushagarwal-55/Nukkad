@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { get, rupees } from '@/lib/api';
 import { RowsSkeleton } from '@/components/Loading';
 
@@ -82,16 +83,21 @@ function when(iso: string) {
 }
 
 /* ------------------------------------------------------- one order row */
-function OrderRow({ o, open, onToggle }: { o: Order; open: boolean; onToggle: () => void }) {
+/**
+ * A link, not an accordion.
+ *
+ * The interesting parts of an order -- how it was matched, what it earned,
+ * where it lost money -- do not fit under a row without burying them, and
+ * an expanded row cannot be linked to, reloaded or sent to anybody. The
+ * summary earns its place here; everything else lives on its own page.
+ */
+function OrderRow({ o }: { o: Order }) {
   const st = STATUS[o.status] ?? 'ost-draft';
   const weak = o.lines.filter((l) => l.method === 'UNRESOLVED' || l.confidence < 0.55).length;
+  const swapped = o.lines.filter((l) => l.wasSubstituted).length;
 
   return (
-    <div
-      data-open={open}
-      className="inv-row cursor-pointer px-3 py-3.5"
-      onClick={onToggle}
-    >
+    <Link href={`/dashboard/orders/${o.id}`} className="inv-row block px-3 py-3.5">
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
@@ -104,15 +110,29 @@ function OrderRow({ o, open, onToggle }: { o: Order; open: boolean; onToggle: ()
             {o.latencyMs ? <> &middot; understood in {(o.latencyMs / 1000).toFixed(1)}s</> : null}
           </p>
 
-          {/* the words themselves, not hidden behind a click */}
-          {o.transcript && !open && (
+          {o.transcript && (
             <p className="muted mt-1.5 truncate text-[13px] italic">
               &ldquo;{o.transcript}&rdquo;
             </p>
           )}
+
+          {(weak > 0 || swapped > 0) && (
+            <p className="mt-1.5 flex flex-wrap gap-x-3 text-[11px]">
+              {weak > 0 && (
+                <span className="text-[var(--warn)]">
+                  {weak} unsure line{weak === 1 ? '' : 's'}
+                </span>
+              )}
+              {swapped > 0 && (
+                <span className="muted">
+                  {swapped} swapped for stock
+                </span>
+              )}
+            </p>
+          )}
         </div>
 
-        <div className="text-right">
+        <div className="shrink-0 text-right">
           <p className="tabular-nums">&#8377;{rupees(o.totalPaise)}</p>
           {o.outstandingPaise > 0 ? (
             <p className="text-xs font-semibold text-[var(--warn)] tabular-nums">
@@ -121,73 +141,16 @@ function OrderRow({ o, open, onToggle }: { o: Order; open: boolean; onToggle: ()
           ) : (
             <p className="muted text-xs">settled</p>
           )}
+          <p className="muted mt-1 text-xs">details &rarr;</p>
         </div>
       </div>
-
-      {weak > 0 && !open && (
-        <p className="mt-1.5 text-[11px] text-[var(--warn)]">
-          {weak} line{weak === 1 ? '' : 's'} the shop was unsure about
-        </p>
-      )}
-
-      {open && (
-        <div className="mt-4 border-t border-[var(--line)] pt-4" onClick={(e) => e.stopPropagation()}>
-          {o.transcript && (
-            <>
-              <p className="muted text-[11px] font-semibold">What they said</p>
-              <p className="said display mt-1.5 text-[17px] leading-snug">
-                &ldquo;{o.transcript}&rdquo;
-              </p>
-            </>
-          )}
-
-          <p className="muted mt-5 text-[11px] font-semibold">What the shop understood</p>
-          <ul className="mt-2 divide-y divide-[#1a1a1a12]">
-            {o.lines.map((l, i) => {
-              const m = METHOD[l.method] ?? { cls: 'm-llm', label: l.method.toLowerCase(), why: '' };
-              return (
-                <li key={i} className="py-2.5">
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <span className="muted text-[13px] italic">&ldquo;{l.sourceText}&rdquo;</span>
-                    <span className="became">&rarr;</span>
-                    <span className="text-[13px] font-medium">
-                      {l.quantity} &times; {l.name}
-                    </span>
-                    <span className={`method ${m.cls}`}>{m.label}</span>
-                    {l.wasSubstituted && (
-                      <span className="method m-substituted">was out of stock</span>
-                    )}
-                    <span className="ml-auto text-[13px] tabular-nums">
-                      &#8377;{rupees(l.linePaise)}
-                    </span>
-                  </div>
-
-                  <div className="mt-1.5 flex items-center gap-2.5">
-                    <span className="conf-rail w-14 shrink-0">
-                      <span
-                        className="conf-fill block"
-                        style={{
-                          width: `${Math.round(l.confidence * 100)}%`,
-                          background: l.confidence < 0.55 ? 'var(--hot)' : 'var(--ink)',
-                        }}
-                      />
-                    </span>
-                    <span className="muted text-[11px]">{m.why}</span>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      )}
-    </div>
+    </Link>
   );
 }
 
 /* -------------------------------------------------------------- page */
 export default function Orders() {
   const [orders, setOrders] = useState<Order[] | null>(null);
-  const [open, setOpen] = useState<string | null>(null);
   const [tab, setTab] = useState<(typeof TABS)[number]['key']>('all');
   const [q, setQ] = useState('');
   const [err, setErr] = useState<string | null>(null);
@@ -263,12 +226,7 @@ export default function Orders() {
         <div className="pane mt-4 p-2">
           <div className="divide-y divide-[#1a1a1a12]">
             {shown.map((o) => (
-              <OrderRow
-                key={o.id}
-                o={o}
-                open={open === o.id}
-                onToggle={() => setOpen(open === o.id ? null : o.id)}
-              />
+              <OrderRow key={o.id} o={o} />
             ))}
           </div>
           {shown.length === 0 && (
@@ -278,8 +236,8 @@ export default function Orders() {
       )}
 
       <p className="muted mt-4 text-xs leading-relaxed">
-        Tap an order to see the exact words and how each one was matched.
-        The tags are the same routes the accuracy harness measures.
+        Open an order to see how every line was matched, what it earned, and
+        where the shelf price has fallen behind what the supplier charges.
       </p>
     </>
   );
