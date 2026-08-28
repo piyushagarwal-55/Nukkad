@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { openEar } from '../services/asr/realtime.js';
 import { handle } from '../services/conversation/core.js';
-import { speak } from '../services/voice/tts.js';
+import { openMouth } from '../services/voice/mouth.js';
 import { warm } from '../services/conversation/routing.js';
 import { prisma } from '@nukkad/db';
 import { randomUUID } from 'node:crypto';
@@ -118,38 +118,56 @@ export async function streamRoutes(app: FastifyInstance) {
     async function runTurn(text: string, ctrl: AbortController) {
       const started = Date.now();
       let firstSoundMs = 0;
-      let index = 0;
-      let chain: Promise<void> = Promise.resolve();
 
       /**
-       * The same 700ms race the button path uses, for the same reason:
-       * nothing can be said until the policy, the resolver and the
-       * composer are all done, and silence on a phone reads as a dropped
-       * line. The clock starts here rather than when the action is known,
-       * because the policy call is the slow part -- arming it afterwards
-       * meant it never once fired.
+       * A MOUTH PER TURN, fed as the composer writes.
+       *
+       * The batch synthesiser this replaces took a finished sentence and
+       * returned a finished WAV, so speech was the last stage of a
+       * pipeline that could not start until every stage before it had
+       * ended. Measured on a real call: "haan ji" at 1316ms, then seven
+       * seconds of silence, then the answer. The filler made that worse
+       * rather than better -- it proved the line was open and then left a
+       * gap that sounded like a fault.
+       *
+       * Per turn rather than per session, because there is no way to
+       * cancel synthesis already in flight on a shared socket: a
+       * barge-in would cut off audio the previous sentence was still
+       * producing. Closing this one and opening the next costs a
+       * handshake the composer is going to outlast anyway.
+       */
+      const mouth = openMouth({
+        onAudio: (b64) => {
+          if (ctrl.signal.aborted) return;
+          if (!firstSoundMs) firstSoundMs = Date.now() - started;
+          send({ type: 'audio', b64 });
+        },
+        onError: (message) => app.log.warn({ message }, 'tts stream'),
+      });
+
+      /**
+       * SENTENCES REMAIN THE UNIT, and this is a safety property rather
+       * than a convenience. composeStream checks every sentence against
+       * the digits it was actually given before releasing it -- see
+       * violates() in conversation/compose.ts, which exists because the
+       * model once drew its own imitation ledger above the real one.
+       * Streaming raw tokens into the mouth would speak a fabricated
+       * total before anything had a chance to check it, and a number
+       * said out loud cannot be taken back.
+       *
+       * The win is not finer granularity. It is that a validated
+       * sentence now goes into an open socket and comes back as audio in
+       * ~220ms, instead of waiting for the whole reply and then paying
+       * 1711ms for a batch render of all of it.
        */
       let spokenYet = false;
-      const say = (sentence: string) => {
-        chain = chain.then(async () => {
-          if (ctrl.signal.aborted) return;
-          const said = await speak(sentence);
-          if (!said || ctrl.signal.aborted) return;
-          if (!firstSoundMs) firstSoundMs = Date.now() - started;
-          send({
-            type: 'audio',
-            index: index++,
-            text: sentence,
-            b64: said.audio.toString('base64'),
-          });
-        });
-      };
+      let reaction: string | null = 'Haan ji, ';
 
-      let reaction: string | null = 'Haan ji...';
       const timer = setTimeout(() => {
         if (spokenYet || !reaction || ctrl.signal.aborted) return;
         spokenYet = true;
-        say(reaction);
+        mouth.say(reaction);
+        mouth.flush();
       }, 700);
 
       try {
@@ -168,14 +186,23 @@ export async function streamRoutes(app: FastifyInstance) {
               reaction = REACTIONS[action] ?? null;
             },
             onSentence: (sentence) => {
-              spokenYet = true;
               clearTimeout(timer);
-              say(sentence);
+              /**
+               * If the reaction has not been said yet, it is prepended
+               * to this sentence rather than spoken as its own job.
+               * "Haan ji, yeh Aashirvaad Atta hai" is one utterance with
+               * one prosodic contour; the two spoken separately are a
+               * greeting followed by a pause followed by an answer, and
+               * the pause is the thing being removed.
+               */
+              const lead = spokenYet || !reaction ? '' : reaction;
+              spokenYet = true;
+              mouth.say(`${lead}${sentence} `);
+              mouth.flush();
             },
           },
         );
 
-        await chain;
         if (ctrl.signal.aborted) return;
 
         const reply = replies.map((r) => r.text).join('\n');
@@ -198,6 +225,12 @@ export async function streamRoutes(app: FastifyInstance) {
         send({ type: 'error', message: (err as Error).message, fatal: false });
       } finally {
         clearTimeout(timer);
+        /**
+         * Held open briefly after the last sentence, because the final
+         * chunks of an utterance arrive after the text that produced
+         * them. Closing on the last flush would clip the last word.
+         */
+        setTimeout(() => mouth.close(), 4000);
       }
     }
 

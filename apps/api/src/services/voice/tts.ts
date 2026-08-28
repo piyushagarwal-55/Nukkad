@@ -1,4 +1,4 @@
-import { span } from '../telemetry/span.js';
+import { mark, span } from '../telemetry/span.js';
 import { env } from '../../config/env.js';
 
 /**
@@ -37,8 +37,41 @@ export interface Spoken {
  * Twilio's own <Say>. Losing the whole reply because a TTS provider
  * hiccuped would be the worse trade.
  */
+/**
+ * THE SHORT LINES THIS SHOP SAYS OVER AND OVER, SYNTHESISED ONCE.
+ *
+ * "Haan ji...", "Ek second, dekhta hoon...", "Namaste! Kya chahiye aaj?"
+ * -- a fixed vocabulary of reactions and fast-path replies, each of which
+ * was costing a 600-900ms round trip EVERY time it was said. On the
+ * reaction that is the whole point of the reaction: it exists to break a
+ * silence at 700ms and was arriving at 1300ms.
+ *
+ * Capped and short-only, because the thing that must not happen is an
+ * unbounded map of every sentence a shop has ever spoken. Long replies
+ * are one-offs -- they carry names, prices and quantities -- so they
+ * would never be hit again and would only push out the entries that are.
+ */
+const CACHE_MAX_CHARS = 80;
+const CACHE_MAX_ENTRIES = 64;
+const cache = new Map<string, Spoken>();
+
+function remember(text: string, said: Spoken): void {
+  if (text.length > CACHE_MAX_CHARS) return;
+  // oldest out first: insertion order is what Map iteration gives us
+  if (cache.size >= CACHE_MAX_ENTRIES) cache.delete(cache.keys().next().value!);
+  cache.set(text, said);
+}
+
 export async function speak(text: string): Promise<Spoken | null> {
   if (!env.SARVAM_API_KEY || !text.trim()) return null;
+
+  const hit = cache.get(text);
+  if (hit) {
+    mark('tts', 'hit');
+    // latency reported as zero because that is what the caller experienced
+    return { ...hit, latencyMs: 0 };
+  }
+
   // captured so the narrowing survives into the span closure below
   const key = env.SARVAM_API_KEY;
 
@@ -73,11 +106,13 @@ export async function speak(text: string): Promise<Spoken | null> {
     const b64 = j.audios?.[0];
     if (!b64) return null;
 
-    return {
+    const said: Spoken = {
       audio: Buffer.from(b64, 'base64'),
       latencyMs: Date.now() - t0,
       speaker,
     };
+    remember(text, said);
+    return said;
   } catch {
     return null;
   }

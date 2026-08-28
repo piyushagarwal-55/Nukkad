@@ -50,30 +50,86 @@ export default function Voice() {
   const mutedRef = useRef(false);
 
   /**
-   * SENTENCES ARRIVE ONE AT A TIME AND ARE PLAYED IN ORDER.
+   * AUDIO ARRIVES AS RAW PCM AND IS SCHEDULED ON A TIMELINE.
    *
-   * The point of cutting a reply into sentences on the server is that the
-   * first can be heard while the rest is still being made. Waiting for
-   * the whole stream before playing any of it would give all of that
-   * back, and playing them as they arrive without a queue would have the
-   * shop talking over itself.
+   * The old version received complete WAV files and played each with `new
+   * Audio(data:...)`, one after the next. That works when a whole reply
+   * is synthesised at once and cannot work now: chunks arrive every ~70ms
+   * while the sentence is still being generated, and an <audio> element
+   * per chunk would put a gap at every join.
+   *
+   * So each chunk becomes an AudioBuffer and is scheduled at
+   * `nextPlayTime`, which only ever moves forward by exactly the duration
+   * of what was queued. Network jitter therefore cannot produce a gap:
+   * chunk three is already booked to start the moment chunk two ends,
+   * whether it arrived early or late.
+   *
+   * 24000Hz is bulbul:v3's streaming rate. Sarvam sends `audio/pcm` with
+   * no rate attached, so this is the one number here that is asserted
+   * rather than read -- and it is audible if wrong, since the wrong rate
+   * makes the shopkeeper sound like a chipmunk or a ghost.
    */
-  const queue = useRef<string[]>([]);
-  const playing = useRef(false);
+  const SAMPLE_RATE = 24000;
+  const nextPlayTime = useRef(0);
+  const sources = useRef<AudioBufferSourceNode[]>([]);
+  const out = useRef<AudioContext | null>(null);
 
-  const drain = useCallback(async () => {
-    if (playing.current) return;
-    playing.current = true;
-    while (queue.current.length) {
-      const b64 = queue.current.shift()!;
-      const el = new Audio(`data:audio/wav;base64,${b64}`);
-      await new Promise<void>((done) => {
-        el.onended = () => done();
-        el.onerror = () => done();
-        void el.play().catch(() => done());
-      });
+  /**
+   * A SECOND CONTEXT, FOR THE OTHER DIRECTION.
+   *
+   * The capture context runs at 16000Hz because that is what the
+   * recogniser takes; the synthesiser returns 24000Hz. Playing one
+   * through the other means a resample on every chunk, done by the
+   * browser at whatever quality it feels like, for no reason -- an
+   * AudioContext is cheap and a mismatched rate is audible.
+   */
+  const speaker = useCallback(() => {
+    out.current ??= new AudioContext({ sampleRate: SAMPLE_RATE });
+    return out.current;
+  }, []);
+
+  const play = useCallback((b64: string) => {
+    const ctx = speaker();
+    if (!ctx) return;
+
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const samples = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
+    if (!samples.length) return;
+
+    const buf = ctx.createBuffer(1, samples.length, SAMPLE_RATE);
+    const channel = buf.getChannelData(0);
+    for (let i = 0; i < samples.length; i++) channel[i] = samples[i]! / 0x8000;
+
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+
+    /**
+     * Never schedule in the past. If the queue has drained -- the model
+     * paused, or this is the first chunk of a turn -- start now; if it
+     * has not, start exactly where the last chunk ends.
+     */
+    const startAt = Math.max(nextPlayTime.current, ctx.currentTime);
+    src.start(startAt);
+    nextPlayTime.current = startAt + buf.duration;
+
+    sources.current.push(src);
+    src.onended = () => {
+      sources.current = sources.current.filter((s) => s !== src);
+    };
+  }, [speaker]);
+
+  /** barge-in: stop everything queued, not just what is audible */
+  const hush = useCallback(() => {
+    for (const src of sources.current) {
+      try {
+        src.stop();
+      } catch {
+        // already finished, which is the common case
+      }
     }
-    playing.current = false;
+    sources.current = [];
+    nextPlayTime.current = 0;
   }, []);
 
   useEffect(() => {
@@ -124,13 +180,12 @@ export default function Voice() {
             setPhase('listening');
           } else if (ev.type === 'listening') {
             // barge-in: they started talking, so stop the shop mid-sentence
-            queue.current = [];
+            hush();
             setPhase('listening');
           } else if (ev.type === 'thinking') {
             setPhase('thinking');
           } else if (ev.type === 'audio') {
-            queue.current.push(ev.b64);
-            void drain();
+            play(ev.b64);
           } else if (ev.type === 'turn') {
             setTurns((t) => [...t, ev]);
             setPartial('');
@@ -170,8 +225,9 @@ export default function Voice() {
       ws.current?.close();
       stream.current?.getTracks().forEach((t) => t.stop());
       void audio.current?.close();
+      void out.current?.close();
     };
-  }, [drain]);
+  }, [play, hush]);
 
   useEffect(() => {
     mutedRef.current = muted;
