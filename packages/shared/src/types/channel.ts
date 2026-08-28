@@ -10,7 +10,19 @@
  * "same webhook, same ranker, same ledger, only the transport differs".
  */
 
-export type ChannelId = 'twilio' | 'sim' | 'cloud';
+/**
+ * `test` is deliberately separate from `sim`, and the separation is not
+ * cosmetic. The conversation row is keyed on (channel, peerPhone), so
+ * running the dialogue suite against the same channel the browser voice
+ * page uses left its state behind -- a basket, a transcript, and a
+ * PENDING CHECKOUT. The next person to say "Hello" into the microphone
+ * inherited all three.
+ *
+ * That produced a trace where a greeting wrote an order and issued a
+ * payment link. The guard in conversation/reply.ts is what makes that
+ * impossible now; this is what makes it not happen in the first place.
+ */
+export type ChannelId = 'twilio' | 'sim' | 'cloud' | 'test';
 
 export interface InboundMedia {
   /** Already downloaded and stored by the adapter. Never a Twilio URL, those expire in 4h. */

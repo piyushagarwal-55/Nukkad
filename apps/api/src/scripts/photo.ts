@@ -55,7 +55,7 @@ async function main() {
 
   for (const fx of FIXTURES) {
     await prisma.conversation.updateMany({
-      where: { channel: 'sim', peerPhone: HOUSEHOLD },
+      where: { channel: 'test', peerPhone: HOUSEHOLD },
       data: { state: 'IDLE', contextJson: Prisma.DbNull },
     });
 
@@ -78,7 +78,7 @@ async function main() {
 
     // then the whole way through, exactly as a WhatsApp message would go
     const replies = await handle({
-      channel: 'sim', senderId: HOUSEHOLD, recipientId: SHOP,
+      channel: 'test', senderId: HOUSEHOLD, recipientId: SHOP,
       text: undefined, media: [{ localPath: path, mime: 'image/png', bytes: 0 }],
       externalId: `photo_${++seq}`, receivedAt: new Date(),
     });
@@ -91,7 +91,7 @@ async function main() {
      */
     for (let hop = 0; hop < 6; hop++) {
       const convo = await prisma.conversation.findFirst({
-        where: { channel: 'sim', peerPhone: HOUSEHOLD },
+        where: { channel: 'test', peerPhone: HOUSEHOLD },
         select: { contextJson: true },
       });
       const pending = (convo?.contextJson as StoredCtx | null)?.pending;
@@ -101,7 +101,7 @@ async function main() {
       if (!pick) break;
 
       const next = await handle({
-        channel: 'sim', senderId: HOUSEHOLD, recipientId: SHOP,
+        channel: 'test', senderId: HOUSEHOLD, recipientId: SHOP,
         text: pick, media: [], externalId: `photo_${++seq}`, receivedAt: new Date(),
       });
       console.log(`  buyer    : ${pick}`);
@@ -116,7 +116,7 @@ async function main() {
      */
     for (const closing of ['bas itna hi bhej do', 'haan']) {
       const done = await handle({
-        channel: 'sim', senderId: HOUSEHOLD, recipientId: SHOP,
+        channel: 'test', senderId: HOUSEHOLD, recipientId: SHOP,
         text: closing, media: [], externalId: `photo_${++seq}`, receivedAt: new Date(),
       });
       console.log(`  buyer    : ${closing}`);

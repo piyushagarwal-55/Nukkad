@@ -33,7 +33,7 @@ const HOUSEHOLD = '+918979560165';
 const SHOP = '+919927306131';
 
 const inbound = (text: string): InboundMessage => ({
-  channel: 'sim',
+  channel: 'test',
   senderId: HOUSEHOLD,
   recipientId: SHOP,
   text,
@@ -53,7 +53,7 @@ const SCRIPT = [
 
 async function reset() {
   await prisma.conversation.updateMany({
-    where: { channel: 'sim', peerPhone: HOUSEHOLD },
+    where: { channel: 'test', peerPhone: HOUSEHOLD },
     data: { state: 'IDLE', contextJson: Prisma.DbNull },
   });
 }

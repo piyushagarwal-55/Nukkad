@@ -54,7 +54,7 @@ const CASES: Array<{ text: string; expect: string[] }> = [
 
 function inbound(text: string): InboundMessage {
   return {
-    channel: 'sim', senderId: HOUSEHOLD, recipientId: SHOP,
+    channel: 'test', senderId: HOUSEHOLD, recipientId: SHOP,
     text, media: [], externalId: `smoke_${Date.now()}_${Math.random()}`,
     receivedAt: new Date(),
   };
@@ -71,7 +71,7 @@ async function conversation() {
      * against a basket the previous case built.
      */
     await prisma.conversation.updateMany({
-      where: { channel: 'sim', peerPhone: HOUSEHOLD },
+      where: { channel: 'test', peerPhone: HOUSEHOLD },
       data: { state: 'IDLE', contextJson: Prisma.DbNull },
     });
 

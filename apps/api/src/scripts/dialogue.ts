@@ -35,7 +35,7 @@ const SHOP = '+919927306131';
 
 let seq = 0;
 const inbound = (text: string): InboundMessage => ({
-  channel: 'sim',
+  channel: 'test',
   senderId: HOUSEHOLD,
   recipientId: SHOP,
   text,
@@ -229,6 +229,26 @@ const CASES: Case[] = [
     ],
   },
   {
+    name: 'a greeting cannot check you out',
+    why:
+      'from a real voice trace: heard "Hello.", replied with a payment link ' +
+      'for Rs 351.53. The policy model returns GREET at 0.95 for that message ' +
+      'in isolation -- what changed its mind was the transcript, which ended ' +
+      'with the shop asking whether to send the order. Given enough context a ' +
+      'model will find the agreement it is looking for in a word that does ' +
+      'not contain one, which is the product-matcher bug in a place where it ' +
+      'costs money',
+    turns: [
+      { say: 'do kilo atta bhej dena', noOrder: true },
+      { say: 'ek kilo chini bhi', lines: 2, noOrder: true },
+      // the shop has just asked whether to send it. This is not an answer.
+      { say: 'hello', noOrder: true },
+      { say: 'namaste bhaiya', noOrder: true },
+      // and the real thing still works
+      { say: 'haan bhej do', orderStatus: 'PAYMENT_PENDING' },
+    ],
+  },
+  {
     name: 'nobody can talk their way past payment',
     why:
       'a customer saying "payment ho gaya" is a sentence, and sentences ' +
@@ -299,7 +319,7 @@ function spokenDigits(said: string): string[] {
 
 async function reset() {
   await prisma.conversation.updateMany({
-    where: { channel: 'sim', peerPhone: HOUSEHOLD },
+    where: { channel: 'test', peerPhone: HOUSEHOLD },
     data: { state: 'IDLE', contextJson: Prisma.DbNull },
   });
 }

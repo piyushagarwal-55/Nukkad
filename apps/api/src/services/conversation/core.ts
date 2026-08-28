@@ -16,7 +16,7 @@ import { fuzzyScore } from '../resolver/fuzzy.js';
 import { fitPack, displayNames, withoutPack } from '../resolver/pack.js';
 import { findSubstitutes } from '../substitution/substitute.js';
 import { hasVision, env } from '../../config/env.js';
-import { readAnswer } from './reply.js';
+import { readAnswer, saysCheckout } from './reply.js';
 import { resolve, pickFrom } from '../resolver/resolve.js';
 import { decide, type PolicyAction } from '../policy/decide.js';
 import { createRazorpayLink, recordInvoice, type RazorpayLink } from '../payments/razorpay.js';
@@ -604,7 +604,23 @@ async function act(
     case 'ACCOUNT_SUMMARY':
       return account(ctx);
 
+    /**
+     * THE ONE ACTION THAT MOVES MONEY, AND IT NOW NEEDS EVIDENCE IN THE
+     * MESSAGE ITSELF.
+     *
+     * See saysCheckout() in ./reply.ts for the trace that made this
+     * necessary: "Hello." wrote an order and issued a payment link,
+     * because the five messages before it ended with the shop asking
+     * whether to send it. Asked in isolation the policy model returns
+     * GREET at 0.95 for that message; handed the history it returns
+     * CHECKOUT. That is not a model wanting a better prompt. It is an
+     * action wanting a precondition.
+     *
+     * Refusing costs a re-ask, which the customer answers in a second.
+     * Not refusing costs them a payment link they never asked for.
+     */
     case 'CHECKOUT':
+      if (!saysCheckout(ctx.said)) return greetOrReask(ctx);
       return checkout(ctx);
 
     /**
@@ -643,6 +659,13 @@ async function act(
       return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
 
     case 'CONFIRM_PENDING_ACTION':
+      /**
+       * The same guard, and this branch is the more dangerous of the two
+       * -- it checks out on a bare "yes" with a basket, so a model that
+       * reads agreement into a greeting spends the customer's money
+       * without either of them having mentioned it.
+       */
+      if (!saysCheckout(ctx.said)) return greetOrReask(ctx);
       // a yes with nothing outstanding is just agreement
       if (ctx.convo.basket.length) return checkout(ctx);
       return speak(ctx, { kind: 'GREETING' }, copy.GREETING);
@@ -698,6 +721,26 @@ async function act(
     default:
       return question(ctx, []);
   }
+}
+
+/**
+ * A message the policy read as consent, which contained none.
+ *
+ * Not an error and not a refusal -- the customer said something, and the
+ * honest reply is the one appropriate to what they actually said. With a
+ * basket waiting, that is to ask again about it; with nothing waiting, it
+ * is simply to greet them back.
+ */
+function greetOrReask(ctx: Ctx): Promise<OutboundMessage[]> {
+  if (ctx.convo.basket.length) {
+    return speak(
+      ctx,
+      { kind: 'BASKET_REVIEW' },
+      copy.STILL_WAITING,
+      copy.orderCard(ctx.convo.basket),
+    );
+  }
+  return speak(ctx, { kind: 'GREETING' }, copy.GREETING);
 }
 
 /** below this the shop asks rather than acts */

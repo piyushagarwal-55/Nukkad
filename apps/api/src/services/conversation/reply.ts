@@ -42,6 +42,44 @@ const CHANGE = ['badlo', 'badal', 'badlaav', 'change', 'edit', 'hatao', 'hata'];
 /** none of the ones you offered */
 const NONE = ['koi', 'kuch', 'none', 'neither', 'nothing'];
 
+/**
+ * Ways of saying "that is the lot, send it". Kept beside the YES list
+ * because saysCheckout() is the union of the two and both are read off
+ * the customer's own words.
+ */
+const DONE = ['bas', 'itna', 'pack', 'checkout', 'order', 'total', 'khatam', 'finish', 'final'];
+
+/**
+ * DOES THIS MESSAGE ITSELF ASK TO CHECK OUT.
+ *
+ * The guard on the one action in this system that moves money before a
+ * human looks at it, and it exists because of a trace that should not
+ * have been possible:
+ *
+ *   heard   "Hello."
+ *   said    "Payment link neeche hai."   Rs 351.53, order written
+ *
+ * The policy model was not broken -- asked in isolation it returns GREET
+ * at 0.95. What broke it was the transcript. The five messages before
+ * this one ended with the shop asking whether to send the order, and a
+ * model handed that history plus a pending question will find the
+ * agreement it is looking for in a word that does not contain one.
+ *
+ * That is the same failure as the very first bug in this codebase, in a
+ * new place. A message with no PRODUCT in it was sent to a product
+ * matcher and a product came back; a message with no CONSENT in it was
+ * sent to a policy model and consent came back. Given enough context,
+ * it always will.
+ *
+ * So the model may still choose to check out, and it may not do so
+ * unless the customer's own words say something. Deterministic, on the
+ * message alone, with no view of the history that caused the problem.
+ */
+export function saysCheckout(text: string): boolean {
+  const ws = words(text);
+  return ws.some((w) => YES.includes(w) || DONE.includes(w));
+}
+
 const words = (text: string): string[] =>
   text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
 
