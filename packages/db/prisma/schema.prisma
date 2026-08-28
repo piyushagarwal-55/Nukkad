@@ -800,3 +800,47 @@ model Offer {
 
   @@index([kiranaId, active])
 }
+
+/**
+ * ONE ROW PER TURN: the event spine that makes the workforce visible.
+ *
+ * Which desk answered, what speech act it read, whether the turn crossed
+ * a desk, what was heard and said, and how long it took. Written
+ * fire-and-forget at the end of handle(), so the dashboard's agent
+ * timelines, workforce metrics and conversation drill-downs are all
+ * views over real events -- never reconstructions.
+ */
+model AgentEvent {
+  id          String   @id @default(cuid())
+  kiranaId    String
+  householdId String?
+  channel     String
+  desk        String
+  act         String?
+  goal        String?
+  heard       String
+  reply       String?
+  handoffFrom String?
+  handoffTo   String?
+  latencyMs   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@index([kiranaId, createdAt])
+  @@index([householdId, createdAt])
+}
+
+/**
+ * THE CLOSED LOOP on unmet demand: a recommendation the shopkeeper acted
+ * on, ignored, or fulfilled. Customer asks -> agent cannot fulfil ->
+ * ledger -> recommendation -> this row tracks what happened next.
+ */
+model RestockAction {
+  id        String   @id @default(cuid())
+  kiranaId  String
+  query     String
+  status    String   @default("OPEN")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([kiranaId, status])
+}

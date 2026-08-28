@@ -63,6 +63,9 @@ const ICON = {
   whatsapp: 'M12 3a9 9 0 0 0-7.7 13.7L3 21l4.4-1.2A9 9 0 1 0 12 3Z',
   voice: 'M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Zm7 9a7 7 0 0 1-14 0m7 7v3',
   insights: 'M4 20V11m5.5 9V4m5.5 16v-6m5 6V8',
+  customers: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-6 9a6 6 0 0 1 12 0M17 8a3 3 0 1 0-2-5.2M15 14a5 5 0 0 1 6 5',
+  inventory: 'M4 8l8-4 8 4v9l-8 4-8-4V8Zm8 4 8-4M12 12 4 8m8 4v9',
+  workforce: 'M12 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 0v3m-6 3a3 3 0 1 0 0 6m0-6a3 3 0 0 1 0 6m0-6h12m0 0a3 3 0 1 1 0 6m0-6a3 3 0 0 0 0 6',
 } as const;
 
 const NAV = [
@@ -73,6 +76,9 @@ const NAV = [
   { href: '/dashboard/connect', label: 'WhatsApp', icon: ICON.whatsapp, fill: false },
   { href: '/dashboard/voice', label: 'Voice', icon: ICON.voice, fill: false },
   { href: '/dashboard/insights', label: 'Insights', icon: ICON.insights, fill: false },
+  { href: '/dashboard/customers', label: 'Customers', icon: ICON.customers, fill: false },
+  { href: '/dashboard/inventory', label: 'Inventory', icon: ICON.inventory, fill: false },
+  { href: '/dashboard/workforce', label: 'AI Workforce', icon: ICON.workforce, fill: false },
 ];
 
 export function Sidebar({ shopName }: { shopName: string }) {

@@ -418,6 +418,30 @@ export async function handle(
   for (const o of out) convo.recent.push({ role: 'shop', text: o.text });
   await span('db.save', () => save(convo, { householdId: household.id, kiranaId: kirana!.id }));
 
+  /**
+   * THE EVENT SPINE. One row per turn -- desk, act, handoff, words,
+   * latency -- and everything the dashboard claims about the workforce
+   * is a view over these rows. Fire-and-forget for the same reason the
+   * unmet ledger is: an audit write must never slow a live reply.
+   */
+  void prisma.agentEvent
+    .create({
+      data: {
+        kiranaId: kirana.id,
+        householdId: household.id,
+        channel: msg.channel,
+        desk: convo.desk,
+        act: ctx.annotation?.intent ?? null,
+        goal: ctx.annotation?.goal ?? null,
+        heard: text.slice(0, 500),
+        reply: out[0]?.text.split('\n')[0]?.slice(0, 300) ?? null,
+        handoffFrom: ctx.handoff?.from ?? null,
+        handoffTo: ctx.handoff?.to ?? null,
+        latencyMs: Date.now() - started,
+      },
+    })
+    .catch((err) => console.error('agent event write failed', err));
+
   return out;
 }
 

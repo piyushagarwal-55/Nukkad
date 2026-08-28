@@ -16,6 +16,14 @@ import { get, rupees } from '@/lib/api';
  * this week and you sold none of it -- that sentence is the business.
  */
 
+interface Card { level: 'red' | 'orange' | 'green'; title: string; body: string; href: string }
+
+const TINT: Record<Card['level'], string> = {
+  red: 'border-l-[#9A4632]',
+  orange: 'border-l-[#B98115]',
+  green: 'border-l-[#3F7263]',
+};
+
 interface Insights {
   sinceDays: number;
   demand: Array<{
@@ -36,12 +44,16 @@ const ago = (iso: string) => {
 
 export default function Insights() {
   const [data, setData] = useState<Insights | null>(null);
+  const [cards, setCards] = useState<Card[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     get<Insights>('/analytics/insights')
       .then(setData)
       .catch(() => setErr('Insights load nahi hue. Thodi der mein try karein.'));
+    get<{ cards: Card[] }>('/intel/attention')
+      .then((r) => setCards(r.cards))
+      .catch(() => {});
   }, []);
 
   if (err) return <p className="muted mt-8 text-sm">{err}</p>;
@@ -57,6 +69,18 @@ export default function Insights() {
         Kya bik raha hai, kya khatam ho raha hai — aur kya maanga gaya jo
         aapke paas tha hi nahi.
       </p>
+
+      {/* ---- what needs your attention, each card traceable ---- */}
+      {cards.length > 0 && (
+        <div className="mt-7 flex flex-col gap-3">
+          {cards.map((c) => (
+            <Link key={c.title} href={c.href} className={`pane card-in block border-l-4 p-5 ${TINT[c.level]}`}>
+              <p className="font-semibold">{c.title}</p>
+              <p className="muted mt-1 text-sm">{c.body}</p>
+            </Link>
+          ))}
+        </div>
+      )}
 
       {/* ---- the three numbers ---- */}
       <div className="mt-7 grid grid-cols-1 gap-4 sm:grid-cols-3">
