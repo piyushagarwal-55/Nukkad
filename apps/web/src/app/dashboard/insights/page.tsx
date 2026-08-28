@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { get, rupees } from '@/lib/api';
 
 /**
@@ -24,7 +25,7 @@ interface Insights {
     lastAsked: string;
     offered: string | null;
   }>;
-  topProducts: Array<{ name: string; units: number; paise: number }>;
+  topProducts: Array<{ skuId: string; name: string; units: number; paise: number }>;
   lowStock: Array<{ name: string; quantity: number }>;
 }
 
@@ -119,7 +120,14 @@ export default function Insights() {
               <tbody>
                 {data.demand.map((d) => (
                   <tr key={d.asked} className="border-b border-[#1a1a1a12]">
-                    <td className="py-2.5 pr-4 font-semibold">&ldquo;{d.asked}&rdquo;</td>
+                    <td className="py-2.5 pr-4 font-semibold">
+                      <Link
+                        href={`/dashboard/insights/demand?q=${encodeURIComponent(d.asked)}`}
+                        className="underline decoration-[var(--accent)] decoration-2 underline-offset-2"
+                      >
+                        &ldquo;{d.asked}&rdquo;
+                      </Link>
+                    </td>
                     <td className="py-2.5 pr-4 tabular-nums">{d.times}</td>
                     <td className="py-2.5 pr-4 tabular-nums">{d.households}</td>
                     <td className="py-2.5 pr-4">{ago(d.lastAsked)}</td>
@@ -142,8 +150,13 @@ export default function Insights() {
             <p className="muted text-sm">Abhi koi order data nahi hai.</p>
           )}
           {data.topProducts.map((p) => (
-            <div key={p.name} className="flex items-center gap-3">
-              <span className="w-[38%] min-w-[150px] truncate text-sm">{p.name}</span>
+            <div key={p.skuId} className="flex items-center gap-3">
+              <Link
+                href={`/dashboard/insights/product?skuId=${encodeURIComponent(p.skuId)}`}
+                className="w-[38%] min-w-[150px] truncate text-sm underline decoration-[var(--accent)] decoration-2 underline-offset-2"
+              >
+                {p.name}
+              </Link>
               <div className="h-4 flex-1 rounded-sm bg-[#1a1a1a12]">
                 <div
                   className="h-full rounded-sm bg-[var(--accent)] border border-[var(--ink)]"

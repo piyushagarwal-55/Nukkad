@@ -225,9 +225,9 @@ export async function analyticsRoutes(app: FastifyInstance) {
       groups.set(key, g);
     }
 
-    const bySku = new Map<string, { name: string; units: number; paise: number }>();
+    const bySku = new Map<string, { skuId: string; name: string; units: number; paise: number }>();
     for (const l of lines) {
-      const g = bySku.get(l.skuId!) ?? { name: l.sku?.name ?? '?', units: 0, paise: 0 };
+      const g = bySku.get(l.skuId!) ?? { skuId: l.skuId!, name: l.sku?.name ?? '?', units: 0, paise: 0 };
       g.units += l.quantity;
       g.paise += l.linePaise;
       bySku.set(l.skuId!, g);
@@ -246,6 +246,140 @@ export async function analyticsRoutes(app: FastifyInstance) {
         .sort((a, b) => b.times - a.times),
       topProducts: [...bySku.values()].sort((a, b) => b.units - a.units).slice(0, 8),
       lowStock: low.map((r) => ({ name: r.sku.name, quantity: r.quantity })),
+    };
+  });
+
+  /**
+   * ONE ASKED PHRASE, IN FULL. The overview counts; this names names --
+   * every individual ask with who, when, how close the resolver got and
+   * what was offered instead. The difference between a metric and a
+   * decision is exactly this page: "namkeen, 11 baar" is a number,
+   * "Ramesh has asked four times, most recently today" is a reason to
+   * call the distributor.
+   */
+  app.get('/analytics/demand/detail', async (req, reply) => {
+    const { kiranaId } = requireSession(req);
+    const q = (req.query as { q?: string }).q;
+    if (!q) return reply.code(400).send({ error: 'q required' });
+
+    const since = new Date(Date.now() - 30 * 86_400_000);
+    const rows = await prisma.unmetDemand.findMany({
+      where: { kiranaId, createdAt: { gte: since } },
+      orderBy: { createdAt: 'desc' },
+      take: 1000,
+    });
+
+    const key = normalise(q);
+    const hits = rows.filter((r) => normalise(r.query) === key);
+
+    const ids = [...new Set(hits.map((r) => r.householdId).filter((x): x is string => !!x))];
+    const households = await prisma.household.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, name: true, phone: true },
+    });
+    const who = new Map(households.map((h) => [h.id, h]));
+
+    const buyers = new Map<string, { name: string; phone: string; times: number; last: Date }>();
+    for (const r of hits) {
+      if (!r.householdId) continue;
+      const h = who.get(r.householdId);
+      if (!h) continue;
+      const b = buyers.get(r.householdId) ?? { name: h.name, phone: h.phone, times: 0, last: r.createdAt };
+      b.times++;
+      if (r.createdAt > b.last) b.last = r.createdAt;
+      buyers.set(r.householdId, b);
+    }
+
+    // one bucket per day, oldest first, so the page can draw a trend
+    const byDay = new Map<string, number>();
+    for (const r of hits) {
+      const d = r.createdAt.toISOString().slice(0, 10);
+      byDay.set(d, (byDay.get(d) ?? 0) + 1);
+    }
+
+    return {
+      asked: hits[0]?.query ?? q,
+      totalAsks: hits.length,
+      customers: [...buyers.values()].sort((a, b) => b.times - a.times),
+      log: hits.map((r) => ({
+        at: r.createdAt,
+        customer: (r.householdId && who.get(r.householdId)?.name) ?? 'unknown',
+        confidence: r.confidence,
+        offered: r.offered,
+      })),
+      trend: [...byDay.entries()].map(([date, asks]) => ({ date, asks })).sort((a, b) => a.date.localeCompare(b.date)),
+    };
+  });
+
+  /**
+   * ONE PRODUCT, IN FULL: sales by day, who actually buys it, what it
+   * earned, and where the stock stands. The overview's bar is a
+   * headline; this is the ledger behind it.
+   */
+  app.get('/analytics/product/detail', async (req, reply) => {
+    const { kiranaId } = requireSession(req);
+    const skuId = (req.query as { skuId?: string }).skuId;
+    if (!skuId) return reply.code(400).send({ error: 'skuId required' });
+
+    const since = new Date(Date.now() - 30 * 86_400_000);
+    const [sku, stock, lines] = await Promise.all([
+      prisma.sku.findFirst({ where: { id: skuId, kiranaId } }),
+      prisma.stock.findFirst({ where: { skuId } }),
+      prisma.orderLine.findMany({
+        where: {
+          skuId,
+          order: { kiranaId, status: { not: 'CANCELLED' }, createdAt: { gte: since } },
+        },
+        select: {
+          quantity: true,
+          linePaise: true,
+          order: { select: { createdAt: true, status: true, household: { select: { id: true, name: true, phone: true } } } },
+        },
+        orderBy: { order: { createdAt: 'desc' } },
+      }),
+    ]);
+    if (!sku) return reply.code(404).send({ error: 'no such product' });
+
+    const byDay = new Map<string, { units: number; paise: number }>();
+    const buyers = new Map<string, { name: string; phone: string; units: number; paise: number; last: Date }>();
+    let units = 0;
+    let paise = 0;
+
+    for (const l of lines) {
+      units += l.quantity;
+      paise += l.linePaise;
+
+      const d = l.order.createdAt.toISOString().slice(0, 10);
+      const day = byDay.get(d) ?? { units: 0, paise: 0 };
+      day.units += l.quantity;
+      day.paise += l.linePaise;
+      byDay.set(d, day);
+
+      const h = l.order.household;
+      if (h) {
+        const b = buyers.get(h.id) ?? { name: h.name, phone: h.phone, units: 0, paise: 0, last: l.order.createdAt };
+        b.units += l.quantity;
+        b.paise += l.linePaise;
+        if (l.order.createdAt > b.last) b.last = l.order.createdAt;
+        buyers.set(h.id, b);
+      }
+    }
+
+    return {
+      sku: { id: sku.id, name: sku.name, sellPaise: sku.sellPaise, category: sku.category },
+      stock: stock?.quantity ?? 0,
+      last30: { units, paise, orders: lines.length },
+      buyers: [...buyers.values()].sort((a, b) => b.units - a.units),
+      trend: [...byDay.entries()]
+        .map(([date, v]) => ({ date, ...v }))
+        .sort((a, b) => a.date.localeCompare(b.date)),
+      recent: lines.slice(0, 20).map((l) => ({
+        at: l.order.createdAt,
+        customer: l.order.household?.name ?? 'unknown',
+        quantity: l.quantity,
+        paise: l.linePaise,
+        status: l.order.status,
+      })),
     };
   });
 
