@@ -4,26 +4,35 @@
    Palette. Cream, not white, is the whole signal. Pure white reads cheap
    next to it. #1A1A1A rather than #000 for the same reason.
    --------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------
+   THE PROFESSIONAL RESKIN. The cream-and-chunky-border retro identity
+   read as a side project next to the tools judges use daily; this
+   palette is the quiet SaaS neutral set those tools share -- near-white
+   ground, white cards on hairline borders, one working indigo, ink for
+   text and primary actions. Every page inherits it through these tokens,
+   which is why the reskin is a token block and an override layer rather
+   than twelve rewrites.
+   --------------------------------------------------------------------- */
 :root {
-  --bg:      #ffffeb;   /* cream */
-  --sand:    #e4e4d0;   /* warm secondary surface */
-  --ink:     #1a1a1a;   /* near black */
-  --muted:   #71716e;
-  --faint:   #9d9c98;
-  --line:    #1a1a1a26; /* 15% ink */
-  --line-2:  #1a1a1a4d; /* 30% ink */
+  --bg:      #fafafa;   /* near-white ground */
+  --sand:    #ffffff;   /* card surface (was the warm secondary) */
+  --ink:     #18181b;   /* text, primary buttons */
+  --muted:   #6f6f78;
+  --faint:   #a1a1aa;
+  --line:    #e4e4e7;   /* hairline */
+  --line-2:  #d4d4d8;
 
-  --accent:  #f0d7ff;   /* lavender, CTA fill. Ink text sits on it. */
-  --hot:     #ff6c4c;   /* coral, emphasis */
-  --amber:   #ffa946;
-  --green:   #034f46;
-  --pink:    #ffbcf2;
+  --accent:  #4f46e5;   /* the one working colour: indigo */
+  --hot:     #4f46e5;   /* live emphasis rides the same indigo */
+  --amber:   #f59e0b;
+  --green:   #047857;
+  --pink:    #db2777;
 
   /* aliases the dashboard already consumes */
-  --panel:   #fffdf9;
-  --warn:    #ff6c4c;
+  --panel:   #ffffff;
+  --warn:    #dc2626;
 
-  --radius:  2.5rem;
+  --radius:  1rem;
 }
 
 html, body {
@@ -38,10 +47,10 @@ html, body {
    doing as much work as the typeface.
    --------------------------------------------------------------------- */
 .display {
-  font-family: var(--font-garamond), Georgia, serif;
-  font-weight: 400;
-  line-height: 0.95;
-  letter-spacing: -0.03em;
+  font-family: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
+  font-weight: 650;
+  line-height: 1.05;
+  letter-spacing: -0.025em;
 }
 
 .eyebrow {
@@ -1078,9 +1087,10 @@ html, body {
    One shape, five colours. `.pane` is the neutral one and still steps away
    from the page because it is sand, not panel. */
 .pane {
-  background: var(--sand);
-  border: 2px solid var(--ink);
-  border-radius: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgb(24 24 27 / 0.05);
 }
 .pane-ink {
   background: var(--ink);
@@ -1479,3 +1489,26 @@ html, body {
   font-size: 0.75rem;
   padding: 0 0.35rem;
 }
+
+
+/* ---------------------------------------------------------------------
+   RESKIN OVERRIDE LAYER. The pages carry inline retro utilities --
+   2px ink borders, hard offset shadows, lavender fills with ink text.
+   Rewriting ~12 pages for a visual identity is churn; these selectors
+   catch the utilities where they stand. If a page is later rebuilt, it
+   should use the tokens directly and never need this layer.
+   --------------------------------------------------------------------- */
+[class*="border-2"] { border-width: 1px !important; }
+[class*="border-[var(--ink)]"] { border-color: var(--line-2) !important; }
+[class*="shadow-["] { box-shadow: 0 1px 3px rgb(24 24 27 / 0.08) !important; }
+
+/* accent went from a pastel fill (ink text) to a working indigo:
+   anything painted with it now carries white text */
+[class*="bg-[var(--accent)]"] {
+  color: #ffffff !important;
+  border-color: transparent !important;
+}
+[class*="bg-[var(--hot)]"] { border-color: transparent !important; }
+
+/* the hairline row separators used across every table */
+[class*="border-[#1a1a1a12]"] { border-color: var(--line) !important; }
