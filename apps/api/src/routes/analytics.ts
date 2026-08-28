@@ -177,46 +177,75 @@ export async function analyticsRoutes(app: FastifyInstance) {
 
   /** Every order on one IST calendar day, for the calendar drill-down. */
   /**
-   * WHAT CUSTOMERS ASKED FOR THAT THE SHOP COULD NOT SELL, grouped and
-   * counted. This is the inventory desk: not an agent, a query -- the
-   * feedback loop from real conversations to what goes on the shelf.
+   * THE SHOPKEEPER'S INSIGHT PANEL, in one round trip: what sells, what
+   * is running out, and -- the number no kirana has ever had -- what was
+   * ASKED FOR and could not be sold. The last one is the unmet-demand
+   * ledger aggregated; the "inventory intelligence agent" is this query,
+   * not a chatbot.
    */
-  app.get('/analytics/demand', async (req, reply) => {
-    const kiranaId = (req.query as { kiranaId?: string }).kiranaId;
-    if (!kiranaId) return reply.code(400).send({ error: 'kiranaId required' });
+  app.get('/analytics/insights', async (req) => {
+    const { kiranaId } = requireSession(req);
+    const since7 = new Date(Date.now() - 7 * 86_400_000);
+    const since30 = new Date(Date.now() - 30 * 86_400_000);
 
-    const since = new Date(Date.now() - 7 * 86_400_000);
-    const rows = await prisma.unmetDemand.findMany({
-      where: { kiranaId, createdAt: { gte: since } },
-      orderBy: { createdAt: 'desc' },
-      take: 500,
-    });
+    const [unmet, lines, low] = await Promise.all([
+      prisma.unmetDemand.findMany({
+        where: { kiranaId, createdAt: { gte: since7 } },
+        orderBy: { createdAt: 'desc' },
+        take: 500,
+      }),
+      prisma.orderLine.findMany({
+        where: {
+          skuId: { not: null },
+          order: { kiranaId, status: { not: 'CANCELLED' }, createdAt: { gte: since30 } },
+        },
+        select: { skuId: true, quantity: true, linePaise: true, sku: { select: { name: true } } },
+      }),
+      prisma.stock.findMany({
+        where: { sku: { kiranaId, active: true }, quantity: { lte: 5 } },
+        select: { quantity: true, sku: { select: { name: true } } },
+        orderBy: { quantity: 'asc' },
+        take: 10,
+      }),
+    ]);
 
     /**
-     * Grouped by normalised phrase so "namkeen" and "kuch namkeen" count
-     * as one ask. The resolver's own normaliser, so the grouping agrees
-     * with the matcher about what is the same word.
+     * Grouped by the resolver's own normaliser so "namkeen" and "kuch
+     * namkeen" count as one ask -- the grouping agrees with the matcher
+     * about what is the same word.
      */
-    const groups = new Map<string, { asks: number; households: Set<string>; latest: Date; sample: string }>();
-    for (const r of rows) {
+    const groups = new Map<string, { asks: number; households: Set<string>; latest: Date; sample: string; offered: string | null }>();
+    for (const r of unmet) {
       const key = normalise(r.query);
-      const g = groups.get(key) ?? { asks: 0, households: new Set<string>(), latest: r.createdAt, sample: r.query };
+      const g = groups.get(key) ?? { asks: 0, households: new Set<string>(), latest: r.createdAt, sample: r.query, offered: null };
       g.asks++;
       if (r.householdId) g.households.add(r.householdId);
       if (r.createdAt > g.latest) g.latest = r.createdAt;
+      if (r.offered) g.offered = r.offered;
       groups.set(key, g);
+    }
+
+    const bySku = new Map<string, { name: string; units: number; paise: number }>();
+    for (const l of lines) {
+      const g = bySku.get(l.skuId!) ?? { name: l.sku?.name ?? '?', units: 0, paise: 0 };
+      g.units += l.quantity;
+      g.paise += l.linePaise;
+      bySku.set(l.skuId!, g);
     }
 
     return {
       sinceDays: 7,
-      demand: [...groups.entries()]
-        .map(([, g]) => ({
+      demand: [...groups.values()]
+        .map((g) => ({
           asked: g.sample,
           times: g.asks,
           households: g.households.size,
           lastAsked: g.latest,
+          offered: g.offered,
         }))
         .sort((a, b) => b.times - a.times),
+      topProducts: [...bySku.values()].sort((a, b) => b.units - a.units).slice(0, 8),
+      lowStock: low.map((r) => ({ name: r.sku.name, quantity: r.quantity })),
     };
   });
 
