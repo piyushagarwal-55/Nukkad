@@ -3,6 +3,7 @@ import { groq } from '../../lib/groq.js';
 import { env } from '../../config/env.js';
 import type { Turn } from './state.js';
 import { direct, deliveryBrief } from './director.js';
+import { DESKS, type Desk } from '../policy/desks.js';
 import { realize } from './realize.js';
 import { span } from '../telemetry/span.js';
 
@@ -639,6 +640,14 @@ export interface ComposeInput {
    * one reply: a canned line cannot acknowledge a handover it cannot see.
    */
   handoffNote?: string;
+  /**
+   * WHICH DESK IS SPEAKING. Turns DESKS[desk].brief and .register --
+   * dead code since the policy refactor deleted their only reader --
+   * back into real behaviour: the composer is told who it is and how
+   * that person talks. Authority still lives in the transition table;
+   * this is the personality that sits on top of it.
+   */
+  desk?: Desk;
 }
 
 /**
@@ -738,6 +747,9 @@ function buildPrompt(input: ComposeInput): string {
   const user = [
     `SHOP: ${input.shopName}`,
     `CUSTOMER: ${input.buyerName}`,
+    input.desk
+      ? `YOU ARE: ${DESKS[input.desk].title} at this shop. ${DESKS[input.desk].brief} ${DESKS[input.desk].register}`
+      : '',
     history ? `\nRECENT MESSAGES:\n${history}` : '',
     `\nTHEY JUST SENT: ${input.said || '(nothing)'}`,
     input.handoffNote ? `\nJUST TRANSFERRED: ${input.handoffNote}` : '',

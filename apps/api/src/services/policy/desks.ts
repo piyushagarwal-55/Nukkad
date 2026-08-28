@@ -34,8 +34,17 @@ export interface DeskSpec {
   title: string;
   /** desks it may hand a caller to, before preconditions are checked */
   mayTransferTo: readonly Desk[];
-  /** one line, given to the policy model, describing the job */
+  /** one line describing the job, spoken TO the composer as "you are" */
   brief: string;
+  /**
+   * HOW THIS DESK TALKS -- the conversational register, fed to the
+   * composer alongside the brief. This is what makes the desks feel like
+   * different people at one shop rather than one bot with four names:
+   * reception is welcoming and brief, the counter is chatty about goods,
+   * billing is precise, enquiries is calm. Personality, not authority --
+   * nothing here changes what a desk may DO.
+   */
+  register: string;
 }
 
 /**
@@ -57,6 +66,9 @@ export const DESKS: Record<Desk, DeskSpec> = {
       'You answer the shop phone. You do not know what is in stock and you'
       + ' do not take orders. Find out what the call is about, then hand it'
       + ' to the right person.',
+    register:
+      'Welcoming and brief. One short sentence, never a list. You are the'
+      + ' first voice they hear, so warmth matters more than information.',
   },
 
   /**
@@ -75,6 +87,9 @@ export const DESKS: Record<Desk, DeskSpec> = {
       'You are behind the counter. Prices, stock, what is available, what'
       + ' goes in the bag. You cannot take payment -- when they are done'
       + ' adding, hand them to the billing counter.',
+    register:
+      'Conversational and helpful, the way a counter-hand talks about'
+      + ' goods. Happy to compare and suggest. Never rushed.',
   },
 
   /**
@@ -97,6 +112,9 @@ export const DESKS: Record<Desk, DeskSpec> = {
       'You are at the billing counter. Read the bill back, take payment,'
       + ' answer questions about a payment. You cannot add or remove'
       + ' anything -- if they want another item, send them back.',
+    register:
+      'Confident and precise. Money is involved, so no filler and no'
+      + ' vagueness -- amounts and next steps, said plainly.',
   },
 
   /**
@@ -116,6 +134,9 @@ export const DESKS: Record<Desk, DeskSpec> = {
     brief:
       'You answer questions about orders already placed and money already'
       + ' spent. You do not sell anything and you do not take payment.',
+    register:
+      'Calm and informative. You are reading real records to a customer'
+      + ' who may be anxious about their order, so reassure with facts.',
   },
 };
 

@@ -51,6 +51,15 @@ interface Turn {
   expect?: string;
   /** substring the reply must NOT contain */
   reject?: string;
+  /** digits seeded by this suite's own fixtures (e.g. the Rs 20 offer) */
+  allowDigits?: string[];
+  /**
+   * Digits the reply may legitimately contain beyond the card and the
+   * customer's own words -- numbers seeded into fixtures, like the Rs 20
+   * offer. The guard exists to catch INVENTED digits, and a digit this
+   * suite itself planted in the database is not invented.
+   */
+  allowDigits?: string[];
   /** the newest order row must be a FRESH one in this state */
   orderStatus?: string;
   /** nothing may have been written to the database yet */
@@ -250,6 +259,25 @@ const CASES: Case[] = [
     ],
   },
   {
+    name: 'the workforce: basket crosses the handoff, offers come from a table, enquiry reads the row',
+    why:
+      'flows B, C and E of the workforce spec in one call. The basket is built ' +
+      'at the counter, checkout receives it across the transfer without asking ' +
+      'again (the ledger card and the order row prove it), the offer answer can ' +
+      'only contain the seeded Rs 20 because the composer may not speak digits ' +
+      'its facts do not contain, and the order enquiry is answered from the row ' +
+      'that checkout just wrote',
+    turns: [
+      { say: 'do kilo atta aur ek kilo chini bhej do', lines: 2, noOrder: true },
+      // the transfer: seller -> checkout, basket carried, order written
+      { say: 'bas order kar do', orderStatus: 'PAYMENT_PENDING' },
+      // the marketing desk is a lookup: Rs 20 exists only in the Offer table
+      { say: 'koi offer chal raha hai kya', expect: '20', allowDigits: ['20', '300'] },
+      // enquiry answers from the order checkout just wrote
+      { say: 'mera order kahan hai', reject: 'samajh nahi' },
+    ],
+  },
+  {
     name: 'nobody can talk their way past payment',
     why:
       'a customer saying "payment ho gaya" is a sentence, and sentences ' +
@@ -328,6 +356,24 @@ async function run() {
   let passed = 0;
   let failed = 0;
 
+  /**
+   * One known offer, so the offer flow is deterministic: Rs 20 off above
+   * Rs 300. The composer may only speak digits its facts contain, so the
+   * "20" in the expected reply can ONLY have come from this row.
+   */
+  const kirana = await prisma.kirana.findFirst({ select: { id: true } });
+  if (kirana) {
+    await prisma.offer.deleteMany({ where: { kiranaId: kirana.id } });
+    await prisma.offer.create({
+      data: {
+        kiranaId: kirana.id,
+        title: 'Rs 20 off on orders above Rs 300',
+        minBasketPaise: 30000,
+        flatOffPaise: 2000,
+      },
+    });
+  }
+
   for (const c of CASES) {
     await reset();
     console.log(`\n${c.name}`);
@@ -366,7 +412,7 @@ async function run() {
 
       if (text.includes('Total:')) {
         const ledger = text.slice(text.indexOf('\n'));
-        const allowed = new Set([...digitsIn(ledger), ...saidNumbers]);
+        const allowed = new Set([...digitsIn(ledger), ...saidNumbers, ...(turn.allowDigits ?? [])]);
         const invented = [...digitsIn(prose)].filter((d) => !allowed.has(d));
         if (invented.length) {
           console.log(`     FAIL prose has digits from nowhere: ${invented.join(', ')}`);

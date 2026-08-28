@@ -100,7 +100,7 @@ interface Ctx {
    * composer acknowledges the handover so the customer never repeats
    * themselves to the new voice. See the transfer branch in act().
    */
-  handoff?: string;
+  handoff?: Handoff;
   /**
    * Voice only. When present the composer STREAMS and every finished
    * sentence arrives here as the model writes it, so speech can start
@@ -134,7 +134,8 @@ async function speak(
     recent: ctx.convo.recent,
     card,
     fallback,
-    handoffNote: ctx.handoff,
+    handoffNote: ctx.handoff ? renderHandoff(ctx.handoff) : undefined,
+    desk: ctx.convo.desk,
   };
 
   /**
@@ -689,7 +690,25 @@ async function act(
     }
     // the goodbye is queued in the old voice; everything after is the new desk
     ctx.onDesk?.(outcome.transfer);
-    ctx.handoff = handoffNoteFor(ctx.convo.desk, frame);
+
+    /**
+     * STRUCTURE FIRST, PROSE AT THE BOUNDARY. The handoff used to be
+     * born as an English sentence and the facts it was built from were
+     * thrown away in the same breath. Now the facts are the handoff --
+     * who, where, which speech act caused it, what was named, what is in
+     * the bag, what question is open -- and the sentence the composer
+     * reads is rendered from them at the last moment. Same behaviour,
+     * but the next consumer of a handoff (a dashboard, a test, a log)
+     * gets data instead of parsing prose.
+     */
+    ctx.handoff = {
+      from: ctx.convo.desk,
+      to: outcome.transfer,
+      reason: frame.act,
+      entities: frame.entities.map((e) => e.query),
+      basketSize: ctx.convo.basket.length,
+      pending: ctx.convo.pending?.kind ?? null,
+    };
 
     ctx.convo.desk = outcome.transfer;
     return act(ctx, fromPhoto, depth + 1, frame);
@@ -1054,23 +1073,46 @@ function transferLine(to: Desk, said: string): string | null {
 }
 
 /**
- * What the receiving desk is told about why the caller is here, so its
- * first sentence can prove it knows. Facts only -- what was said and
- * which act it was -- never instructions from the message itself.
+ * THE HANDOFF, AS DATA. Everything a receiving desk -- or a dashboard,
+ * a test, a log line -- needs to know about why the caller arrived,
+ * with no prose to parse. Rendered into a sentence only at the composer
+ * boundary, by renderHandoff below.
  */
-function handoffNoteFor(from: Desk, frame: IntentFrame): string {
-  const wanted = frame.entities.map((e) => e.query).join(', ');
+export interface Handoff {
+  from: Desk;
+  to: Desk;
+  /** the speech act that caused the transfer */
+  reason: SpeechAct;
+  /** products named in the transferring message, customer's own words */
+  entities: string[];
+  basketSize: number;
+  /** the question left open at the old desk, if any */
+  pending: 'CHECKOUT' | 'DISAMBIGUATE' | null;
+}
+
+/**
+ * The prose view of a Handoff, for the composer. Facts only -- what was
+ * said and which act caused the move -- never instructions lifted from
+ * the message itself, which is what keeps a handoff from becoming an
+ * injection path between desks.
+ */
+function renderHandoff(h: Handoff): string {
+  const wanted = h.entities.join(', ');
   const why =
-    frame.act === 'BUY' ? (wanted ? 'they want to buy: ' + wanted : 'they want to buy something')
-    : frame.act === 'CHECKOUT' ? 'they are done shopping and want to pay'
-    : frame.act === 'PAYMENT_CLAIM' ? 'they are asking about a payment'
-    : frame.act === 'ORDER_STATUS' ? 'they are asking where their order is'
-    : frame.act === 'ASK_OFFER' ? 'they asked about offers'
-    : frame.act === 'ACCOUNT' ? 'they asked about their account'
-    : frame.act === 'ASK' ? 'they have a question about products'
+    h.reason === 'BUY' ? (wanted ? 'they want to buy: ' + wanted : 'they want to buy something')
+    : h.reason === 'CHECKOUT' ? 'they are done shopping and want to pay'
+    : h.reason === 'PAYMENT_CLAIM' ? 'they are asking about a payment'
+    : h.reason === 'ORDER_STATUS' ? 'they are asking where their order is'
+    : h.reason === 'ASK_OFFER' ? 'they asked about offers'
+    : h.reason === 'ACCOUNT' ? 'they asked about their account'
+    : h.reason === 'ASK' ? 'they have a question about products'
     : 'the previous desk could not place the request';
 
-  return 'This caller was just put through from ' + DESKS[from].title + ' because ' + why + '.'
+  const carrying = h.basketSize
+    ? ` They arrive with ${h.basketSize} item(s) already in the basket.`
+    : '';
+
+  return `This caller was just put through from ${DESKS[h.from].title} because ${why}.${carrying}`
     + ' Open by showing you already know -- do not make them repeat it.';
 }
 
