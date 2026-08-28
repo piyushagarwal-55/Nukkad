@@ -6,7 +6,7 @@ import { toWav16k } from '../asr/audio.js';
 import { speak } from './tts.js';
 import { prisma } from '@nukkad/db';
 import { transcribe } from '../asr/index.js';
-import type { PolicyAction } from '../policy/decide.js';
+import type { SpeechAct } from '../policy/intent.js';
 import { warm } from '../conversation/routing.js';
 
 /**
@@ -122,25 +122,22 @@ function speakable(reply: string): string {
  */
 const REACT_AFTER_MS = 700;
 
-const REACTIONS: Partial<Record<PolicyAction, string[]>> = {
-  ADD_EXPLICIT_PRODUCT: ['Haan, rakhta hoon...', 'Ji, likh raha hoon...'],
-  ADD_FROM_STATE: ['Haan ji, karta hoon...', 'Theek hai, rakh raha hoon...'],
-  REMOVE_EXPLICIT_PRODUCT: ['Haan, hata raha hoon...'],
-  REMOVE_FROM_STATE: ['Ji, hata deta hoon...'],
-  ANSWER_PRICE: ['Ek second, dekhta hoon...', 'Haan, rate dekh raha hoon...'],
-  ANSWER_STOCK: ['Ruko, dekhta hoon...', 'Haan, check karta hoon...'],
-  SEARCH_PRODUCT: ['Ek minute, dekhta hoon...'],
-  RECOMMEND: ['Hmm, sochne dijiye...', 'Achha, ek second...'],
-  REPEAT_LAST_ORDER: ['Haan, pichhla order nikaal raha hoon...'],
-  ACCOUNT_SUMMARY: ['Ek second, hisaab dekh raha hoon...'],
+const REACTIONS: Partial<Record<SpeechAct, string[]>> = {
+  BUY: ['Haan, rakhta hoon...', 'Ji, likh raha hoon...'],
+  MODIFY: ['Haan, hata raha hoon...', 'Ji, nikaal deta hoon...'],
+  ASK: ['Ek second, dekhta hoon...', 'Haan, dekh raha hoon...'],
+  ASK_RECOMMENDATION: ['Hmm, sochne dijiye...', 'Achha, ek second...'],
+  REPEAT_ORDER: ['Haan, pichhla order nikaal raha hoon...'],
+  ACCOUNT: ['Ek second, hisaab dekh raha hoon...'],
   CHECKOUT: ['Haan ji, total nikaal raha hoon...'],
-  PAYMENT_STATUS_QUERY: ['Ek second, check karta hoon...'],
+  PAYMENT_CLAIM: ['Ek second, check karta hoon...'],
 
   /**
-   * Deliberately absent: CLARIFY, NOT_UNDERSTOOD, GREET,
-   * CONFIRM/REJECT_PENDING_ACTION, CANCEL_ORDER. The first two are about
-   * to ask a question, the rest are fast enough that the timer never
-   * fires. An empty entry means silence, and silence is a valid reaction.
+   * Deliberately absent: GREET, CONFIRM, REJECT, CANCEL and UNKNOWN. The
+   * first four are fast enough that the timer never reaches them, and
+   * UNKNOWN is about to admit the shop did not follow -- sounding busy
+   * first makes that worse. An act with no entry gets silence, and
+   * silence is a valid thing to say.
    */
 };
 
@@ -164,8 +161,8 @@ function pick(options: string[], said: string): string {
 
 const neutralFor = (said: string): string => pick(NEUTRAL, said);
 
-function reactionFor(action: PolicyAction, said: string): string | null {
-  const options = REACTIONS[action];
+function reactionFor(act: SpeechAct, said: string): string | null {
+  const options = REACTIONS[act];
   if (!options?.length) return null;
   return pick(options, said);
 }
@@ -285,13 +282,13 @@ export async function voiceTurn(
   }
 
   const onDecision = relay
-    ? (action: PolicyAction) => {
+    ? (act: SpeechAct) => {
         /**
          * Upgrades the pending line, or cancels it outright. CLARIFY and
          * NOT_UNDERSTOOD map to null on purpose: a turn about to admit
          * it does not know should not sound busy first.
          */
-        line = reactionFor(action, heard.text);
+        line = reactionFor(act, heard.text);
       }
     : undefined;
 

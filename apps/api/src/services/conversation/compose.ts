@@ -77,6 +77,19 @@ export interface PackAsk {
 /** one thing that is true, which the reply must be built out of */
 export type Facts =
   | { kind: 'GREETING' }
+  /**
+   * RECEPTION ASKING WHAT THE CALL IS ABOUT.
+   *
+   * The fact the shop had no way to state. Given "Hello" the old agent
+   * could greet, or search, or list -- and with a stock question in the
+   * transcript it listed, because reciting inventory was the nearest
+   * thing to helpful it could reach. A person answering a shop's phone
+   * asks what you want before they start selling.
+   *
+   * Carries nothing, and carries nothing on purpose: reception has no
+   * catalogue, so this reply cannot contain a product.
+   */
+  | { kind: 'ASK_PURPOSE' }
   | { kind: 'ORDER_DRAFT'; substituted: Swap[]; packAsks: PackAsk[]; dropped: string[] }
   /**
    * Something went IN THE BAG and the conversation carries on.
@@ -200,6 +213,17 @@ export type Facts =
  */
 function brief(f: Facts): string {
   switch (f.kind) {
+    case 'ASK_PURPOSE':
+      return [
+        'They have said hello, or something you cannot place yet. You are',
+        'answering the shop phone and you do not know why they called.',
+        'Greet them by name and ask what they need -- an order, a question',
+        'about one already placed, or something else.',
+        'Do NOT name a product, a price or a category. You do not have the',
+        'catalogue in front of you and you must not sound like you do.',
+        'One short sentence.',
+      ].join(' ');
+
     case 'GREETING':
       return [
         'They said hello or made small talk. Greet them back warmly and',

@@ -150,6 +150,13 @@ export const prices = (items: Array<{ name: string; price: string }>): string =>
 export const listing = (names: string[]): string =>
   `${names.join(', ')} hai. Kaun sa chahiye?`;
 
+/**
+ * Reception's fallback, and note what is not in it: no product, no
+ * category, no price. This desk has no catalogue and its words should
+ * not imply otherwise.
+ */
+export const ASK_PURPOSE = 'Namaste ji, boliye. Kya kaam tha aaj?';
+
 export const recommend = (name: string, price: string, why: string): string =>
   why ? `${name} ${price} le lijiye, ${why}. Kitna bhejun?`
       : `${name} ${price} le lijiye. Kitna bhejun?`;

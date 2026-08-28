@@ -1,5 +1,6 @@
 import { prisma, Prisma } from '@nukkad/db';
 import type { ChannelId, ResolvedLine } from '@nukkad/shared';
+import { DEFAULT_DESK, type Desk } from '../policy/desks.js';
 
 /**
  * CONVERSATION STATE, which is the thing that turns a parser into an agent.
@@ -134,6 +135,15 @@ export interface Turn {
 }
 
 export interface Convo {
+  /**
+   * WHO IS ANSWERING. See policy/desks.ts.
+   *
+   * Part of the conversation rather than of the turn, because a caller
+   * handed to the billing counter is still at the billing counter when
+   * they say their next sentence. It survives the same round trip as the
+   * basket and for the same reason.
+   */
+  desk: Desk;
   id: string;
   /**
    * Mutable on purpose. Handlers set this as they go and the whole
@@ -188,6 +198,8 @@ const RECENT_MAX = 8;
 
 /** what actually lands in contextJson */
 interface Stored {
+  /** optional: rows written before the switchboard existed have none */
+  desk?: Desk;
   pending: Pending | null;
   recent: Turn[];
   basket: PendingLine[];
@@ -205,6 +217,8 @@ export function hydrate(row: { id: string; contextJson: unknown }): Convo {
   const stored = (row.contextJson as Stored | null) ?? null;
   return {
     id: row.id,
+    // an old row predates desks, and reception is where a call starts
+    desk: stored?.desk ?? DEFAULT_DESK,
     pending: stored?.pending ?? null,
     recent: stored?.recent ?? [],
     basket: stored?.basket ?? [],
@@ -280,6 +294,7 @@ export async function save(
   owner?: { householdId: string; kiranaId: string },
 ): Promise<void> {
   const stored: Stored = {
+    desk: convo.desk,
     pending: convo.pending,
     recent: convo.recent.slice(-RECENT_MAX),
     basket: convo.basket,
@@ -354,6 +369,12 @@ export async function clearBasket(householdId: string): Promise<void> {
     rows.map((row) => {
       const stored = (row.contextJson as Stored | null) ?? null;
       const kept: Stored = {
+        /**
+         * Back to the counter. The bill is paid, so the billing desk has
+         * nothing left to do -- and leaving the caller there means their
+         * next sentence reaches a desk that cannot sell them anything.
+         */
+        desk: 'SELLER',
         pending: null,
         recent: stored?.recent ?? [],
         basket: [],

@@ -5,7 +5,7 @@ import { openMouth } from '../services/voice/mouth.js';
 import { warm } from '../services/conversation/routing.js';
 import { resetConvo } from '../services/conversation/state.js';
 import { randomUUID } from 'node:crypto';
-import type { PolicyAction } from '../services/policy/decide.js';
+import type { SpeechAct } from '../services/policy/intent.js';
 
 /**
  * THE VOICE SESSION, held open for as long as the page is.
@@ -175,7 +175,7 @@ export async function streamRoutes(app: FastifyInstance) {
        * 1711ms for a batch render of all of it.
        */
       let spokenYet = false;
-      let action: PolicyAction | null = null;
+      let act: SpeechAct | null = null;
       let filled = false;
 
       /**
@@ -202,7 +202,7 @@ export async function streamRoutes(app: FastifyInstance) {
          */
         if (filledLastTurn) return;
 
-        const line = fillerFor(action, lastFiller);
+        const line = fillerFor(act, lastFiller);
         if (!line) return;
 
         filled = true;
@@ -224,8 +224,8 @@ export async function streamRoutes(app: FastifyInstance) {
             receivedAt: new Date(),
           },
           {
-            onDecision: (chosen: PolicyAction) => {
-              action = chosen;
+            onDecision: (chosen: SpeechAct) => {
+              act = chosen;
             },
             onSentence: (sentence) => {
               clearTimeout(timer);
@@ -327,19 +327,15 @@ export async function streamRoutes(app: FastifyInstance) {
  * never reaches them. An action with no entry gets silence, and silence
  * is a valid thing to say.
  */
-const REACTIONS: Partial<Record<PolicyAction, string[]>> = {
-  ADD_EXPLICIT_PRODUCT: ['Haan, rakhta hoon...', 'Ji, likh raha hoon...'],
-  ADD_FROM_STATE: ['Haan ji, karta hoon...', 'Theek hai, rakh raha hoon...'],
-  REMOVE_EXPLICIT_PRODUCT: ['Haan, hata raha hoon...', 'Ji, nikaal deta hoon...'],
-  REMOVE_FROM_STATE: ['Ji, hata deta hoon...', 'Theek hai, nikaal raha hoon...'],
-  ANSWER_PRICE: ['Ek second, dekhta hoon...', 'Haan, rate dekh raha hoon...'],
-  ANSWER_STOCK: ['Ruko, dekhta hoon...', 'Haan, check karta hoon...'],
-  SEARCH_PRODUCT: ['Ek minute, dekhta hoon...', 'Dekhta hoon kya kya hai...'],
-  RECOMMEND: ['Hmm, sochne dijiye...', 'Achha, ek second...'],
-  REPEAT_LAST_ORDER: ['Haan, pichhla order nikaal raha hoon...'],
-  ACCOUNT_SUMMARY: ['Ek second, hisaab dekh raha hoon...'],
+const REACTIONS: Partial<Record<SpeechAct, string[]>> = {
+  BUY: ['Haan, rakhta hoon...', 'Ji, likh raha hoon...'],
+  MODIFY: ['Haan, hata raha hoon...', 'Ji, nikaal deta hoon...'],
+  ASK: ['Ek second, dekhta hoon...', 'Haan, dekh raha hoon...'],
+  ASK_RECOMMENDATION: ['Hmm, sochne dijiye...', 'Achha, ek second...'],
+  REPEAT_ORDER: ['Haan, pichhla order nikaal raha hoon...'],
+  ACCOUNT: ['Ek second, hisaab dekh raha hoon...'],
   CHECKOUT: ['Haan ji, total nikaal raha hoon...', 'Theek hai, jod raha hoon...'],
-  PAYMENT_STATUS_QUERY: ['Ek second, check karta hoon...'],
+  PAYMENT_CLAIM: ['Ek second, check karta hoon...'],
 };
 
 /** said when the policy has not answered yet, which is most of the time */
@@ -353,8 +349,8 @@ const NEUTRAL = ['Haan ji...', 'Ji...', 'Achha...', 'Ek second...'];
  * only candidate is the one just used, this returns null and the shop
  * simply waits -- a repeated filler is worse than the pause it covers.
  */
-function fillerFor(action: PolicyAction | null, avoid: string | null): string | null {
-  const options = (action && REACTIONS[action]) ?? NEUTRAL;
+function fillerFor(act: SpeechAct | null, avoid: string | null): string | null {
+  const options = (act && REACTIONS[act]) ?? NEUTRAL;
   const fresh = options.filter((o) => o !== avoid);
   if (!fresh.length) return null;
   return fresh[Math.floor(Date.now() / 1000) % fresh.length]!;

@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { span } from '../telemetry/span.js';
 import { routeOf } from './routing.js';
+import { DEFAULT_DESK, refuseTransfer } from '../policy/desks.js';
+import { understand } from '../policy/understand.js';
+import type { IntentFrame, SpeechAct } from '../policy/intent.js';
+import { TRANSITIONS, isTransfer, readAct } from '../policy/transitions.js';
 import { prisma } from '@nukkad/db';
 import { rupeeLabel } from '@nukkad/shared';
 import type { InboundMessage, OutboundMessage, ResolvedLine, Sku } from '@nukkad/shared';
@@ -18,7 +22,6 @@ import { findSubstitutes } from '../substitution/substitute.js';
 import { hasVision, env } from '../../config/env.js';
 import { readAnswer, saysCheckout } from './reply.js';
 import { resolve, pickFrom } from '../resolver/resolve.js';
-import { decide, type PolicyAction } from '../policy/decide.js';
 import { createRazorpayLink, recordInvoice, type RazorpayLink } from '../payments/razorpay.js';
 import { checkAndSettle } from '../payments/settle.js';
 import { maskActions } from '../resolver/action.js';
@@ -99,7 +102,7 @@ interface Ctx {
    * would just be a message sent twice.
    */
   onSentence?: (sentence: string) => void | Promise<void>;
-  onDecision?: (action: PolicyAction) => void;
+  onDecision?: (act: SpeechAct) => void;
 }
 
 /** say something true, in the customer's own words */
@@ -147,6 +150,8 @@ function label(f: Facts): { intent: string; goal: string } {
   switch (f.kind) {
     case 'GREETING':
       return { intent: 'GREETINGS', goal: 'META' };
+    case 'ASK_PURPOSE':
+      return { intent: 'ELICIT_PREFERENCES', goal: 'META' };
     case 'ORDER_DRAFT':
       // an explained substitution IS an explanation, and saying so is what
       // makes the 22.7% figure checkable against our own traffic
@@ -215,7 +220,7 @@ export async function handle(
      * question and "karta hoon" for an add are different noises, and a
      * single generic filler becomes a tic by the third turn.
      */
-    onDecision?: (action: PolicyAction) => void;
+    onDecision?: (act: SpeechAct) => void;
   } = {},
 ): Promise<OutboundMessage[]> {
   const started = Date.now();
@@ -294,7 +299,7 @@ export async function handle(
     // No conversation row for an unknown number, so this one reply is
     // composed without any history to draw on.
     return speak(
-      { convo: { id: '', pending: null, recent: [], basket: [], lastNamed: [] }, buyerName: 'ji', shopName: kirana.name, said: msg.text ?? '' },
+      { convo: { id: '', desk: DEFAULT_DESK, pending: null, recent: [], basket: [], lastNamed: [] }, buyerName: 'ji', shopName: kirana.name, said: msg.text ?? '' },
       { kind: 'NOT_REGISTERED' },
       copy.NOT_REGISTERED,
     );
@@ -525,35 +530,45 @@ async function act(
    * picture has already said what it says.
    */
   fromPhoto?: Extraction['items'],
+  /**
+   * How many desks this turn has already been handed through. One hop is
+   * a transfer; a second in the same turn is two desks disagreeing about
+   * whose call it is, and the caller should not be able to feel that.
+   */
+  depth = 0,
+  /**
+   * The reading of this message, when a desk has already made one.
+   *
+   * A transfer does not change what the customer said, so it must not
+   * change what the customer said. Re-reading meant two calls to the
+   * same model on the same sentence, which cost a round trip and could
+   * DISAGREE -- "wahi wala order dobara bhej do" read as REPEAT_ORDER at
+   * reception and as ASK at the counter, so the caller was handed over
+   * and then shown a category list.
+   */
+  carried?: IntentFrame,
 ): Promise<OutboundMessage[]> {
   /**
-   * A NO WITH A BASKET OPEN MEANS SOMETHING, whatever the label says.
+   * THE NO-CHECK THAT USED TO LIVE HERE IS GONE, and its removal is a
+   * layering fix rather than a behaviour change.
    *
-   * Rejection used to live only inside the checkout answer, because that
-   * was the only moment an order existed to reject. With a basket the
-   * customer can take something out at any point, and they do:
+   * It ran readAnswer() on the raw message BEFORE anything had read the
+   * message, and cancelled the basket on a bare "nahi". That was correct
+   * when the only reader was a product extractor with no view of intent.
+   * It is wrong now: deciding that a sentence is a refusal IS
+   * understanding, understanding happens in understand(), and a second
+   * opinion upstream of it can only disagree.
    *
-   *   sugar nahi chahiye  -> "Sugar hai. Kitna bhejun?"  (a stock answer)
-   *   nahi rehne do       -> the whole category list, basket untouched
+   * It did disagree. "nahi teen kilo chini karo" is a correction -- the
+   * customer is changing two kilos to three -- and this branch read the
+   * "nahi", emptied the basket, and the turn ended in "samajh nahi aaya"
+   * with the sugar gone. The comment above it claimed long sentences
+   * could not reach it. They could.
    *
-   * Checked before the extractor is even consulted, because this is
-   * precisely the case where its label is least reliable and least
-   * needed. Long sentences do not reach here -- readAnswer returns
-   * UNKNOWN past three words -- so "nahi teen kilo chini karo" stays a
-   * correction rather than becoming a refusal.
+   * REJECT and MODIFY are speech acts now, and DROP_PENDING and REMOVE
+   * are outcomes. The behaviour has somewhere to live that can see what
+   * was actually said.
    */
-  if (!fromPhoto && ctx.convo.basket.length) {
-    const said = readAnswer(ctx.said, 0);
-    if (said.kind === 'NO') {
-      ctx.annotation = { intent: 'NEGATIVE_FEEDBACK', goal: 'ORDERING' };
-      const dropped = dropFromBasket(ctx);
-      if (dropped) return dropped;
-
-      ctx.convo.basket = [];
-      ctx.convo.pending = null;
-      return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
-    }
-  }
 
   /**
    * A PHOTOGRAPHED LIST SKIPS THE POLICY MODEL ENTIRELY.
@@ -567,41 +582,95 @@ async function act(
   }
 
   /**
-   * THE POLICY MODEL DECIDES WHAT TO DO. See services/policy/decide.ts.
+   * UNDERSTAND, THEN LOOK UP, THEN DO. Three steps, in that order, and
+   * the order is the whole point.
    *
-   * It is shown the message, the recent turns and the STRUCTURED state,
-   * and it returns one action from a closed set. The catalogue is not
-   * consulted until an action says an explicit lookup is needed -- which
-   * is the only way to guarantee that a message containing no product
-   * cannot have one found in it.
+   * What was here before mixed all three: the model returned an ACTION,
+   * so it was deciding policy, and policy differs per desk -- which meant
+   * every gap between what it returned and what a desk could do became
+   * another condition. Three of them accumulated in about an hour:
+   *
+   *   if (desk === 'RECEPTION' && depth === 0 && action !== 'GREET' ...)
+   *   if (desk !== 'SELLER') return NOT_UNDERSTOOD
+   *   if (confidence < FLOOR && action !== 'NOT_UNDERSTOOD')
+   *
+   * None of them was wrong. Together they were an incomplete answer to a
+   * question nobody had written down: for every desk, and every kind of
+   * thing a customer can say, what happens? That question now has a table
+   * with every cell filled -- see policy/transitions.ts -- and the
+   * compiler refuses a missing one.
    */
-  const state = {
-    lastNamed: ctx.convo.lastNamed[0]?.name ?? null,
+  const frame = carried ?? await understand({
+    message: ctx.said,
+    recent: ctx.convo.recent,
     pendingQuestion: describePending(ctx),
+    lastNamed: ctx.convo.lastNamed[0]?.name ?? null,
     basket: ctx.convo.basket.map((l) => l.name),
-  };
-  const decision = await decide({ message: ctx.said, recent: ctx.convo.recent, state });
-  ctx.onDecision?.(decision.action);
-
-  ctx.annotation = { intent: decision.action, goal: goalOf(decision.action) };
+  });
 
   /**
-   * TOO UNSURE TO ACT. The model was told a low number means the shop
-   * asks instead of guessing, and this is where that is honoured -- a
-   * wrong action on a real order costs more than one extra question.
+   * The floor is applied to the ACT, not to the outcome, and that
+   * ordering is a bug fix. Applied afterwards it meant an unsure
+   * reception was answered with "samajh nahi aaya" before it ever
+   * reached the transfer branch, so "daal kaunsi kaunsi hai" dead-ended
+   * on the one desk with no catalogue. Being unsure is just a reason to
+   * read the message as UNKNOWN, and every desk has an answer for that.
    */
-  if (decision.confidence < POLICY_FLOOR && decision.action !== 'NOT_UNDERSTOOD') {
-    return speak(ctx, { kind: 'NOT_UNDERSTOOD' }, copy.NOT_UNDERSTOOD);
+  const act_ = readAct(frame.act, frame.confidence);
+  const outcome = TRANSITIONS[ctx.convo.desk][act_];
+
+  ctx.onDecision?.(act_);
+  ctx.annotation = { intent: act_, goal: goalOf(act_) };
+
+  /**
+   * A TRANSFER IS AN ASSIGNMENT, and then the new desk answers the same
+   * message. Nothing is serialised, no second context is built, no other
+   * service is called -- the basket, the transcript and the resolver are
+   * the ones they were a line ago. Only the vocabulary changed.
+   *
+   * The state decides, not the sentence: refuseTransfer() checks what is
+   * actually true, so nobody reaches the billing counter with an empty
+   * bag however they phrase it. When it refuses, the desk they are
+   * already at answers -- being told the bag is empty is more use than
+   * being told the transfer failed.
+   *
+   * `depth` bounds it. One hop is a transfer; a second in the same turn
+   * is two desks disagreeing about whose call it is, and the caller
+   * should not be able to feel that.
+   */
+  if (isTransfer(outcome)) {
+    const refusal = refuseTransfer(ctx.convo.desk, outcome.transfer, {
+      basketSize: ctx.convo.basket.length,
+    });
+
+    if (refusal) {
+      return outcome.transfer === 'CHECKOUT'
+        ? speak(ctx, { kind: 'BASKET_EMPTY' }, copy.BASKET_EMPTY)
+        : speak(ctx, { kind: 'NOT_UNDERSTOOD' }, copy.NOT_UNDERSTOOD);
+    }
+
+    if (depth > 0) return speak(ctx, { kind: 'NOT_UNDERSTOOD' }, copy.NOT_UNDERSTOOD);
+
+    ctx.convo.desk = outcome.transfer;
+    return act(ctx, fromPhoto, depth + 1, frame);
   }
 
-  switch (decision.action) {
+  /**
+   * EXECUTION. Every branch is deterministic and none of them decides
+   * anything -- the table above already did. What is left here is the
+   * doing.
+   */
+  switch (outcome) {
     case 'GREET':
       return speak(ctx, { kind: 'GREETING' }, copy.GREETING);
 
-    case 'REPEAT_LAST_ORDER':
+    case 'ASK_PURPOSE':
+      return speak(ctx, { kind: 'ASK_PURPOSE' }, copy.ASK_PURPOSE);
+
+    case 'REPEAT_ORDER':
       return repeatLast(ctx);
 
-    case 'ACCOUNT_SUMMARY':
+    case 'ACCOUNT':
       return account(ctx);
 
     /**
@@ -619,7 +688,7 @@ async function act(
      * Refusing costs a re-ask, which the customer answers in a second.
      * Not refusing costs them a payment link they never asked for.
      */
-    case 'CHECKOUT':
+    case 'START_CHECKOUT':
       if (!saysCheckout(ctx.said)) return greetOrReask(ctx);
       return checkout(ctx);
 
@@ -631,7 +700,7 @@ async function act(
      * code that can change payment status, because no action in the
      * policy enum maps to it.
      */
-    case 'PAYMENT_STATUS_QUERY': {
+    case 'VERIFY_PAYMENT': {
       const pending = await prisma.order.findFirst({
         where: { householdId: ctx.householdId, paymentStatus: 'PENDING' },
         orderBy: { createdAt: 'desc' },
@@ -653,12 +722,12 @@ async function act(
       );
     }
 
-    case 'CANCEL_ORDER':
+    case 'CANCEL':
       ctx.convo.basket = [];
       ctx.convo.pending = null;
       return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
 
-    case 'CONFIRM_PENDING_ACTION':
+    case 'USE_PENDING':
       /**
        * The same guard, and this branch is the more dangerous of the two
        * -- it checks out on a bare "yes" with a basket, so a model that
@@ -670,7 +739,7 @@ async function act(
       if (ctx.convo.basket.length) return checkout(ctx);
       return speak(ctx, { kind: 'GREETING' }, copy.GREETING);
 
-    case 'REJECT_PENDING_ACTION': {
+    case 'DROP_PENDING': {
       const dropped = dropFromBasket(ctx);
       if (dropped) return dropped;
       ctx.convo.basket = [];
@@ -678,11 +747,33 @@ async function act(
       return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
     }
 
-    case 'REMOVE_FROM_STATE':
-    case 'REMOVE_EXPLICIT_PRODUCT': {
-      const dropped = dropFromBasket(ctx, decision.products[0]?.query ?? ctx.convo.lastNamed[0]?.name);
+    case 'CHANGE_BASKET': {
+      /**
+       * NAMING AN AMOUNT MEANS CHANGE IT, NOT REMOVE IT.
+       *
+       * "nahi teen kilo chini karo" is a correction with a quantity in
+       * it -- three kilos, not none -- and addExplicit already merges a
+       * restated line rather than stacking on it. Reading the "nahi" and
+       * dropping the sugar was the old behaviour and it lost the order.
+       *
+       * No amount and no product means take out whatever we were just
+       * talking about, which is what "yeh nahi chahiye" means.
+       */
+      const restated = frame.entities.find((e) => e.unit || e.quantity > 1);
+      if (restated) {
+        return addExplicit(ctx, frame.entities.map((e) => ({
+          text: e.query, quantity: e.quantity, unit: e.unit,
+        })));
+      }
+
+      const dropped = dropFromBasket(ctx, frame.entities[0]?.query ?? ctx.convo.lastNamed[0]?.name);
       if (dropped) return dropped;
-      return speak(ctx, { kind: 'NOT_UNDERSTOOD' }, copy.NOT_UNDERSTOOD);
+
+      // nothing matched anything in the bag, so throwing it all away is
+      // the only reading left -- "nahi rehne do" with nothing named
+      ctx.convo.basket = [];
+      ctx.convo.pending = null;
+      return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
     }
 
     /**
@@ -690,35 +781,50 @@ async function act(
      * already about, and its id is in the state -- so "haan daal do" can
      * never turn into Toor Dal, whatever the catalogue would have said.
      */
-    case 'ADD_FROM_STATE': {
-      const named = ctx.convo.lastNamed[0];
-      const catalogue = await getCatalog(ctx.kiranaId);
-      const sku = named && catalogue.find((x) => x.id === named.skuId);
-      if (!sku) return speak(ctx, { kind: 'NOT_UNDERSTOOD' }, copy.NOT_UNDERSTOOD);
+    case 'ADD_REFERENT':
+      return addFromContext(ctx, frame);
 
-      return addExplicit(ctx, [{
-        text: sku.name,
-        quantity: decision.products[0]?.quantity ?? 1,
-        unit: decision.products[0]?.unit ?? null,
-      }], sku);
-    }
+    /**
+     * NAMED vs POINTED, and the split is load-bearing. ADD_NAMED sends
+     * the customer's own words to the resolver; ADD_REFERENT above never
+     * touches the catalogue at all, because the product is already known
+     * by id. That is what stops "haan daal do" becoming Toor Dal.
+     */
+    case 'ADD_NAMED':
+      /**
+       * A BUY with nothing named is a BUY by pointing -- "haan daal do",
+       * "ek aur". The resolver must not see it, so it goes to the same
+       * path ADD_REFERENT uses, which resolves by id and never searches.
+       */
+      if (frame.referent || !frame.entities.length) return addFromContext(ctx, frame);
 
-    case 'ADD_EXPLICIT_PRODUCT':
-      return addExplicit(ctx, decision.products.map((p) => ({
-        text: p.query, quantity: p.quantity, unit: p.unit,
+      return addExplicit(ctx, frame.entities.map((e) => ({
+        text: e.query, quantity: e.quantity, unit: e.unit,
       })));
 
-    case 'ANSWER_PRICE':
-    case 'ANSWER_STOCK':
-    case 'SEARCH_PRODUCT':
-      return question(ctx, decision.products.map((p) => p.query));
+    case 'ANSWER_ABOUT_PRODUCT':
+      return question(ctx, frame.entities.map((e) => e.query));
 
     case 'RECOMMEND':
-      return recommend(ctx, decision.products.map((p) => p.query));
+      return recommend(ctx, frame.entities.map((e) => e.query));
 
     case 'CLARIFY':
-    case 'NOT_UNDERSTOOD':
     default:
+      /**
+       * THE FALL-THROUGH IS DESK-SCOPED, and it was the second thing
+       * testing the switchboard caught.
+       *
+       * Restricting the ACTION space is only half of it. CLARIFY landed
+       * here at every desk, and here is question(), which searches the
+       * catalogue. So enquiries -- a desk whose whole claim is that it
+       * never touches the shelf -- answered "mera pichhla order kya tha"
+       * by reciting the stock list, which is exactly the failure
+       * reception was built to make impossible. An action space without
+       * a matching FACT space is a half-built boundary.
+       */
+      if (ctx.convo.desk !== 'SELLER') {
+        return speak(ctx, { kind: 'NOT_UNDERSTOOD' }, copy.NOT_UNDERSTOOD);
+      }
       return question(ctx, []);
   }
 }
@@ -753,12 +859,32 @@ const POLICY_FLOOR = 0.45;
  */
 const SENTENCE_FLOOR = 0.7;
 
-/** the paper's goal axis, derived from the action rather than classified */
-function goalOf(action: PolicyAction): string {
-  if (action === 'GREET') return 'META';
-  if (action === 'ANSWER_PRICE' || action === 'ANSWER_STOCK' || action === 'ACCOUNT_SUMMARY') return 'QA';
-  if (action === 'SEARCH_PRODUCT') return 'SEARCH';
-  if (action === 'CLARIFY' || action === 'NOT_UNDERSTOOD') return 'META';
+/**
+ * NO SEARCH HAPPENS HERE. The product is the one the conversation was
+ * already about and its id is in the state, so "haan daal do" can never
+ * turn into Toor Dal whatever the catalogue would have said. This is the
+ * original bug in this codebase and this function is its answer.
+ */
+async function addFromContext(ctx: Ctx, frame: IntentFrame): Promise<OutboundMessage[]> {
+  const named = ctx.convo.lastNamed[0];
+  const catalogue = await getCatalog(ctx.kiranaId);
+  const sku = named && catalogue.find((x) => x.id === named.skuId);
+  if (!sku) return speak(ctx, { kind: 'NOT_UNDERSTOOD' }, copy.NOT_UNDERSTOOD);
+
+  return addExplicit(ctx, [{
+    text: sku.name,
+    quantity: frame.entities[0]?.quantity ?? 1,
+    unit: frame.entities[0]?.unit ?? null,
+  }], sku);
+}
+
+/** the paper's goal axis, derived from the act rather than classified */
+function goalOf(act: SpeechAct): string {
+  if (act === 'GREET') return 'META';
+  if (act === 'ASK') return 'SEARCH';
+  if (act === 'ACCOUNT') return 'QA';
+  if (act === 'ASK_RECOMMENDATION') return 'RECOMMENDATION';
+  if (act === 'UNKNOWN') return 'META';
   return 'ORDERING';
 }
 
