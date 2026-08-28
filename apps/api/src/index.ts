@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import formbody from '@fastify/formbody';
 import multipart from '@fastify/multipart';
 import cookie from '@fastify/cookie';
+import websocket from '@fastify/websocket';
 import { env } from './config/env.js';
 import { loggerConfig } from './lib/logger.js';
 import { healthRoutes } from './routes/health.js';
@@ -14,6 +15,7 @@ import { authRoutes } from './routes/auth.js';
 import { shopRoutes } from './routes/shop.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { voiceRoutes } from './routes/voice.js';
+import { streamRoutes } from './routes/stream.js';
 
 const app = Fastify({ logger: loggerConfig, bodyLimit: 20 * 1024 * 1024 });
 
@@ -24,6 +26,12 @@ await app.register(cookie);
 await app.register(formbody);
 // bill upload. 20MB matches Groq's per-image ceiling.
 await app.register(multipart, { limits: { fileSize: 20 * 1024 * 1024 } });
+/**
+ * The voice session. 1MB is generous for ~100ms of 16kHz mono PCM
+ * (3200 bytes) and leaves room for a browser that buffers a few frames
+ * before a send.
+ */
+await app.register(websocket, { options: { maxPayload: 1024 * 1024 } });
 
 await app.register(healthRoutes);
 await app.register(whatsappRoutes);
@@ -34,6 +42,7 @@ await app.register(authRoutes);
 await app.register(shopRoutes);
 await app.register(analyticsRoutes);
 await app.register(voiceRoutes);
+await app.register(streamRoutes);
 
 try {
   await app.listen({ port: env.PORT, host: '0.0.0.0' });

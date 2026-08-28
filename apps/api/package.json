@@ -19,7 +19,8 @@
     "backfill:subnames": "dotenv -e ../../.env -- tsx src/scripts/backfill-subnames.ts",
     "backfill:transcripts": "dotenv -e ../../.env -- tsx src/scripts/backfill-transcripts.ts",
     "fold": "tsx src/scripts/fold.ts",
-    "latency": "dotenv -e ../../.env -- tsx src/scripts/latency.ts"
+    "latency": "dotenv -e ../../.env -- tsx src/scripts/latency.ts",
+    "ear": "dotenv -e ../../.env -- tsx src/scripts/ear.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",
@@ -27,6 +28,7 @@
     "@fastify/formbody": "^8.0.0",
     "@fastify/multipart": "^9.4.0",
     "@fastify/static": "^9.0.0",
+    "@fastify/websocket": "^11.3.0",
     "@langchain/langgraph": "^1.4.12",
     "@nukkad/db": "*",
     "@nukkad/shared": "*",
@@ -40,11 +42,13 @@
     "sharp": "^0.35.4",
     "twilio": "^5.4.0",
     "undici": "^7.24.4",
+    "ws": "^8.21.3",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.0",
     "@types/qrcode": "^1.5.6",
+    "@types/ws": "^8.18.1",
     "dotenv-cli": "^11.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
