@@ -128,6 +128,13 @@ export type Facts =
     }
   /** checkout heard a delivery address and stored it */
   | { kind: 'ADDRESS_SAVED'; address: string }
+  /**
+   * THEY ARE BACK, AND THE BAG THEY LEFT IS STILL HERE. Asked before
+   * anything else, because an hour-old basket presented as fresh
+   * confused a real customer and a stale one riding into a new order
+   * silently is worse.
+   */
+  | { kind: 'STALE_BASKET'; items: string[] }
   /** they asked about a payment and Razorpay has not seen it */
   | { kind: 'PAYMENT_NOT_SEEN' }
   /** they asked about a payment and there is no order waiting on one */
@@ -332,6 +339,16 @@ function brief(f: Facts): string {
 
     case 'ORDER_CONFIRMED':
       return `The order is confirmed and going out. Reference ${f.ref}. Reassure them briefly.`;
+
+    case 'STALE_BASKET':
+      return [
+        'They are back after a while, and the basket they were building',
+        `last time is still here: ${f.items.join(', ')}. Welcome them back`,
+        'briefly, say their earlier saman is still saved (the list is',
+        'attached below), and ask what they would like: carry on adding,',
+        'change or remove something, or confirm it as the order now.',
+        'Do NOT add anything yourself and do NOT assume they still want it.',
+      ].join(' ');
 
     case 'ADDRESS_SAVED':
       return [
@@ -777,6 +794,7 @@ function allowedDigits(f: Facts): Set<string> {
   if (f.kind === 'ORDER_CONFIRMED') source.push(f.ref);
   if (f.kind === 'AWAITING_PAYMENT') source.push(f.ref, f.deliverTo ?? '');
   if (f.kind === 'ADDRESS_SAVED') source.push(f.address);
+  if (f.kind === 'STALE_BASKET') source.push(...f.items);
 
   const out = new Set<string>();
   for (const s of source) for (const d of s.match(/\d+/g) ?? []) out.add(d);

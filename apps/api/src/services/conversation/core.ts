@@ -216,6 +216,8 @@ function label(f: Facts): { intent: string; goal: string } {
       return { intent: 'ANSWER', goal: 'QA' };
     case 'ADDRESS_SAVED':
       return { intent: 'ANSWER', goal: 'ORDERING' };
+    case 'STALE_BASKET':
+      return { intent: 'INTERACTION_STRUCTURING', goal: 'ORDERING' };
     case 'QUESTION':
       return { intent: 'ANSWER', goal: 'SEARCH' };
     case 'NOT_STOCKED':
@@ -323,7 +325,7 @@ export async function handle(
     // No conversation row for an unknown number, so this one reply is
     // composed without any history to draw on.
     return speak(
-      { convo: { id: '', desk: DEFAULT_DESK, pending: null, recent: [], basket: [], lastNamed: [] }, buyerName: 'ji', shopName: kirana.name, said: msg.text ?? '' },
+      { convo: { id: '', desk: DEFAULT_DESK, lastAt: null, pending: null, recent: [], basket: [], lastNamed: [] }, buyerName: 'ji', shopName: kirana.name, said: msg.text ?? '' },
       { kind: 'NOT_REGISTERED' },
       copy.NOT_REGISTERED,
     );
@@ -480,6 +482,39 @@ async function turn(ctx: Ctx, msg: InboundMessage): Promise<OutboundMessage[]> {
     // than leave the order sitting in the shop's pending count forever.
     expire(ctx);
     pending = ctx.convo.pending = null;
+  }
+
+  /**
+   * AN UNFINISHED BASKET FROM ANOTHER SITTING GETS SETTLED FIRST.
+   *
+   * Without this, a customer who said "hii" an hour after abandoning a
+   * besan was told "Ashirwad Besan aapke basket mein rakh diya gaya hai"
+   * -- an hour-old decision presented as though it had just happened,
+   * and a stale basket riding silently into whatever they order next.
+   *
+   * So a resume after a real gap, with items still in the bag, opens by
+   * putting the bag on the table: here is what you were building --
+   * continue it, change something, or shall I confirm it? The pending
+   * CHECKOUT it sets is the whole trick: "haan confirm kar do" flows
+   * into the existing checkout answer, "nahi rehne do" into the
+   * existing cancel, a named product falls through into ordinary
+   * adding. No new machinery, just the old question asked at the right
+   * moment.
+   */
+  if (
+    !pending
+    && ctx.convo.basket.length
+    && ctx.convo.lastAt
+    && Date.now() - new Date(ctx.convo.lastAt).getTime() > RESUME_GAP_MS
+  ) {
+    ctx.convo.pending = { kind: 'CHECKOUT', askedAt: new Date().toISOString() };
+    ctx.annotation = { intent: 'INTERACTION_STRUCTURING', goal: 'ORDERING' };
+    return speak(
+      ctx,
+      { kind: 'STALE_BASKET', items: ctx.convo.basket.map((l) => l.name) },
+      copy.staleBasket(),
+      copy.orderCard(ctx.convo.basket),
+    );
   }
 
   if (!ctx.said.trim()) {
@@ -1021,6 +1056,14 @@ function greetOrReask(ctx: Ctx): Promise<OutboundMessage[]> {
   }
   return speak(ctx, { kind: 'GREETING' }, copy.GREETING);
 }
+
+/**
+ * How long a conversation must sit quiet before a leftover basket is a
+ * question rather than context. An hour: inside it, "yeh bhi" still
+ * means what it meant; past it, the customer has plausibly moved on and
+ * deserves to be asked instead of assumed.
+ */
+const RESUME_GAP_MS = 60 * 60 * 1000;
 
 /** below this the shop asks rather than acts */
 const POLICY_FLOOR = 0.45;

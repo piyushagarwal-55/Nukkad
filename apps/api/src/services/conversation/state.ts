@@ -145,6 +145,8 @@ export interface Turn {
 }
 
 export interface Convo {
+  /** ISO time of the previous turn's save, or null on a fresh conversation */
+  lastAt: string | null;
   /**
    * WHO IS ANSWERING. See policy/desks.ts.
    *
@@ -208,6 +210,8 @@ const RECENT_MAX = 8;
 
 /** what actually lands in contextJson */
 interface Stored {
+  /** when the shop last replied, so a resumed chat knows it was away */
+  at?: string;
   /** optional: rows written before the switchboard existed have none */
   desk?: Desk;
   pending: Pending | null;
@@ -227,6 +231,7 @@ export function hydrate(row: { id: string; contextJson: unknown }): Convo {
   const stored = (row.contextJson as Stored | null) ?? null;
   return {
     id: row.id,
+    lastAt: stored?.at ?? null,
     // an old row predates desks, and reception is where a call starts
     desk: stored?.desk ?? DEFAULT_DESK,
     pending: stored?.pending ?? null,
@@ -305,6 +310,7 @@ export async function save(
   owner?: { householdId: string; kiranaId: string },
 ): Promise<void> {
   const stored: Stored = {
+    at: new Date().toISOString(),
     desk: convo.desk,
     pending: convo.pending,
     recent: convo.recent.slice(-RECENT_MAX),
