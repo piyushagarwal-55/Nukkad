@@ -2329,9 +2329,18 @@ async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | n
    */
   if (pending.kind === 'ADDRESS') {
     const t = ctx.said.trim();
+    /**
+     * A QUESTION IS NOT AN ADDRESS, and the first version of this guard
+     * learned that from the suite: "koi offer chal raha hai kya" passed
+     * the length check, matched no payment word, and was saved as the
+     * delivery address. Nobody's house is named after an offer enquiry.
+     * Question words and question marks fall through to the acts, where
+     * they belong.
+     */
     const notAnAddress =
       t.length < 8
       || /payment|paisa|\bpaid\b|\bpay\b|upi|link/i.test(t)
+      || /[?]|\b(kya|kaun|kaunsa|kab|kahan|kitna|kitne|offer|discount|order|status|batao)\b/i.test(t)
       || saysCheckout(t);
     if (notAnAddress) return null;
 
