@@ -71,6 +71,16 @@ export type Outcome =
   | 'REPEAT_ORDER'
   /** how much have I spent */
   | 'ACCOUNT'
+  /** where their order is, answered from the order row */
+  | 'ORDER_STATUS'
+  /**
+   * WHAT OFFERS APPLY, answered from the Offer table and never invented.
+   * The "marketing agent" is this lookup: a customer asking about
+   * discounts hears "ek second, dekh raha hoon" and then rows from a
+   * database, because a discount a model made up is a rupee loss a
+   * shopkeeper actually pays.
+   */
+  | 'QUOTE_OFFER'
   /** freeze the basket, write the order, issue a payment link */
   | 'START_CHECKOUT'
   /** ask Razorpay. Never the customer. */
@@ -119,6 +129,8 @@ const RECEPTION: Record<SpeechAct, Outcome> = {
   PAYMENT_CLAIM: { transfer: 'CHECKOUT' },
   REPEAT_ORDER: { transfer: 'SELLER' },
   ACCOUNT: { transfer: 'ENQUIRY' },
+  ORDER_STATUS: { transfer: 'ENQUIRY' },
+  ASK_OFFER: { transfer: 'SELLER' },
   CANCEL: { transfer: 'SELLER' },
   UNKNOWN: { transfer: 'SELLER' },
 };
@@ -139,6 +151,8 @@ const SELLER: Record<SpeechAct, Outcome> = {
   PAYMENT_CLAIM: { transfer: 'CHECKOUT' },
   REPEAT_ORDER: 'REPEAT_ORDER',
   ACCOUNT: { transfer: 'ENQUIRY' },
+  ORDER_STATUS: { transfer: 'ENQUIRY' },
+  ASK_OFFER: 'QUOTE_OFFER',
   CANCEL: 'CANCEL',
   UNKNOWN: 'CLARIFY',
 };
@@ -168,6 +182,8 @@ const CHECKOUT: Record<SpeechAct, Outcome> = {
   PAYMENT_CLAIM: 'VERIFY_PAYMENT',
   REPEAT_ORDER: { transfer: 'SELLER' },
   ACCOUNT: { transfer: 'ENQUIRY' },
+  ORDER_STATUS: { transfer: 'ENQUIRY' },
+  ASK_OFFER: 'QUOTE_OFFER',
   CANCEL: 'CANCEL',
   UNKNOWN: 'CLARIFY',
 };
@@ -188,6 +204,8 @@ const ENQUIRY: Record<SpeechAct, Outcome> = {
   PAYMENT_CLAIM: { transfer: 'CHECKOUT' },
   REPEAT_ORDER: { transfer: 'SELLER' },
   ACCOUNT: 'ACCOUNT',
+  ORDER_STATUS: 'ORDER_STATUS',
+  ASK_OFFER: 'QUOTE_OFFER',
   CANCEL: { transfer: 'SELLER' },
   UNKNOWN: 'CLARIFY',
 };

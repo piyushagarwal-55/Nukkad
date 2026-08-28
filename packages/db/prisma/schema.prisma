@@ -757,3 +757,46 @@ model SkuAlias {
   @@unique([skuId, alias])
   @@index([skuId, approved])
 }
+
+/**
+ * WHAT THE SHOP WAS ASKED FOR AND COULD NOT SELL.
+ *
+ * Written by the seller desk the moment the resolver fails, read by
+ * nobody during the call -- the "inventory intelligence agent" is not a
+ * chatbot, it is the aggregation query over this table. A kirana has
+ * never had this number: eleven people asked for namkeen this week and
+ * you sold none of it.
+ */
+model UnmetDemand {
+  id          String   @id @default(cuid())
+  kiranaId    String
+  householdId String?
+  /** the customer's own words, verbatim */
+  query       String
+  /** how close the resolver got before giving up */
+  confidence  Float    @default(0)
+  /** what was offered instead, if anything */
+  offered     String?
+  createdAt   DateTime @default(now())
+
+  @@index([kiranaId, createdAt])
+}
+
+/**
+ * A promotion the checkout desk may quote. Deterministic on purpose:
+ * "koi offer chal raha hai?" is answered from these rows and never from
+ * a model's imagination -- an invented discount is a real rupee loss.
+ */
+model Offer {
+  id             String    @id @default(cuid())
+  kiranaId       String
+  title          String
+  /** basket must reach this before the offer applies */
+  minBasketPaise Int       @default(0)
+  flatOffPaise   Int       @default(0)
+  active         Boolean   @default(true)
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([kiranaId, active])
+}

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { normalise } from '../services/resolver/normalise.js';
 import { prisma } from '@nukkad/db';
 import { requireSession } from './auth.js';
 
@@ -175,6 +176,50 @@ export async function analyticsRoutes(app: FastifyInstance) {
   });
 
   /** Every order on one IST calendar day, for the calendar drill-down. */
+  /**
+   * WHAT CUSTOMERS ASKED FOR THAT THE SHOP COULD NOT SELL, grouped and
+   * counted. This is the inventory desk: not an agent, a query -- the
+   * feedback loop from real conversations to what goes on the shelf.
+   */
+  app.get('/analytics/demand', async (req, reply) => {
+    const kiranaId = (req.query as { kiranaId?: string }).kiranaId;
+    if (!kiranaId) return reply.code(400).send({ error: 'kiranaId required' });
+
+    const since = new Date(Date.now() - 7 * 86_400_000);
+    const rows = await prisma.unmetDemand.findMany({
+      where: { kiranaId, createdAt: { gte: since } },
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+    });
+
+    /**
+     * Grouped by normalised phrase so "namkeen" and "kuch namkeen" count
+     * as one ask. The resolver's own normaliser, so the grouping agrees
+     * with the matcher about what is the same word.
+     */
+    const groups = new Map<string, { asks: number; households: Set<string>; latest: Date; sample: string }>();
+    for (const r of rows) {
+      const key = normalise(r.query);
+      const g = groups.get(key) ?? { asks: 0, households: new Set<string>(), latest: r.createdAt, sample: r.query };
+      g.asks++;
+      if (r.householdId) g.households.add(r.householdId);
+      if (r.createdAt > g.latest) g.latest = r.createdAt;
+      groups.set(key, g);
+    }
+
+    return {
+      sinceDays: 7,
+      demand: [...groups.entries()]
+        .map(([, g]) => ({
+          asked: g.sample,
+          times: g.asks,
+          households: g.households.size,
+          lastAsked: g.latest,
+        }))
+        .sort((a, b) => b.times - a.times),
+    };
+  });
+
   app.get('/analytics/day', async (req, reply) => {
     const { kiranaId } = requireSession(req);
 

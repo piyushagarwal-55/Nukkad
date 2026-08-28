@@ -156,6 +156,26 @@ export type Facts =
   | { kind: 'STILL_WAITING' }
   | { kind: 'NOT_UNDERSTOOD' }
   | { kind: 'ACCOUNT'; orders: number; spent: string }
+  /**
+   * WHERE THEIR ORDER IS, from the order row and nowhere else. The
+   * enquiry desk's whole job: the customer must never repeat what the
+   * database already knows.
+   */
+  | { kind: 'ORDER_STATUS'; ref: string; stage: string; total: string }
+  /** they asked about an order and there is none */
+  | { kind: 'NO_ORDERS' }
+  /**
+   * THE OFFER QUESTION, answered from the Offer table. `applies` is
+   * computed against the basket by code; null means no offer is running
+   * and the honest answer is no. The model must never invent a discount
+   * -- an imagined 10% is a real rupee loss.
+   */
+  | {
+      kind: 'OFFER_ANSWER';
+      applies: { title: string; off: string } | null;
+      /** an offer that exists but needs a bigger basket, worth mentioning */
+      almost: { title: string; needs: string } | null;
+    }
   | { kind: 'NO_PREVIOUS_ORDER' }
   /**
    * A LISTING question, which MG-ShopDial files under QA next to factoid
@@ -385,6 +405,28 @@ function brief(f: Facts): string {
         'the item and quantity. Do not guess at products.',
       ].join(' ');
 
+    case 'ORDER_STATUS':
+      return [
+        `Their order (reference ${f.ref}, total ${f.total}) is: ${f.stage}.`,
+        'Tell them plainly and reassure them the shop will update them as',
+        'it moves. Do NOT invent a delivery time or date.',
+      ].join(' ');
+
+    case 'NO_ORDERS':
+      return 'They asked about an order but they have none yet. Say so kindly and offer to take one.';
+
+    case 'OFFER_ANSWER':
+      return [
+        f.applies
+          ? `There IS an offer running and it applies to their basket: "${f.applies.title}", worth ${f.applies.off} off. Tell them, exactly as written.`
+          : 'NO offer applies to their basket right now. Say so honestly.',
+        f.almost
+          ? `Worth mentioning lightly: "${f.almost.title}" would apply if they added ${f.almost.needs} more. Never pushily.`
+          : '',
+        'Do NOT invent any other discount, percentage or scheme. If it is',
+        'not stated above, it does not exist.',
+      ].filter(Boolean).join(' ');
+
     case 'ACCOUNT':
       return `They asked about their account: ${f.orders} orders so far, ${f.spent} in total. Tell them.`;
 
@@ -587,6 +629,16 @@ export interface ComposeInput {
   card?: string;
   /** used verbatim if the model call fails */
   fallback: string;
+  /**
+   * SET WHEN THE CALLER WAS JUST PUT THROUGH FROM ANOTHER DESK.
+   *
+   * The receiving desk acknowledges the handover in its first breath --
+   * "haan ji, mujhe bataya gaya aap kuch lena chahte the" -- so the
+   * customer never repeats themselves and never wonders whether the new
+   * voice knows why they are here. Also disables the fast path for this
+   * one reply: a canned line cannot acknowledge a handover it cannot see.
+   */
+  handoffNote?: string;
 }
 
 /**
@@ -658,6 +710,11 @@ function allowedDigits(f: Facts): Set<string> {
   if (f.kind === 'CATALOGUE') source.push(...f.categories);
   if (f.kind === 'STOCK_ANSWER') source.push(f.name, f.price);
   if (f.kind === 'ACCOUNT') source.push(String(f.orders), f.spent);
+  if (f.kind === 'ORDER_STATUS') source.push(f.ref, f.total);
+  if (f.kind === 'OFFER_ANSWER') {
+    if (f.applies) source.push(f.applies.title, f.applies.off);
+    if (f.almost) source.push(f.almost.title, f.almost.needs);
+  }
   if (f.kind === 'ORDER_CONFIRMED') source.push(f.ref);
   if (f.kind === 'AWAITING_PAYMENT') source.push(f.ref);
 
@@ -683,6 +740,7 @@ function buildPrompt(input: ComposeInput): string {
     `CUSTOMER: ${input.buyerName}`,
     history ? `\nRECENT MESSAGES:\n${history}` : '',
     `\nTHEY JUST SENT: ${input.said || '(nothing)'}`,
+    input.handoffNote ? `\nJUST TRANSFERRED: ${input.handoffNote}` : '',
     `\nFACT: ${brief(input.facts)}`,
     /**
      * The plan goes AFTER the fact and last of the two, because the
@@ -708,7 +766,7 @@ export async function compose(input: ComposeInput): Promise<string> {
    * variant has been used recently, which is how it stays out of the
    * if/else bot this codebase deleted.
    */
-  const fast = realize(
+  const fast = input.handoffNote ? null : realize(
     input.facts,
     direct(input.facts, input.recent, input.buyerName),
     input.said,
@@ -781,7 +839,7 @@ export async function composeStream(
    * because nothing can be spoken until the first sentence exists and
    * this one exists already.
    */
-  const fast = realize(
+  const fast = input.handoffNote ? null : realize(
     input.facts,
     direct(input.facts, input.recent, input.buyerName),
     input.said,

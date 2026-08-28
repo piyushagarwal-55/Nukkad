@@ -131,6 +131,8 @@ const REACTIONS: Partial<Record<SpeechAct, string[]>> = {
   ACCOUNT: ['Ek second, hisaab dekh raha hoon...'],
   CHECKOUT: ['Haan ji, total nikaal raha hoon...'],
   PAYMENT_CLAIM: ['Ek second, check karta hoon...'],
+  ORDER_STATUS: ['Ek second, aapka order dekh raha hoon...'],
+  ASK_OFFER: ['Ek second, offers confirm karta hoon...'],
 
   /**
    * Deliberately absent: GREET, CONFIRM, REJECT, CANCEL and UNKNOWN. The

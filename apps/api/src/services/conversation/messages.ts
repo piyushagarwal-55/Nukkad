@@ -161,6 +161,14 @@ export const recommend = (name: string, price: string, why: string): string =>
   why ? `${name} ${price} le lijiye, ${why}. Kitna bhejun?`
       : `${name} ${price} le lijiye. Kitna bhejun?`;
 
+export const orderStatus = (ref: string, stage: string): string =>
+  `Aapka order (#${ref}) ${stage}. Jaise hi aage badhega, bata denge.`;
+
+export const NO_ORDERS = 'Abhi to koi order nahi hai aapka. Kuch mangwana ho to bataiye.';
+
+export const offerAnswer = (applied: string | null): string =>
+  applied ? `Haan ji, ${applied} chal raha hai.` : 'Abhi koi offer nahi chal raha ji.';
+
 export const catalogue = (categories: string[]): string =>
   `Humare paas ${categories.join(', ')} sab hai. Bataiye kya chahiye?`;
 

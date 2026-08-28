@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { span } from '../telemetry/span.js';
 import { routeOf } from './routing.js';
-import { DEFAULT_DESK, refuseTransfer } from '../policy/desks.js';
+import { DESKS, DEFAULT_DESK, refuseTransfer, type Desk } from '../policy/desks.js';
 import { understand } from '../policy/understand.js';
 import type { IntentFrame, SpeechAct } from '../policy/intent.js';
 import { TRANSITIONS, isTransfer, readAct } from '../policy/transitions.js';
@@ -96,6 +96,12 @@ interface Ctx {
   /** filled in once the extractor has read this turn. See handle(). */
   annotation?: { intent: string; goal: string };
   /**
+   * Set for exactly one reply, when this turn crossed a desk. The
+   * composer acknowledges the handover so the customer never repeats
+   * themselves to the new voice. See the transfer branch in act().
+   */
+  handoff?: string;
+  /**
    * Voice only. When present the composer STREAMS and every finished
    * sentence arrives here as the model writes it, so speech can start
    * before the reply does. Absent on WhatsApp, where a partial message
@@ -107,7 +113,7 @@ interface Ctx {
 
 /** say something true, in the customer's own words */
 async function speak(
-  ctx: Pick<Ctx, 'convo' | 'buyerName' | 'shopName' | 'said' | 'onSentence'>,
+  ctx: Pick<Ctx, 'convo' | 'buyerName' | 'shopName' | 'said' | 'onSentence' | 'handoff'>,
   facts: Facts,
   fallback: string,
   card?: string,
@@ -120,6 +126,7 @@ async function speak(
     recent: ctx.convo.recent,
     card,
     fallback,
+    handoffNote: ctx.handoff,
   };
 
   /**
@@ -192,6 +199,9 @@ function label(f: Facts): { intent: string; goal: string } {
     case 'CATALOGUE':
       return { intent: 'ANSWER', goal: 'QA' };
     case 'ACCOUNT':
+    case 'ORDER_STATUS':
+    case 'NO_ORDERS':
+    case 'OFFER_ANSWER':
       return { intent: 'ANSWER', goal: 'QA' };
     case 'QUESTION':
       return { intent: 'ANSWER', goal: 'SEARCH' };
@@ -651,6 +661,23 @@ async function act(
 
     if (depth > 0) return speak(ctx, { kind: 'NOT_UNDERSTOOD' }, copy.NOT_UNDERSTOOD);
 
+    /**
+     * THE HANDOVER IS HEARD, NOT JUST PERFORMED.
+     *
+     * On voice, the leaving desk says a short varied line -- "ek second,
+     * counter se connect karta hoon" -- so the change of voice makes
+     * sense; on WhatsApp onSentence is absent and no theatre is added,
+     * because a chat thread has no voices to explain. Then the receiving
+     * desk is told WHY the caller arrived, and its first reply
+     * acknowledges it: nobody repeats themselves to the new desk,
+     * because the desk already knows.
+     */
+    if (ctx.onSentence) {
+      const line = transferLine(outcome.transfer, ctx.said);
+      if (line) void ctx.onSentence(line);
+    }
+    ctx.handoff = handoffNoteFor(ctx.convo.desk, frame);
+
     ctx.convo.desk = outcome.transfer;
     return act(ctx, fromPhoto, depth + 1, frame);
   }
@@ -672,6 +699,72 @@ async function act(
 
     case 'ACCOUNT':
       return account(ctx);
+
+    /**
+     * WHERE THEIR ORDER IS, from the order row. The enquiry desk's whole
+     * job: the customer never repeats what the database already knows.
+     */
+    case 'ORDER_STATUS': {
+      const last = await prisma.order.findFirst({
+        where: { householdId: ctx.householdId, status: { not: 'CANCELLED' } },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!last) return speak(ctx, { kind: 'NO_ORDERS' }, copy.NO_ORDERS);
+
+      const stage =
+        last.status === 'PAYMENT_PENDING' ? 'payment ka intezaar kar raha hai'
+        : last.status === 'CONFIRMED' ? 'pack ho raha hai'
+        : last.status === 'FULFILLED' ? 'deliver ho chuka hai'
+        : 'process mein hai';
+
+      return speak(
+        ctx,
+        {
+          kind: 'ORDER_STATUS',
+          ref: last.id.slice(-6),
+          stage,
+          total: rupeeLabel(last.totalPaise),
+        },
+        copy.orderStatus(last.id.slice(-6), stage),
+      );
+    }
+
+    /**
+     * THE MARKETING DESK IS A LOOKUP, NOT A COLLEAGUE. "Ek second,
+     * offers dekh raha hoon" is the reaction line; this is the check it
+     * claims to be doing, against rows a shopkeeper actually wrote. A
+     * model never invents a discount here because a model is never
+     * asked -- `applies` and `almost` are arithmetic.
+     */
+    case 'QUOTE_OFFER': {
+      const total = ctx.convo.basket.reduce((sum, l) => sum + l.unitPricePaise * l.quantity, 0);
+      const offers = await prisma.offer.findMany({
+        where: {
+          kiranaId: ctx.kiranaId,
+          active: true,
+          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+        },
+        orderBy: { minBasketPaise: 'asc' },
+      });
+
+      const applies = offers.filter((o) => total >= o.minBasketPaise).pop() ?? null;
+      const nearly = offers.find((o) => total < o.minBasketPaise) ?? null;
+
+      return speak(
+        ctx,
+        {
+          kind: 'OFFER_ANSWER',
+          applies: applies
+            ? { title: applies.title, off: rupeeLabel(applies.flatOffPaise) }
+            : null,
+          almost: nearly
+            ? { title: nearly.title, needs: rupeeLabel(nearly.minBasketPaise - total) }
+            : null,
+        },
+        copy.offerAnswer(applies ? applies.title : null),
+        ctx.convo.basket.length ? copy.orderCard(ctx.convo.basket) : undefined,
+      );
+    }
 
     /**
      * THE ONE ACTION THAT MOVES MONEY, AND IT NOW NEEDS EVIDENCE IN THE
@@ -795,7 +888,18 @@ async function act(
        * A BUY with nothing named is a BUY by pointing -- "haan daal do",
        * "ek aur". The resolver must not see it, so it goes to the same
        * path ADD_REFERENT uses, which resolves by id and never searches.
+       *
+       * UNLESS NOTHING WAS EVER NAMED. "Mereko kuch samaan khareedna
+       * tha" is a purchase INTENT with no product in it -- the sentence
+       * that opens half of all calls -- and answering it "samajh nahi
+       * aaya" scolds a customer for doing nothing wrong. It is a
+       * greeting-shaped moment: welcome them and ask what they need,
+       * with the handoff note (set a line ago) letting the counter show
+       * it already knows why they were put through.
        */
+      if (!frame.referent && !frame.entities.length && !ctx.convo.lastNamed.length) {
+        return speak(ctx, { kind: 'GREETING' }, copy.GREETING);
+      }
       if (frame.referent || !frame.entities.length) return addFromContext(ctx, frame);
 
       return addExplicit(ctx, frame.entities.map((e) => ({
@@ -878,11 +982,90 @@ async function addFromContext(ctx: Ctx, frame: IntentFrame): Promise<OutboundMes
   }], sku);
 }
 
+/**
+ * THE UNMET-DEMAND LEDGER: what the shop was asked for and could not
+ * sell, written down at the moment the request dies.
+ *
+ * The "inventory intelligence agent" is not a chatbot and never speaks
+ * to a customer -- it is the aggregation over this table, read by the
+ * shopkeeper: eleven people asked for namkeen this week and you sold
+ * none of it. A kirana has never had that number, and every apology the
+ * shop makes without writing this row is a lost sale nobody learns from.
+ *
+ * Fire and forget, deliberately. The customer is mid-sentence; a ledger
+ * write must never add a round trip to their turn, and a lost row is a
+ * statistic while a slow reply is an experience.
+ */
+function noteUnmet(ctx: Ctx, query: string, confidence: number, offered: string | null): void {
+  if (!query.trim()) return;
+  void prisma.unmetDemand
+    .create({
+      data: {
+        kiranaId: ctx.kiranaId,
+        householdId: ctx.householdId,
+        query: query.trim(),
+        confidence,
+        offered,
+      },
+    })
+    .catch((err) => console.error('unmet-demand write failed', err));
+}
+
+/**
+ * What the leaving desk says out loud while the call moves. Short,
+ * varied by hashing the message so a demo is reproducible, and honest --
+ * it never claims a person is coming, only that the right counter is.
+ */
+const TRANSFER_LINES: Record<Desk, string[]> = {
+  RECEPTION: ['Ek second ji...'],
+  SELLER: [
+    'Bilkul, counter se connect karta hoon...',
+    'Haan ji, ek second, saaman waale counter pe lagata hoon...',
+  ],
+  CHECKOUT: [
+    'Theek hai, billing counter pe lagata hoon...',
+    'Bilkul, payment counter se jod raha hoon...',
+  ],
+  ENQUIRY: [
+    'Ek second, order ki jaankari dekhta hoon...',
+    'Haan ji, enquiry par lagata hoon...',
+  ],
+};
+
+function transferLine(to: Desk, said: string): string | null {
+  const options = TRANSFER_LINES[to];
+  if (!options?.length) return null;
+  let h = 0;
+  for (const ch of said) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return options[h % options.length]!;
+}
+
+/**
+ * What the receiving desk is told about why the caller is here, so its
+ * first sentence can prove it knows. Facts only -- what was said and
+ * which act it was -- never instructions from the message itself.
+ */
+function handoffNoteFor(from: Desk, frame: IntentFrame): string {
+  const wanted = frame.entities.map((e) => e.query).join(', ');
+  const why =
+    frame.act === 'BUY' ? (wanted ? 'they want to buy: ' + wanted : 'they want to buy something')
+    : frame.act === 'CHECKOUT' ? 'they are done shopping and want to pay'
+    : frame.act === 'PAYMENT_CLAIM' ? 'they are asking about a payment'
+    : frame.act === 'ORDER_STATUS' ? 'they are asking where their order is'
+    : frame.act === 'ASK_OFFER' ? 'they asked about offers'
+    : frame.act === 'ACCOUNT' ? 'they asked about their account'
+    : frame.act === 'ASK' ? 'they have a question about products'
+    : 'the previous desk could not place the request';
+
+  return 'This caller was just put through from ' + DESKS[from].title + ' because ' + why + '.'
+    + ' Open by showing you already know -- do not make them repeat it.';
+}
+
 /** the paper's goal axis, derived from the act rather than classified */
 function goalOf(act: SpeechAct): string {
   if (act === 'GREET') return 'META';
   if (act === 'ASK') return 'SEARCH';
-  if (act === 'ACCOUNT') return 'QA';
+  if (act === 'ACCOUNT' || act === 'ORDER_STATUS' || act === 'ASK_OFFER') return 'QA';
   if (act === 'ASK_RECOMMENDATION') return 'RECOMMENDATION';
   if (act === 'UNKNOWN') return 'META';
   return 'ORDERING';
@@ -1039,6 +1222,7 @@ async function addExplicit(
     if (!opened && resolved.length === 1) {
       const known = (await retrieveKb(lost.sourceText, 1))[0];
       if (known) {
+        noteUnmet(ctx, lost.sourceText, lost.confidence ?? 0, null);
         return speak(
           ctx,
           { kind: 'NOT_STOCKED', product: known.canonical },
@@ -1048,6 +1232,15 @@ async function addExplicit(
     }
 
     if (opened) {
+      /**
+       * The category opened, but the THING THEY NAMED is still not on
+       * the shelf -- offering the category's neighbours does not make
+       * "namkeen" stocked. That is the definition of unmet demand, and
+       * it is the commonest way a request dies, so the ledger writes
+       * here too, with what was offered instead recorded beside it.
+       */
+      noteUnmet(ctx, lost.sourceText, 0, opened.options[0]?.name ?? null);
+
       lost.alternates = opened.options.map((sku) => ({
         sku, score: 0, fuzzy: 0, specificity: 0, method: 'UNRESOLVED' as const,
       }));
@@ -1282,6 +1475,16 @@ async function question(ctx: Ctx, spans: string[]): Promise<OutboundMessage[]> {
           .filter((a) => a.specificity >= top.specificity)
           .map((a) => a.sku)]
       : [];
+
+    /**
+     * A NAMED PRODUCT THAT MATCHED NOTHING IS UNMET DEMAND. Only when
+     * the frame actually carried an entity -- a whole-sentence fallback
+     * matching nothing is usually a question about hours, not a product
+     * the shop lacks, and writing those would drown the signal.
+     */
+    if (!found.length && spans.length) {
+      noteUnmet(ctx, asked, ref?.line?.chosen?.fuzzy ?? 0, null);
+    }
 
     if (found.length === 1) {
       const sku = found[0]!;
@@ -1688,6 +1891,18 @@ async function advance(
     remember(ctx, options.map((o) => ({ id: o.skuId, name: o.name })));
 
     /**
+     * A GUESS OFFERED IS NOT A NEED MET. "Namkeen" resolves to Tata Salt
+     * and Amul Butter at a fuzzy score of a third -- trigram noise, not
+     * an answer -- and the shop is about to ask which one they meant.
+     * Whatever they answer, the thing they NAMED is not on the shelf,
+     * and the ledger records that even while the question is asked.
+     * Confident ambiguity ("kaunsa chawal?") stays out: those candidates
+     * really are what was asked for.
+     */
+    const best = Math.max(0, ...line.alternates.map((a) => a.score), line.confidence);
+    if (best < 0.55) noteUnmet(ctx, line.sourceText, best, names[0] ?? null);
+
+    /**
      * TWO DIFFERENT QUESTIONS, and they should not sound alike.
      *
      * Clarifying is "chawal mein se kaunsa" -- the ranker found three and
@@ -1738,6 +1953,7 @@ async function placeOrder(
    * the bag arrives, which is the worst possible moment.
    */
   const dropped = lines.filter((l) => !l.skuId).map((l) => l.sourceText);
+  for (const q of dropped) noteUnmet(ctx, q, 0, kept[0]?.name ?? null);
 
   if (!kept.length && !ctx.convo.basket.length) {
     ctx.convo.pending = null;

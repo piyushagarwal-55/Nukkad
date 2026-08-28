@@ -61,6 +61,10 @@ export const SPEECH_ACTS = [
   'REPEAT_ORDER',
   /** how much have I spent, how many orders */
   'ACCOUNT',
+  /** where is my order, kab aayega, kya hua uska */
+  'ORDER_STATUS',
+  /** koi offer chal raha hai? koi discount milega? */
+  'ASK_OFFER',
   /** throw the whole thing away */
   'CANCEL',
   /** anything else, including genuinely unclear */
