@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { get, rupees } from '@/lib/api';
+import { IntelSkeleton } from '@/components/Loading';
 
 /**
  * THE SHOPKEEPER'S INSIGHT PANEL, and the reason the middle section
@@ -57,7 +58,7 @@ export default function Insights() {
   }, []);
 
   if (err) return <p className="muted mt-8 text-sm">{err}</p>;
-  if (!data) return <p className="muted mt-8 text-sm">Loading…</p>;
+  if (!data) return <IntelSkeleton />;
 
   const missedAsks = data.demand.reduce((s, d) => s + d.times, 0);
   const maxUnits = Math.max(1, ...data.topProducts.map((p) => p.units));

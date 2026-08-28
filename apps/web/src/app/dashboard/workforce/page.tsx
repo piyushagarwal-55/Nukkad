@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { get } from '@/lib/api';
+import { IntelSkeleton } from '@/components/Loading';
 
 /**
  * THE AI WORKFORCE, MEASURED. Every number is an aggregation over the
@@ -56,7 +57,7 @@ export default function Workforce() {
   }, []);
 
   if (err) return <p className="muted mt-8 text-sm">{err}</p>;
-  if (!data) return <p className="muted mt-8 text-sm">Loading…</p>;
+  if (!data) return <IntelSkeleton />;
 
   return (
     <>

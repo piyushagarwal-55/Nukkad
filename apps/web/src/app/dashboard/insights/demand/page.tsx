@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { get } from '@/lib/api';
+import { IntelSkeleton } from '@/components/Loading';
 
 /**
  * ONE ASKED PHRASE, IN FULL. The overview said "namkeen, 11 baar" --
@@ -41,7 +42,7 @@ function DemandDetail() {
 
   if (!q) return <p className="muted mt-8 text-sm">Koi phrase select nahi hui.</p>;
   if (err) return <p className="muted mt-8 text-sm">{err}</p>;
-  if (!data) return <p className="muted mt-8 text-sm">Loading…</p>;
+  if (!data) return <IntelSkeleton />;
 
   const maxAsks = Math.max(1, ...data.trend.map((t) => t.asks));
 
@@ -154,7 +155,7 @@ function DemandDetail() {
 
 export default function Page() {
   return (
-    <Suspense fallback={<p className="muted mt-8 text-sm">Loading…</p>}>
+    <Suspense fallback={<IntelSkeleton />}>
       <DemandDetail />
     </Suspense>
   );

@@ -168,3 +168,43 @@ export function RowsSkeleton({ rows = 8, title = true }: { rows?: number; title?
     </div>
   );
 }
+
+
+/**
+ * The intelligence pages share one shape -- a heading, a row of stat
+ * tiles, then card sections with table rows -- so they share one
+ * skeleton. A page that greets the shopkeeper with a bare "Loading..."
+ * on a white field looks broken; a page that sketches its own layout
+ * while the data arrives looks fast.
+ */
+export function IntelSkeleton() {
+  const show = useDelayed();
+  if (!show) return null;
+  return (
+    <div aria-busy="true">
+      <Skel className="h-11 w-64" />
+      <Skel className="mt-3 h-4 w-96 max-w-full" />
+
+      <div className="mt-7 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="pane p-5">
+            <Skel className="h-3 w-28" />
+            <Skel className="mt-3 h-7 w-24" />
+            <Skel className="mt-2 h-3 w-20" />
+          </div>
+        ))}
+      </div>
+
+      {[0, 1].map((i) => (
+        <div key={i} className="pane mt-6 p-6">
+          <Skel className="h-3 w-44" />
+          <div className="mt-5 flex flex-col gap-3">
+            {[0, 1, 2, 3].map((r) => (
+              <Skel key={r} className="h-4 w-full" />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}

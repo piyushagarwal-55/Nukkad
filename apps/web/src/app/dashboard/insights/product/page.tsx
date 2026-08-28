@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { get, rupees } from '@/lib/api';
+import { IntelSkeleton } from '@/components/Loading';
 
 /**
  * ONE PRODUCT, IN FULL: what it earned, who actually buys it, the
@@ -41,7 +42,7 @@ function ProductDetail() {
 
   if (!skuId) return <p className="muted mt-8 text-sm">Koi product select nahi hua.</p>;
   if (err) return <p className="muted mt-8 text-sm">{err}</p>;
-  if (!data) return <p className="muted mt-8 text-sm">Loading…</p>;
+  if (!data) return <IntelSkeleton />;
 
   const maxUnits = Math.max(1, ...data.trend.map((t) => t.units));
   const lowStock = data.stock <= 5;
@@ -163,7 +164,7 @@ function ProductDetail() {
 
 export default function Page() {
   return (
-    <Suspense fallback={<p className="muted mt-8 text-sm">Loading…</p>}>
+    <Suspense fallback={<IntelSkeleton />}>
       <ProductDetail />
     </Suspense>
   );

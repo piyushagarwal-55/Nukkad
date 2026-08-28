@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { get, rupees } from '@/lib/api';
+import { IntelSkeleton } from '@/components/Loading';
 
 /**
  * EVERY CUSTOMER AS A ROW THAT OPENS INTO A PERSON. The list is ranked
@@ -33,7 +34,7 @@ export default function Customers() {
   }, []);
 
   if (err) return <p className="muted mt-8 text-sm">{err}</p>;
-  if (!rows) return <p className="muted mt-8 text-sm">Loading…</p>;
+  if (!rows) return <IntelSkeleton />;
 
   return (
     <>

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { get, post } from '@/lib/api';
+import { IntelSkeleton } from '@/components/Loading';
 
 /**
  * INVENTORY INTELLIGENCE, WITH THE LOOP CLOSED. Attention cards from
@@ -59,7 +60,7 @@ export default function Inventory() {
   }, [load]);
 
   if (err) return <p className="muted mt-8 text-sm">{err}</p>;
-  if (!insights) return <p className="muted mt-8 text-sm">Loading…</p>;
+  if (!insights) return <IntelSkeleton />;
 
   const open = new Set(actions.filter((a) => a.status === 'OPEN').map((a) => a.query.toLowerCase()));
 

@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { get, rupees } from '@/lib/api';
+import { IntelSkeleton } from '@/components/Loading';
 
 /**
  * ONE CUSTOMER, IN FULL. Every claim on this page traces to a row:
@@ -49,7 +50,7 @@ function CustomerDetail() {
 
   if (!id) return <p className="muted mt-8 text-sm">Koi customer select nahi hua.</p>;
   if (err) return <p className="muted mt-8 text-sm">{err}</p>;
-  if (!data) return <p className="muted mt-8 text-sm">Loading…</p>;
+  if (!data) return <IntelSkeleton />;
 
   const c = data.customer;
   const due =
@@ -161,7 +162,7 @@ function CustomerDetail() {
 
 export default function Page() {
   return (
-    <Suspense fallback={<p className="muted mt-8 text-sm">Loading…</p>}>
+    <Suspense fallback={<IntelSkeleton />}>
       <CustomerDetail />
     </Suspense>
   );
