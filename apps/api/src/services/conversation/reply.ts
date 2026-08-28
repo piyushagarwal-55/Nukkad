@@ -75,6 +75,22 @@ const DONE = ['bas', 'itna', 'pack', 'checkout', 'order', 'total', 'khatam', 'fi
  * unless the customer's own words say something. Deterministic, on the
  * message alone, with no view of the history that caused the problem.
  */
+/**
+ * DOES THIS MESSAGE ITSELF CALL ANYTHING OFF. The guard on the one
+ * action that throws a basket away, and the third organ of the same
+ * disease: a message with no PRODUCT in it once found a product, a
+ * message with no CONSENT in it once wrote an order, and now a message
+ * with no CANCELLATION in it -- "Hello.", after a transcript that ended
+ * mid-order -- emptied the basket. Given enough history a model will
+ * always find the intent it is primed for. Deterministic, on the
+ * message alone, blind to the history that causes the problem.
+ */
+const CANCELS = ['nahi', 'cancel', 'rehne', 'rahne', 'mat', 'hatao', 'hata', 'band', 'remove', 'delete', 'chhodo', 'chodo', 'rok'];
+
+export function saysCancel(text: string): boolean {
+  return words(text).some((w) => CANCELS.includes(w));
+}
+
 export function saysCheckout(text: string): boolean {
   const ws = words(text);
   return ws.some((w) => YES.includes(w) || DONE.includes(w));

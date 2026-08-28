@@ -20,7 +20,7 @@ import { fuzzyScore } from '../resolver/fuzzy.js';
 import { fitPack, displayNames, withoutPack } from '../resolver/pack.js';
 import { findSubstitutes } from '../substitution/substitute.js';
 import { hasVision, env } from '../../config/env.js';
-import { readAnswer, saysCheckout } from './reply.js';
+import { readAnswer, saysCancel, saysCheckout } from './reply.js';
 import { resolve, pickFrom } from '../resolver/resolve.js';
 import { createRazorpayLink, recordInvoice, type RazorpayLink } from '../payments/razorpay.js';
 import { checkAndSettle } from '../payments/settle.js';
@@ -853,6 +853,14 @@ async function act(
     }
 
     case 'CANCEL':
+      /**
+       * Evidence in the message, or nothing is cancelled. Same pattern
+       * as START_CHECKOUT's saysCheckout guard and for the same reason:
+       * "Hello." after a transcript that ended mid-order was read as
+       * CANCEL, and a greeting emptied a basket. Refusing costs a
+       * re-ask; not refusing costs the customer their shopping.
+       */
+      if (!saysCancel(ctx.said)) return greetOrReask(ctx);
       ctx.convo.basket = [];
       ctx.convo.pending = null;
       return speak(ctx, { kind: 'ORDER_CANCELLED' }, copy.CANCELLED);
