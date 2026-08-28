@@ -158,6 +158,39 @@ export default function Voice() {
   }, []);
 
   /**
+   * WARM THE WHOLE PIPELINE WHILE THEY ARE STILL READING THE PAGE.
+   *
+   * The first turn of a session measured 13052ms to first sound against
+   * 3526ms for the second, and nothing about it was harder -- it was
+   * paying for a cold database connection, three cold caches and a cold
+   * Groq connection. All of that is knowable before anyone speaks.
+   *
+   * Fire and forget: if it fails the first turn is merely as slow as it
+   * used to be, which is not worth an error message on a page whose job
+   * is to look ready.
+   */
+  useEffect(() => {
+    void fetch(`${API}/voice/warm`, { method: 'POST' }).catch(() => {});
+  }, []);
+
+  /**
+   * WARM THE PIPELINE WHILE THEY ARE STILL READING THE PAGE.
+   *
+   * The first turn of a real call measured 13052ms to first sound against
+   * 3526ms for the second, and nothing about it was harder -- it was
+   * paying for a cold database connection, three cold caches and a cold
+   * Groq connection. All of that is knowable before anyone speaks.
+   *
+   * Fire and forget. If it fails the first turn is merely as slow as it
+   * used to be, which is not worth an error message on a page whose job
+   * is to look ready. The server deduplicates, so React mounting this
+   * twice in development costs one warm-up.
+   */
+  useEffect(() => {
+    void fetch(`${API}/voice/warm`, { method: 'POST' }).catch(() => {});
+  }, []);
+
+  /**
    * HOLD SPACE TO TALK.
    *
    * The same gesture the interview agent in practers uses, and for the

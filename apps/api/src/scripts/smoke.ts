@@ -1,5 +1,6 @@
 import 'dotenv/config';
-import { prisma, Prisma } from '@nukkad/db';
+import { prisma } from '@nukkad/db';
+import { resetConvo } from '../services/conversation/state.js';
 import { handle } from '../services/conversation/core.js';
 import { getCatalog, getStockMap } from '../services/catalog/cache.js';
 import { buildPrior } from '../services/resolver/prior.js';
@@ -70,10 +71,7 @@ async function conversation() {
      * behaviour, wrong test: every case after the first would be scored
      * against a basket the previous case built.
      */
-    await prisma.conversation.updateMany({
-      where: { channel: 'test', peerPhone: HOUSEHOLD },
-      data: { state: 'IDLE', contextJson: Prisma.DbNull },
-    });
+    await resetConvo('test', HOUSEHOLD);
 
     const t0 = Date.now();
     const replies = await handle(inbound(text));

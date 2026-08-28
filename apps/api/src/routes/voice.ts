@@ -1,7 +1,10 @@
 import type { FastifyInstance } from 'fastify';
-import { prisma, Prisma } from '@nukkad/db';
+import { resetConvo } from '../services/conversation/state.js';
 import { voiceTurn } from '../services/voice/turn.js';
 import { speak } from '../services/voice/tts.js';
+import { warm } from '../services/conversation/routing.js';
+import { groq } from '../lib/groq.js';
+import { env } from '../config/env.js';
 
 /**
  * The browser end of the voice agent.
@@ -137,13 +140,74 @@ export async function voiceRoutes(app: FastifyInstance) {
     }
   });
 
+  /**
+   * EVERYTHING COLD, WARMED BEFORE ANYONE SPEAKS.
+   *
+   * Measured on the first turn of a real call: ear 4603ms, think 8152ms,
+   * first sound 13052ms -- against 537ms, 2887ms and 3526ms on the
+   * second. Nothing about turn one is harder than turn two. It is paying
+   * for a TCP handshake to ap-northeast-2, a cold catalogue, a cold stock
+   * map, a cold reorder prior and a cold Groq connection, all of which
+   * are knowable the moment the page loads and none of which need a
+   * customer to be waiting.
+   *
+   * Fired from the browser on mount, so the ten seconds are spent while
+   * somebody is reading the page rather than while they are holding down
+   * the space bar wondering if it is broken.
+   *
+   * Not warmed: Sarvam's ASR and TTS. Both are billed per call and
+   * neither takes an empty request, so warming them means spending
+   * credits on every page load. The first `ear` of a session stays slow.
+   */
+  /**
+   * DEDUPLICATED AND SHORT-LIVED, because a warm-up that runs four times
+   * is four cold connections, not one warm one.
+   *
+   * React mounts an effect twice in development, the user opens a second
+   * tab, they reload -- and each of those would otherwise fire a fresh
+   * round trip and a fresh model call. Concurrent callers share the
+   * in-flight promise; callers inside the window get told it is already
+   * done. The window is deliberately shorter than the caches it warms
+   * (60s), so a page left open all afternoon is re-warmed rather than
+   * assumed hot.
+   */
+  let warming: Promise<void> | null = null;
+  let warmUntil = 0;
+  const WARM_FOR_MS = 45_000;
+
+  app.post('/voice/warm', async () => {
+    const at = Date.now();
+
+    if (Date.now() < warmUntil) return { ok: true, ms: 0, state: 'already warm' };
+    if (warming) {
+      await warming;
+      return { ok: true, ms: Date.now() - at, state: 'joined in flight' };
+    }
+
+    warming = Promise.all([
+      warm(HOUSEHOLD, SHOP),
+      // one token, purely to open the connection and wake the model
+      groq.chat.completions
+        .create({
+          model: env.GROQ_LLM_MODEL,
+          max_tokens: 1,
+          messages: [{ role: 'user', content: 'ok' }],
+        })
+        .catch(() => null),
+    ]).then(() => {
+      warmUntil = Date.now() + WARM_FOR_MS;
+    }).finally(() => {
+      warming = null;
+    });
+
+    await warming;
+    return { ok: true, ms: Date.now() - at, state: 'warmed' };
+  });
+
   /** start a fresh conversation, so a test run is not read against a stale basket */
   app.post('/voice/reset', async () => {
     inFlight.get(HOUSEHOLD)?.abort();
-    await prisma.conversation.updateMany({
-      where: { channel: 'sim', peerPhone: HOUSEHOLD },
-      data: { state: 'IDLE', contextJson: Prisma.DbNull },
-    });
+    await resetConvo('sim', HOUSEHOLD);
     return { ok: true };
   });
 }

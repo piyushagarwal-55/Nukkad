@@ -1,9 +1,11 @@
 import 'dotenv/config';
-import { prisma, Prisma } from '@nukkad/db';
+import { prisma } from '@nukkad/db';
+import { resetConvo } from '../services/conversation/state.js';
 import { randomUUID } from 'node:crypto';
 import { handle } from '../services/conversation/core.js';
 import { profile, report, type Span } from '../services/telemetry/span.js';
 import { speak } from '../services/voice/tts.js';
+import { warm } from '../services/conversation/routing.js';
 import type { InboundMessage } from '@nukkad/shared';
 
 /**
@@ -52,10 +54,7 @@ const SCRIPT = [
 ];
 
 async function reset() {
-  await prisma.conversation.updateMany({
-    where: { channel: 'test', peerPhone: HOUSEHOLD },
-    data: { state: 'IDLE', contextJson: Prisma.DbNull },
-  });
+  await resetConvo('test', HOUSEHOLD);
 }
 
 /**
@@ -73,6 +72,21 @@ async function reset() {
  * folded in -- both numbers are real and only one of them is the demo.
  */
 const RUNS = 3;
+
+/**
+ * WARMED FIRST, THE WAY THE PAGE DOES IT.
+ *
+ * The browser fires /voice/warm on mount, so by the time anyone holds
+ * the space bar the connection is open and the catalogue, stock map and
+ * reorder prior are in memory. Measuring without that measures a session
+ * nobody will ever have -- the first turn of a real call was 13052ms to
+ * first sound against 3526ms for the second, and every millisecond of
+ * the difference was cold state that is now paid for in advance.
+ */
+const warmedAt = Date.now();
+await warm(HOUSEHOLD, SHOP);
+console.log(`warmed in ${Date.now() - warmedAt}ms
+`);
 
 const totals: Array<{ say: string; ms: number; firstSound: number; spans: Span[] }> = [];
 const byTurn = new Map<string, { ms: number[]; sound: number[] }>();
@@ -153,7 +167,7 @@ for (const say of SCRIPT) {
 
 const allSound = SCRIPT.flatMap((s) => byTurn.get(s)!.sound);
 const allMs = SCRIPT.flatMap((s) => byTurn.get(s)!.ms);
-console.log(`\n  cold (first turn of run 1)  ${totals[0]!.ms}ms total, ${totals[0]!.firstSound}ms to first sound`);
+console.log(`\n  first turn, warmed        ${totals[0]!.ms}ms total, ${totals[0]!.firstSound}ms to first sound`);
 console.log(`  median across every turn    ${mid(allMs)}ms total`);
 console.log(`  median across every turn    ${mid(allSound)}ms to FIRST SOUND`);
 

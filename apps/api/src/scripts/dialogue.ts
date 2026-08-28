@@ -1,5 +1,6 @@
 import 'dotenv/config';
-import { prisma, Prisma } from '@nukkad/db';
+import { prisma } from '@nukkad/db';
+import { resetConvo } from '../services/conversation/state.js';
 import { handle } from '../services/conversation/core.js';
 import type { InboundMessage } from '@nukkad/shared';
 
@@ -318,10 +319,7 @@ function spokenDigits(said: string): string[] {
 }
 
 async function reset() {
-  await prisma.conversation.updateMany({
-    where: { channel: 'test', peerPhone: HOUSEHOLD },
-    data: { state: 'IDLE', contextJson: Prisma.DbNull },
-  });
+  await resetConvo('test', HOUSEHOLD);
 }
 
 const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');

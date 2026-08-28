@@ -1,3 +1,4 @@
+import { clearBasket } from '../conversation/state.js';
 import { prisma } from '@nukkad/db';
 import { rupeeLabel } from '@nukkad/shared';
 import { razorpay } from './razorpay.js';
@@ -182,17 +183,9 @@ export async function settle(orderId: string, paidPaise: number): Promise<Settle
    * The basket is cleared HERE and not at checkout, so a customer who
    * never pays still has their shopping when they come back.
    */
-  await prisma.conversation.updateMany({
-    where: { householdId: order.householdId },
-    data: { contextJson: emptyBasket() },
-  });
+  await clearBasket(order.householdId);
 
   return { to: order.household.phone, text: bill(order), short };
-}
-
-/** keeps the transcript and the pending question, drops only the basket */
-function emptyBasket() {
-  return { pending: null, recent: [], basket: [], lastNamed: [] } as never;
 }
 
 /**

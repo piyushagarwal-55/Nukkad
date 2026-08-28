@@ -2,7 +2,8 @@ import 'dotenv/config';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { prisma, Prisma } from '@nukkad/db';
+import { prisma } from '@nukkad/db';
+import { resetConvo } from '../services/conversation/state.js';
 import { voiceTurn } from '../services/voice/turn.js';
 
 /**
@@ -45,10 +46,7 @@ async function main() {
    * read. Pass several clips to keep state ACROSS them, which is how
    * you test "yeh" and "bas bhej do".
    */
-  await prisma.conversation.updateMany({
-    where: { channel: 'sim', peerPhone: HOUSEHOLD },
-    data: { state: 'IDLE', contextJson: Prisma.DbNull },
-  });
+  await resetConvo('sim', HOUSEHOLD);
 
   const outDir = resolve(ROOT, 'media', 'voice');
   await mkdir(outDir, { recursive: true });

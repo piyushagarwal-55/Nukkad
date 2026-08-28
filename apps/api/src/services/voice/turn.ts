@@ -144,10 +144,14 @@ const REACTIONS: Partial<Record<PolicyAction, string[]>> = {
    */
 };
 
-function reactionFor(action: PolicyAction, said: string): string | null {
-  const options = REACTIONS[action];
-  if (!options?.length) return null;
+/**
+ * What to say at 700ms when the shop does not yet know what it is being
+ * asked. Only ever "I heard you" -- nothing about looking anything up,
+ * because nothing has been looked up.
+ */
+const NEUTRAL = ['Haan ji...', 'Ji...', 'Achha...'];
 
+function pick(options: string[], said: string): string {
   /**
    * Hashed off what they said rather than random, so a demo is
    * reproducible: the same sentence twice makes the same noise, and a
@@ -157,6 +161,16 @@ function reactionFor(action: PolicyAction, said: string): string | null {
   for (const ch of said) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return options[h % options.length]!;
 }
+
+const neutralFor = (said: string): string => pick(NEUTRAL, said);
+
+function reactionFor(action: PolicyAction, said: string): string | null {
+  const options = REACTIONS[action];
+  if (!options?.length) return null;
+  return pick(options, said);
+}
+
+
 
 export async function voiceTurn(
   audioIn: Buffer,
@@ -239,19 +253,45 @@ export async function voiceTurn(
     : undefined;
 
   /**
-   * The timer starts only once the action is known, so the reaction can
-   * be the right one. That costs nothing: the policy call resolves ~600ms
-   * in and the pipeline still has the resolver and the composer to go.
+   * THE CLOCK STARTS NOW, NOT WHEN THE ACTION IS KNOWN.
+   *
+   * The first version armed the timer inside onDecision, on the
+   * reasoning that a reaction should know what it is reacting to. It
+   * never fired once. The policy call IS the slow part -- 600 to 2000ms
+   * -- and everything after it, the resolver and the fast path in
+   * realize.ts, finishes well inside 700ms. So the real sentence always
+   * arrived first and cancelled the timer it had only just started.
+   * Measured across a six-turn call: think 2041ms, first sound 4859ms,
+   * and not one reaction.
+   *
+   * So the clock runs from the start of the turn and the LINE is what
+   * arrives late. Whatever is in `line` when the timer fires is what gets
+   * said: a neutral acknowledgement if the policy is still thinking, the
+   * intent-aware one if it has answered. Fast policy calls therefore get
+   * "dekhta hoon", slow ones get "haan ji", and both beat silence.
+   *
+   * The neutral opener is honest about what is actually known at 700ms:
+   * that they were heard. It does not claim the shop is fetching
+   * anything, because at that point nobody has decided what to fetch.
    */
+  let line: string | null = neutralFor(heard.text);
+
+  if (relay && heard.text.trim()) {
+    reacting = setTimeout(() => {
+      if (spokenYet || !line) return;
+      spokenYet = true;
+      void relay(line);
+    }, REACT_AFTER_MS);
+  }
+
   const onDecision = relay
     ? (action: PolicyAction) => {
-        const line = reactionFor(action, heard.text);
-        if (!line) return;
-        reacting = setTimeout(() => {
-          if (spokenYet) return;
-          spokenYet = true;
-          void relay(line);
-        }, REACT_AFTER_MS);
+        /**
+         * Upgrades the pending line, or cancels it outright. CLARIFY and
+         * NOT_UNDERSTOOD map to null on purpose: a turn about to admit
+         * it does not know should not sound busy first.
+         */
+        line = reactionFor(action, heard.text);
       }
     : undefined;
 

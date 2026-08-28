@@ -2,7 +2,8 @@ import 'dotenv/config';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
-import { prisma, Prisma } from '@nukkad/db';
+import { prisma } from '@nukkad/db';
+import { resetConvo } from '../services/conversation/state.js';
 import { handle } from '../services/conversation/core.js';
 import { parseList } from '../services/vision/list.js';
 
@@ -54,10 +55,7 @@ async function main() {
   const hh = await prisma.household.findFirstOrThrow({ where: { phone: HOUSEHOLD } });
 
   for (const fx of FIXTURES) {
-    await prisma.conversation.updateMany({
-      where: { channel: 'test', peerPhone: HOUSEHOLD },
-      data: { state: 'IDLE', contextJson: Prisma.DbNull },
-    });
+    await resetConvo('test', HOUSEHOLD);
 
     // anything older belongs to the previous fixture
     const startedAt = new Date();

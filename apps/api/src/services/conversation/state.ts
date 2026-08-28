@@ -1,4 +1,4 @@
-import { prisma } from '@nukkad/db';
+import { prisma, Prisma } from '@nukkad/db';
 import type { ChannelId, ResolvedLine } from '@nukkad/shared';
 
 /**
@@ -293,4 +293,76 @@ export async function save(
       ...(owner ?? {}),
     },
   });
+}
+
+/**
+ * THE TWO WAYS CONVERSATION STATE IS ALLOWED TO GO AWAY, and there are
+ * only two.
+ *
+ * There were seven, each written where it was needed and each clearing a
+ * slightly different subset. The one that mattered had a comment
+ * disagreeing with its own code:
+ *
+ *   // keeps the transcript and the pending question, drops only the basket
+ *   { pending: null, recent: [], basket: [], lastNamed: [] }
+ *
+ * It kept neither. So paying for an order erased the customer's
+ * conversation -- which is what stops the shop repeating itself, and what
+ * "yeh" is resolved against. The turn after a payment, the shop had
+ * forgotten the entire exchange it had just been paid for.
+ *
+ * Both functions below write EVERY field, so neither can drift into
+ * clearing three quarters of something. What they differ on is stated
+ * once, here, rather than inferred from four call sites.
+ */
+
+/**
+ * A NEW CONVERSATION. Everything goes, because the customer asked for a
+ * clean slate and a half-cleared one is worse than either -- a basket
+ * with no transcript, or referents pointing at products nobody in this
+ * conversation has mentioned.
+ */
+export async function resetConvo(channel: ChannelId, peerPhone: string): Promise<void> {
+  await prisma.conversation.updateMany({
+    where: { channel, peerPhone },
+    data: { state: 'IDLE', contextJson: Prisma.DbNull },
+  });
+}
+
+/**
+ * THE ORDER WENT OUT. The shopping is done and the conversation is not.
+ *
+ * Basket and pending question go, because both are about an order that
+ * has now been paid for. The transcript and the referents STAY, and that
+ * is the whole point of separating this from resetConvo: someone who has
+ * just paid may well say "wahi phir se bhej dena", and a shop that has
+ * forgotten the last two minutes cannot answer them.
+ *
+ * Read-modify-write rather than a partial JSON update, because Prisma
+ * cannot express one and this is the settlement path, not the hot path.
+ * Per row rather than updateMany, because a household may hold more than
+ * one conversation -- WhatsApp and the browser are different channels --
+ * and each carries its own transcript.
+ */
+export async function clearBasket(householdId: string): Promise<void> {
+  const rows = await prisma.conversation.findMany({
+    where: { householdId },
+    select: { id: true, contextJson: true },
+  });
+
+  await prisma.$transaction(
+    rows.map((row) => {
+      const stored = (row.contextJson as Stored | null) ?? null;
+      const kept: Stored = {
+        pending: null,
+        recent: stored?.recent ?? [],
+        basket: [],
+        lastNamed: stored?.lastNamed ?? [],
+      };
+      return prisma.conversation.update({
+        where: { id: row.id },
+        data: { state: 'IDLE', contextJson: kept as never },
+      });
+    }),
+  );
 }
