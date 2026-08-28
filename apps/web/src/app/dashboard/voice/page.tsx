@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { API } from '@/lib/api';
 
 /**
@@ -157,6 +157,54 @@ export default function Voice() {
     rec.current?.state === 'recording' && rec.current.stop();
   }, []);
 
+  /**
+   * HOLD SPACE TO TALK.
+   *
+   * The same gesture the interview agent in practers uses, and for the
+   * same reason: a hand on the mouse is a hand not gesturing at the
+   * screen, and while testing you want to talk, read the trace, and talk
+   * again without ever leaving the keyboard.
+   *
+   * Three things this has to get right, all of them learned by getting
+   * them wrong first:
+   *
+   * `repeat` -- holding a key fires keydown over and over, which would
+   * start a new recording on every repeat and leave a pile of orphaned
+   * MediaRecorders.
+   *
+   * `code` rather than `key` -- the space bar's key is a literal " ",
+   * which is easy to mistype and impossible to read.
+   *
+   * The focus check -- space ACTIVATES a focused button in every browser,
+   * so pressing it after clicking "New conversation" would fire that
+   * button again rather than record. Typing in a field must be left
+   * alone for the same reason.
+   */
+  useEffect(() => {
+    const typing = (el: EventTarget | null) => {
+      const t = el as HTMLElement | null;
+      return !!t && (/^(INPUT|TEXTAREA|BUTTON|SELECT)$/.test(t.tagName) || t.isContentEditable);
+    };
+
+    const down = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' || e.repeat || typing(e.target)) return;
+      e.preventDefault(); // otherwise the page scrolls under you
+      if (phase === 'idle') void start();
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' || typing(e.target)) return;
+      e.preventDefault();
+      stop();
+    };
+
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+    };
+  }, [phase, start, stop]);
+
   const reset = useCallback(async () => {
     await fetch(`${API}/voice/reset`, { method: 'POST' });
     setTurns([]);
@@ -194,7 +242,13 @@ export default function Voice() {
         <div className="flex flex-wrap items-center gap-4">
           <button
             onMouseDown={start}
-            onMouseUp={stop}
+            /**
+             * Blurred on release, or the space bar stops working the
+             * moment you use the mouse once: a focused button swallows
+             * space to activate itself, and the guard above would read
+             * that as "typing" and ignore the key.
+             */
+            onMouseUp={(e) => { stop(); e.currentTarget.blur(); }}
             onMouseLeave={stop}
             onTouchStart={(e) => { e.preventDefault(); void start(); }}
             onTouchEnd={(e) => { e.preventDefault(); stop(); }}
@@ -213,7 +267,8 @@ export default function Voice() {
 
           <div className="min-w-[200px] flex-1">
             <p className="text-sm leading-relaxed">
-              Hold and speak in Hinglish, the way a customer would.
+              Hold <kbd className="rounded border border-[var(--ink)] px-1.5 py-0.5 text-xs font-semibold">space</kbd>{' '}
+              (or this button) and speak in Hinglish, the way a customer would.
               <br />
               <span className="muted">
                 &ldquo;do kilo atta bhej dena&rdquo; &middot; &ldquo;moong dal ka price
