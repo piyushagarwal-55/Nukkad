@@ -1,4 +1,5 @@
 import { tokens, normalise } from './normalise.js';
+import { recovered } from './morphology.js';
 
 /** Levenshtein, iterative two-row. Small strings, so this is plenty fast. */
 function edit(a: string, b: string): number {
@@ -84,4 +85,43 @@ export function fuzzyScore(query: string, target: string): number {
   const coverage = matched / q.length;
   const whole = ratio(normalise(query), normalise(target));
   return 0.75 * coverage + 0.25 * whole;
+}
+
+/**
+ * THE SAME SCORE, over morphologically recovered forms.
+ *
+ * Identical arithmetic to fuzzyMatch -- deliberately, because the two
+ * results are compared against the same threshold and a second scoring
+ * scheme would make that comparison meaningless. The only difference is
+ * which spelling of each word goes in.
+ *
+ * Weaker evidence than fuzzyMatch by construction, since it throws away
+ * distinctions that fuzzyMatch keeps. Its caller is what makes that safe:
+ * see the gate in rank.ts, which runs this only when ordinary matching
+ * has already come back with nothing confident, so there is never a
+ * stronger claim for it to overrule.
+ */
+export function recoverMatch(query: string, target: string): { score: number; matched: number } {
+  const q = tokens(recovered(query));
+  const t = tokens(recovered(target));
+  if (!q.length || !t.length) return { score: 0, matched: 0 };
+
+  let sum = 0;
+  let matched = 0;
+  for (const qt of q) {
+    let best = 0;
+    for (const tt of t) {
+      const r = qt === tt ? 1 : ratio(qt, tt);
+      if (r > best) best = r;
+      if (best === 1) break;
+    }
+    if (best >= 0.7) {
+      sum += best;
+      matched++;
+    }
+  }
+
+  const coverage = sum / q.length;
+  const whole = ratio(recovered(query), recovered(target));
+  return { score: 0.75 * coverage + 0.25 * whole, matched };
 }

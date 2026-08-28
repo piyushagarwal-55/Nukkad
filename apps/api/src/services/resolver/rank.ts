@@ -1,5 +1,5 @@
 import type { Sku, Candidate, ResolvedLine, ResolutionMethod } from '@nukkad/shared';
-import { fuzzyMatch } from './fuzzy.js';
+import { fuzzyMatch, recoverMatch } from './fuzzy.js';
 import { normalise } from './normalise.js';
 import type { Prior } from './prior.js';
 
@@ -90,6 +90,17 @@ const TIE_EPSILON = 0.02;
  * above: three sunflower oils are a fraction of a point apart.
  */
 const ALT_BAND = 0.85;
+
+/**
+ * How good a conservative match has to be before recovery is skipped.
+ *
+ * The same 0.7 that fuzzy.ts uses to decide a token was found at all, and
+ * the same number on purpose: below it nothing in this system considers
+ * itself to have matched, so below it there is nothing for the recovery
+ * tier to overrule. Raising it would let morphology outvote real
+ * matches; lowering it would leave "aate" unrescued at 0.017.
+ */
+const RECOVERY_TRIGGER = 0.7;
 
 /**
  * Words that state an amount rather than name a product. Hinglish number
@@ -183,6 +194,18 @@ export function rankLine(
     particularity: number;
     method: ResolutionMethod;
   }
+  /**
+   * ONE PASS, RUN WITH A MATCHER RATHER THAN WITH THE MATCHER.
+   *
+   * Extracted so the recovery tier below can reuse every part of the
+   * scoring -- specificity, the explains term, the alias handling -- and
+   * differ only in how two words are compared. A second copy of this loop
+   * with a different comparison in it would drift from this one within a
+   * week, and then the two tiers would disagree about what a match is.
+   */
+  type Matcher = (query: string, target: string) => { score: number; matched: number };
+
+  const collect = (match: Matcher, tag: ResolutionMethod): Claim[] => {
   const claims: Claim[] = [];
 
   for (const sku of catalog) {
@@ -199,7 +222,7 @@ export function rankLine(
       const isExact = normalise(name) === query;
       const m = isExact
         ? { score: 1, matched: name.split(/\s+/).length }
-        : opts.useFuzzy ? fuzzyMatch(name, spoken) : { score: 0, matched: 0 };
+        : opts.useFuzzy ? match(name, spoken) : { score: 0, matched: 0 };
       if (m.score <= 0) continue;
 
       /**
@@ -221,7 +244,7 @@ export function rankLine(
       if (m.score > fuzzy || (m.score === fuzzy && m.matched > specificity)) {
         fuzzy = m.score;
         specificity = m.matched;
-        method = isExact ? 'EXACT' : 'FUZZY';
+        method = isExact ? 'EXACT' : tag;
       }
     }
 
@@ -240,9 +263,39 @@ export function rankLine(
      * product was named at all; this decides which of two near-equal
      * claims explains more of the sentence.
      */
-    const explains = fuzzyMatch(spoken, names.join(' ')).matched;
+    const explains = match(spoken, names.join(' ')).matched;
 
     if (fuzzy > 0) claims.push({ sku, fuzzy, particularity: specificity + explains, method });
+  }
+    return claims;
+  };
+
+  /**
+   * THE LADDER. Strongest evidence first, and a rung is only descended
+   * when the one above it came back with nothing confident.
+   *
+   *   exact name or alias
+   *     > conservative fuzzy match
+   *       > morphological recovery
+   *         > ask the customer
+   *
+   * The gate is the whole design. Hindi morphology -- gemination, and the
+   * oblique case that turns aata into aate -- needs folds aggressive
+   * enough to move "chini" towards "chana", so putting them in
+   * normalise() would have bought "Aate ka price kya hai" at the cost of
+   * silently mixing up sugar and gram in someone's bag. Running them only
+   * when ordinary matching has failed means they cannot regress a single
+   * query that works today: on those, this code does not execute.
+   *
+   * And the result is only taken if it is CONFIDENT. Recovery that finds
+   * nothing better than the nothing already found changes no answer; the
+   * shop still asks, which was always the right move.
+   */
+  let claims = collect(fuzzyMatch, 'FUZZY');
+
+  if (opts.useFuzzy && !claims.some((c) => c.fuzzy >= RECOVERY_TRIGGER)) {
+    const rescued = collect(recoverMatch, 'RECOVERED');
+    if (rescued.some((c) => c.fuzzy >= RECOVERY_TRIGGER)) claims = rescued;
   }
 
   /**

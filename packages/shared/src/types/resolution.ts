@@ -13,6 +13,7 @@ export type ResolutionMethod =
   | 'LLM'            // model picked from a shortlist
   | 'DISAMBIGUATED'  // buyer tapped one of top-k
   | 'SUBSTITUTED'    // original was out of stock
+  | 'RECOVERED'      // Hindi morphology rescued it after fuzzy found nothing
   | 'UNRESOLVED';
 
 export interface Candidate {
