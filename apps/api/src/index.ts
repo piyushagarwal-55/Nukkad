@@ -17,6 +17,7 @@ import { analyticsRoutes } from './routes/analytics.js';
 import { voiceRoutes } from './routes/voice.js';
 import { streamRoutes } from './routes/stream.js';
 import { intelligenceRoutes } from './routes/intelligence.js';
+import { evolutionRoutes } from './routes/evolution.js';
 
 const app = Fastify({ logger: loggerConfig, bodyLimit: 20 * 1024 * 1024 });
 
@@ -45,6 +46,7 @@ await app.register(analyticsRoutes);
 await app.register(voiceRoutes);
 await app.register(streamRoutes);
 await app.register(intelligenceRoutes);
+await app.register(evolutionRoutes);
 
 try {
   await app.listen({ port: env.PORT, host: '0.0.0.0' });

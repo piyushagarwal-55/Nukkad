@@ -22,7 +22,7 @@
  * payment link. The guard in conversation/reply.ts is what makes that
  * impossible now; this is what makes it not happen in the first place.
  */
-export type ChannelId = 'twilio' | 'sim' | 'cloud' | 'test';
+export type ChannelId = 'twilio' | 'sim' | 'cloud' | 'test' | 'evolution';
 
 export interface InboundMedia {
   /** Already downloaded and stored by the adapter. Never a Twilio URL, those expire in 4h. */

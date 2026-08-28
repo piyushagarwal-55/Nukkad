@@ -78,6 +78,14 @@ const schema = z.object({
   SARVAM_TTS_LANGUAGE: z.string().default('hi-IN'),
 
   // Razorpay
+  // Evolution API (unofficial WhatsApp, dev transport). All optional:
+  // the route answers 503 until configured.
+  EVOLUTION_URL: z.string().optional(),
+  EVOLUTION_APIKEY: z.string().optional(),
+  EVOLUTION_INSTANCE: z.string().default('nukkad'),
+  // which shop the paired number answers for (kirana routing key)
+  EVOLUTION_SHOP_PHONE: z.string().default(''),
+
   RAZORPAY_KEY_ID: z.string().startsWith('rzp_'),
   RAZORPAY_KEY_SECRET: z.string().min(10),
   RAZORPAY_WEBHOOK_SECRET: z.string().min(8),
