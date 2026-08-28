@@ -565,6 +565,23 @@ function brief(f: Facts): string {
  * shop read the characters {"reply": out loud to a customer.
  */
 const RETURN_JSON = 'Return ONLY JSON: {"reply":"..."}';
+
+/**
+ * HOW MUCH ROOM A REPLY GETS, and it depends on the channel -- a rule
+ * learned by getting it wrong in both directions. The first voice was
+ * verbose, so "short, this is WhatsApp" went into the system prompt.
+ * Then the voice path inherited the WhatsApp rule and a caller heard
+ * clipped fragments: "Sugar rakh diya. Kuch aur?" is fine as a chat
+ * bubble and rude as a spoken sentence. Speech needs to breathe;
+ * bubbles need to be scannable. Same facts, different room.
+ */
+const BREVITY_TEXT =
+  '- Short. Two or three sentences at the very most. This is WhatsApp.';
+const BREVITY_VOICE =
+  '- You are SPEAKING on a call. Answer in two or three complete,'
+  + ' unhurried sentences, the way a person talks across a counter --'
+  + ' never clipped fragments, and never padding either. A full thought,'
+  + ' warmly said, then stop.';
 const RETURN_PROSE = 'Return the sentence itself. No JSON, no quotes, no label.';
 
 const SYSTEM = [
@@ -580,7 +597,7 @@ const SYSTEM = [
   'already said this conversation and you do not.',
   '',
   'HOW TO WRITE',
-  '- Short. Two or three sentences at the very most. This is WhatsApp.',
+  BREVITY_TEXT,
   '- Warm and ordinary, the way a shopkeeper talks to a regular.',
   '- Say WHY. A shopkeeper handing over a different bottle says why in the',
   '  same breath, every time. Whenever the FACT gives you a reason, it',
@@ -921,7 +938,12 @@ ${input.card}` : fast;
       temperature: 0.6,
       stream: true,
       messages: [
-        { role: 'system', content: SYSTEM.replace(RETURN_JSON, RETURN_PROSE) },
+        {
+          role: 'system',
+          // spoken: prose instead of JSON, and room to breathe instead of
+          // chat-bubble brevity
+          content: SYSTEM.replace(RETURN_JSON, RETURN_PROSE).replace(BREVITY_TEXT, BREVITY_VOICE),
+        },
         { role: 'user', content: user },
       ],
     }));

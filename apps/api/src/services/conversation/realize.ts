@@ -86,11 +86,17 @@ function variantsFor(f: Facts, named: string | null): Variant[] {
       if (f.substituted.length || f.packAsks.length || f.dropped.length) return [];
       const what = list(f.added);
       if (!what) return [];
+      /**
+       * Whole thoughts, not fragments. "Sugar rakh diya. Kuch aur?" is
+       * fine in a chat bubble and curt when spoken -- these lines go
+       * through the mouth verbatim, so they carry the full sentence a
+       * person would actually say across a counter.
+       */
       return [
-        { opening: 'ji', text: `Ji, ${what} rakh diya. Aur kuch chahiye?` },
-        { opening: 'ho', text: `Ho gaya, ${what} likh liya. Aur kuch?` },
-        { opening: what.split(' ')[0]!.toLowerCase(), text: `${what} daal diya. Kuch aur bhejun?` },
-        { opening: 'theek', text: `Theek hai, ${what} note kar liya. Aur bataiye.` },
+        { opening: 'ji', text: `Ji, ${what} rakh diya hai aapke liye. Aur kuch chahiye aapko?` },
+        { opening: 'ho', text: `Ho gaya, ${what} likh liya hai. Bataiye, aur kya bhejun?` },
+        { opening: what.split(' ')[0]!.toLowerCase(), text: `${what} daal diya hai bag mein. Kuch aur bhi chahiye kya?` },
+        { opening: 'theek', text: `Theek hai ji, ${what} note kar liya hai. Aur bataiye kya chahiye.` },
       ];
     }
 
@@ -116,9 +122,9 @@ function variantsFor(f: Facts, named: string | null): Variant[] {
     case 'STOCK_ANSWER': {
       if (!f.inStock) return [];
       return [
-        { opening: 'ji', text: `Ji haan, ${f.name} hai, ${f.price}. Kitna bhejun?` },
-        { opening: 'hai', text: `Hai ji, ${f.name} ${f.price} ka. Kitna chahiye?` },
-        { opening: f.name.split(' ')[0]!.toLowerCase(), text: `${f.name} hai, ${f.price}. Kitna dun?` },
+        { opening: 'ji', text: `Ji haan, ${f.name} hai humare paas, ${f.price} ka. Kitna bhejun aapko?` },
+        { opening: 'hai', text: `Hai ji bilkul, ${f.name} ${f.price} ka mil jayega. Kitna chahiye?` },
+        { opening: f.name.split(' ')[0]!.toLowerCase(), text: `${f.name} available hai, ${f.price} ka. Bataiye kitna dun?` },
       ];
     }
 
@@ -141,10 +147,10 @@ function variantsFor(f: Facts, named: string | null): Variant[] {
     case 'ASK_PURPOSE': {
       const you = named ? ` ${named}` : '';
       return [
-        { opening: 'namaste', text: `Namaste${you}! Boliye, kya kaam tha?` },
-        { opening: 'haan', text: `Haan ji${you}, kahiye. Kis liye phone kiya?` },
-        { opening: 'ji', text: `Ji${you}, bataiye. Kya madad karun?` },
-        { opening: 'arre', text: `Arre${you}, kaise hain? Kya kaam tha aaj?` },
+        { opening: 'namaste', text: `Namaste${you}! Boliye, aaj kya kaam tha aapka?` },
+        { opening: 'haan', text: `Haan ji${you}, kahiye. Kis cheez ke liye phone kiya aapne?` },
+        { opening: 'ji', text: `Ji${you}, bataiye. Main kya madad kar sakta hoon aapki?` },
+        { opening: 'arre', text: `Arre${you}, kaise hain aap? Bataiye, kya kaam tha aaj?` },
       ];
     }
 

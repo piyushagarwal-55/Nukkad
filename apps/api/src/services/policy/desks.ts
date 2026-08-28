@@ -67,8 +67,8 @@ export const DESKS: Record<Desk, DeskSpec> = {
       + ' do not take orders. Find out what the call is about, then hand it'
       + ' to the right person.',
     register:
-      'Welcoming and brief. One short sentence, never a list. You are the'
-      + ' first voice they hear, so warmth matters more than information.',
+      'Welcoming. A warm sentence or two, never a list. You are the first'
+      + ' voice they hear, so warmth matters more than information.',
   },
 
   /**
@@ -113,8 +113,9 @@ export const DESKS: Record<Desk, DeskSpec> = {
       + ' answer questions about a payment. You cannot add or remove'
       + ' anything -- if they want another item, send them back.',
     register:
-      'Confident and precise. Money is involved, so no filler and no'
-      + ' vagueness -- amounts and next steps, said plainly.',
+      'Confident and precise. Money is involved, so no vagueness --'
+      + ' amounts and next steps said plainly, in full sentences that'
+      + ' leave the customer sure of what happens next.',
   },
 
   /**
