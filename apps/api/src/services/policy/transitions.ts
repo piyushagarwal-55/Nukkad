@@ -95,7 +95,20 @@ export type Outcome =
  * than special-cased somewhere else.
  */
 const RECEPTION: Record<SpeechAct, Outcome> = {
-  GREET: 'GREET',
+  /**
+   * A GREETING IS ANSWERED BY ASKING WHY THEY CALLED, not by asking what
+   * they want to buy.
+   *
+   * This cell said 'GREET', which is the counter's greeting -- and every
+   * one of its variants is a sales question: "Kya chahiye aaj?", "kya
+   * bhejun?", "Kya nikaalun?". So the desk with no catalogue was opening
+   * every call by asking for an order, which is the original complaint
+   * wearing a politer sentence.
+   *
+   * A person answering a shop's phone does not know yet whether you want
+   * to buy, chase an order, or ask what time they close. They ask.
+   */
+  GREET: 'ASK_PURPOSE',
   BUY: { transfer: 'SELLER' },
   ASK: { transfer: 'SELLER' },
   ASK_RECOMMENDATION: { transfer: 'SELLER' },

@@ -133,6 +133,21 @@ function variantsFor(f: Facts, named: string | null): Variant[] {
      * nameThisTurn(): a greeting is a weighty moment, so it usually
      * carries one, and never twice running.
      */
+    /**
+     * RECEPTION PICKING UP. Note what none of these contain: a product,
+     * a category, or a request for an order. This desk does not know
+     * what is on the shelf and must not sound like it does.
+     */
+    case 'ASK_PURPOSE': {
+      const you = named ? ` ${named}` : '';
+      return [
+        { opening: 'namaste', text: `Namaste${you}! Boliye, kya kaam tha?` },
+        { opening: 'haan', text: `Haan ji${you}, kahiye. Kis liye phone kiya?` },
+        { opening: 'ji', text: `Ji${you}, bataiye. Kya madad karun?` },
+        { opening: 'arre', text: `Arre${you}, kaise hain? Kya kaam tha aaj?` },
+      ];
+    }
+
     case 'GREETING': {
       const you = named ? ` ${named}` : '';
       return [

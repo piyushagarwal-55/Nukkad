@@ -150,10 +150,25 @@ export async function streamRoutes(app: FastifyInstance) {
        * producing. Closing this one and opening the next costs a
        * handshake the composer is going to outlast anyway.
        */
+      /**
+       * The trace is not sent until sound has actually started.
+       *
+       * handle() returning does not mean the customer has heard anything
+       * -- the synthesiser is still working when the last sentence is
+       * handed to it -- so reporting the turn the moment the text was
+       * ready printed `first sound 0ms` on turns that took well over a
+       * second to speak. The number was measuring the wrong end.
+       */
+      let heard!: () => void;
+      const sounded = new Promise<void>((r) => { heard = r; });
+
       const mouth = openMouth({
         onAudio: (b64) => {
           if (ctrl.signal.aborted) return;
-          if (!firstSoundMs) firstSoundMs = Date.now() - started;
+          if (!firstSoundMs) {
+            firstSoundMs = Date.now() - started;
+            heard();
+          }
           send({ type: 'audio', b64 });
         },
         onError: (message) => app.log.warn({ message }, 'tts stream'),
@@ -248,6 +263,14 @@ export async function streamRoutes(app: FastifyInstance) {
           },
         );
 
+        if (ctrl.signal.aborted) return;
+
+        /**
+         * Bounded, because a synthesiser that never answers must not hold
+         * the trace hostage -- the words are still worth showing even
+         * when the voice failed.
+         */
+        await Promise.race([sounded, new Promise((r) => setTimeout(r, 4000))]);
         if (ctrl.signal.aborted) return;
 
         const reply = replies.map((r) => r.text).join('\n');
