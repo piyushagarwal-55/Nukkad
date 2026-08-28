@@ -14,7 +14,7 @@
    than twelve rewrites.
    --------------------------------------------------------------------- */
 :root {
-  --bg:      #fafafa;   /* near-white ground */
+  --bg:      #ffffff;   /* pure white ground; the cards carry the tint */
   --sand:    #ffffff;   /* card surface (was the warm secondary) */
   --ink:     #18181b;   /* text, primary buttons */
   --muted:   #6f6f78;
@@ -1087,10 +1087,18 @@ html, body {
    One shape, five colours. `.pane` is the neutral one and still steps away
    from the page because it is sand, not panel. */
 .pane {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  box-shadow: 0 1px 2px rgb(24 24 27 / 0.05);
+  /**
+   * The premium read comes from CONTRAST AND DEPTH, not from borders: a
+   * softly tinted surface sitting on a pure white ground, a hairline so
+   * light it reads as an edge rather than a line, and a two-layer shadow
+   * -- one tight for crispness, one wide and low for lift.
+   */
+  background: #fafafb;
+  border: 1px solid #eeeef1;
+  border-radius: 16px;
+  box-shadow:
+    0 1px 2px rgb(16 16 20 / 0.04),
+    0 12px 32px -16px rgb(16 16 20 / 0.10);
 }
 .pane-ink {
   background: var(--ink);
@@ -1512,3 +1520,30 @@ html, body {
 
 /* the hairline row separators used across every table */
 [class*="border-[#1a1a1a12]"] { border-color: var(--line) !important; }
+
+
+/* ---------------------------------------------------------------------
+   Attention cards: the left-border stripe was a report; a softly tinted
+   surface is a product. Background carries the severity, a matching
+   hairline holds the edge, and the stripe goes.
+   --------------------------------------------------------------------- */
+[class*="border-l-[#9A4632]"] {
+  background: #fef2f2 !important;
+  border-color: #fecaca !important;
+  border-left-width: 1px !important;
+}
+[class*="border-l-[#B98115]"] {
+  background: #fffbeb !important;
+  border-color: #fde68a !important;
+  border-left-width: 1px !important;
+}
+[class*="border-l-[#3F7263]"] {
+  background: #ecfdf5 !important;
+  border-color: #a7f3d0 !important;
+  border-left-width: 1px !important;
+}
+[class*="border-l-[var(--accent)]"] {
+  background: #eef2ff !important;
+  border-color: #c7d2fe !important;
+  border-left-width: 1px !important;
+}
