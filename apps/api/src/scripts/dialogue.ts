@@ -270,7 +270,11 @@ const CASES: Case[] = [
       // the transfer: seller -> checkout, basket carried, order written
       { say: 'bas order kar do', orderStatus: 'PAYMENT_PENDING' },
       // the marketing desk is a lookup: Rs 20 exists only in the Offer table
+      // a question is not an address: this must reach the offer lookup,
+      // not the ADDRESS pending that checkout just opened
       { say: 'koi offer chal raha hai kya', expect: '20', allowDigits: ['20', '300'] },
+      // and THIS is the address, stored once, never asked again
+      { say: 'Flat 12, Gali 4, Sector 15 bhej dena', reject: 'samajh nahi' },
       // enquiry answers from the order checkout just wrote
       { say: 'mera order kahan hai', reject: 'samajh nahi' },
     ],
@@ -359,6 +363,17 @@ async function run() {
    * Rs 300. The composer may only speak digits its facts contain, so the
    * "20" in the expected reply can ONLY have come from this row.
    */
+  /**
+   * The test household starts with NO saved address, so the checkout
+   * flow exercises the ask -- and a previous run's pollution (the offer
+   * question once got saved as an address) cannot hide the bug that put
+   * it there.
+   */
+  await prisma.household.updateMany({
+    where: { phone: HOUSEHOLD },
+    data: { address: null },
+  });
+
   const kirana = await prisma.kirana.findFirst({ select: { id: true } });
   if (kirana) {
     await prisma.offer.deleteMany({ where: { kiranaId: kirana.id } });
