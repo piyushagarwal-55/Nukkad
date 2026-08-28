@@ -109,6 +109,17 @@ function momentOf(f: Facts): Moment {
     case 'GREETING':
       return 'SMALL_TALK';
 
+    /**
+     * Reception picking up IS small talk with a job to do, and the
+     * missing case here was why the shop stopped using names: momentOf
+     * fell through to ANSWERING, which never carries one, so the one
+     * desk whose whole role is recognising the caller -- "Namaste
+     * Ramesh ji, boliye" -- was structurally barred from saying who it
+     * recognised.
+     */
+    case 'ASK_PURPOSE':
+      return 'SMALL_TALK';
+
     case 'NOT_STOCKED':
     case 'PAYMENT_NOT_SEEN':
     case 'BASKET_EMPTY':
