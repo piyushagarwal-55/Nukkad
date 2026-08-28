@@ -150,6 +150,10 @@ export const prices = (items: Array<{ name: string; price: string }>): string =>
 export const listing = (names: string[]): string =>
   `${names.join(', ')} hai. Kaun sa chahiye?`;
 
+export const recommend = (name: string, price: string, why: string): string =>
+  why ? `${name} ${price} le lijiye, ${why}. Kitna bhejun?`
+      : `${name} ${price} le lijiye. Kitna bhejun?`;
+
 export const catalogue = (categories: string[]): string =>
   `Humare paas ${categories.join(', ')} sab hai. Bataiye kya chahiye?`;
 

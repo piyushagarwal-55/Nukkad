@@ -57,6 +57,23 @@ export const ACTIONS = [
   'ANSWER_STOCK',
   /** what do you have -- a listing, or the whole catalogue */
   'SEARCH_PRODUCT',
+  /**
+   * THEY WANT THE SHOP TO CHOOSE. "aap hi bata do", "kaunsa accha hai",
+   * "koi bhi de do", "aap decide kar lo".
+   *
+   * The action that was missing, and the one a customer notices missing.
+   * Asked to pick, the shop used to read the sentence as a search, find
+   * nothing to search for, and hand the question straight back -- "kaunsi
+   * chahiye?" to someone who had just said they did not know. That is the
+   * one exchange where a person is obviously more use than a form, and it
+   * was the one exchange this shop could not have.
+   *
+   * It is still not the model choosing: it returns the ACTION and the
+   * shop picks from its own stock on its own history. See recommend() in
+   * conversation/core.ts, and note that the reason it gives is computed,
+   * never written.
+   */
+  'RECOMMEND',
   /** yes, to the question the shop just asked */
   'CONFIRM_PENDING_ACTION',
   /** no, to the question the shop just asked */
@@ -155,6 +172,12 @@ const SYSTEM = [
   '- "yeh", "wo", "same wala", "ek aur" all point backwards.',
   '- A quantity on its own -- "2 kg", "do packet" -- answers a question',
   '  the shop asked and refers to whatever it asked about.',
+  '- RECOMMEND is them handing the choice BACK to you: "aap hi bata do",',
+  '  "kaunsa accha rahega", "koi bhi", "aap decide kar lo", "jo acchi ho',
+  '  wo de do". It is NOT a search and NOT a clarification -- they have',
+  '  already said they do not know, so asking them again is the one',
+  '  answer that cannot help. If they name a category while asking',
+  '  ("acchi wali chai de do"), put that in products.',
   '- "wahi wala order", "pichhla order dobara", "same as last time" mean',
   '  the whole PREVIOUS ORDER, which is REPEAT_LAST_ORDER -- not a',
   '  pointer to one product and not a search.',
@@ -244,7 +267,13 @@ const LOST: Decision = {
  * each one has a cost if it does not. None of them are style.
  */
 function validate(d: Decision, input: PolicyInput): Decision {
-  const explicit = d.action.endsWith('EXPLICIT_PRODUCT');
+  /**
+   * RECOMMEND may carry a span too -- "acchi wali chai de do" names the
+   * category it wants a pick from -- but unlike the ADD branches it does
+   * not NEED one: with nothing named, the shop recommends from whatever
+   * the conversation was already about.
+   */
+  const explicit = d.action.endsWith('EXPLICIT_PRODUCT') || d.action === 'RECOMMEND';
 
   /**
    * Referring to nothing. The model was told to use CLARIFY here, and
@@ -268,6 +297,12 @@ function validate(d: Decision, input: PolicyInput): Decision {
   const cleaned = d.products
     .map((p) => ({ ...p, query: maskActions(p.query).rest.trim() }))
     .filter((p) => p.query.length > 0);
+
+  /**
+   * An empty span is fatal to an add and harmless to a recommendation,
+   * which has the conversation to fall back on.
+   */
+  if (!cleaned.length && d.action === 'RECOMMEND') return { ...d, products: [] };
 
   if (!cleaned.length) {
     return input.state.lastNamed

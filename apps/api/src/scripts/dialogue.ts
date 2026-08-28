@@ -183,6 +183,21 @@ const CASES: Case[] = [
     ],
   },
   {
+    name: 'asked to choose, the shop chooses and says why',
+    why:
+      'the one exchange where a person is obviously more use than a form, ' +
+      'and the one this shop could not have. "aap hi bata do" used to reach ' +
+      'the product matcher, which found the options it had just listed and ' +
+      'asked which one -- the same question, back at someone who had just ' +
+      'said they did not know',
+    turns: [
+      { say: 'daal kaunsi kaunsi hai', noOrder: true },
+      { say: 'aap hi bata do kaunsi acchi rahegi', noOrder: true },
+      // and the pick has to be what "yahi" now points at
+      { say: 'haan yahi ek kilo bhej do', lines: 1, noOrder: true },
+    ],
+  },
+  {
     name: 'a clear request for something unstocked is answered honestly',
     why:
       '"kuch namkeen bhej do" is not confusing, it is unavailable. ' +

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { groq } from '../../lib/groq.js';
 import { env } from '../../config/env.js';
 import type { Turn } from './state.js';
+import { direct, deliveryBrief } from './director.js';
 
 /**
  * THE VOICE OF THE SHOP.
@@ -157,6 +158,27 @@ export type Facts =
    * apart: one wants to know what you stock, the other what it costs.
    */
   | { kind: 'PRICES'; asked: string; items: Array<{ name: string; price: string }> }
+  /**
+   * THE SHOP WAS ASKED TO CHOOSE, AND CHOSE.
+   *
+   * MG-ShopDial lists Recommend as an agent intent and this shop had no
+   * way to perform one. Asked "aap hi bata do kaunsi acchi hai" it asked
+   * the question back, which is the least useful thing available to it.
+   *
+   * `why` is COMPUTED -- see recommend() in core.ts -- because a reason
+   * is exactly the kind of warm sentence a model will happily invent.
+   * "Ye sabse acchi hai" is a claim about the world; "aap pichli baar
+   * yahi le gaye the" is a claim about our own order table.
+   */
+  | {
+      kind: 'RECOMMEND';
+      name: string;
+      price: string;
+      /** already phrased as a justification, and true */
+      why: string;
+      /** what else was on the table, so they can still say no */
+      alternatives: string[];
+    }
   /** what the shop sells at all, for "kya kya hai" */
   | { kind: 'CATALOGUE'; categories: string[] }
   | { kind: 'QUESTION' }
@@ -371,6 +393,24 @@ function brief(f: Facts): string {
         'prices are the answer, not decoration. Do NOT number them.',
       ].join(' ');
 
+    case 'RECOMMEND':
+      return [
+        'They asked YOU to choose, so choose -- do not hand the question',
+        `back. You are recommending ${f.name}, ${f.price}.`,
+        f.why
+          ? `The reason is: ${f.why}. Say it. A recommendation without a`
+            + ' reason is just a different way of picking at random, and'
+            + ' the reason is the whole thing they asked you for.'
+          : 'Recommend it plainly.',
+        f.alternatives.length
+          ? `If they would rather have something else, the shop also has:`
+            + ` ${f.alternatives.join(', ')}. You may mention that they can`
+            + ' still have one of those, briefly, at the end.'
+          : '',
+        'Then ask how much they want. Do NOT invent any other reason --',
+        'not taste, not quality, not what other customers buy.',
+      ].filter(Boolean).join(' ');
+
     case 'CATALOGUE':
       return [
         'They asked what the shop sells, or asked for something too broad',
@@ -441,18 +481,36 @@ const SYSTEM = [
   '',
   RETURN_JSON,
   '',
+  'HOW THIS ONE REPLY SHOULD LAND is in the THIS MOMENT block below.',
+  'It is computed per turn -- what kind of moment this is, whether a',
+  'reaction is warranted before the information, and the openings you',
+  'have already used up. Follow it exactly. It knows what you have',
+  'already said this conversation and you do not.',
+  '',
   'HOW TO WRITE',
-  '- Short. One or two sentences. This is WhatsApp, not email.',
+  '- Short. Two or three sentences at the very most. This is WhatsApp.',
   '- Warm and ordinary, the way a shopkeeper talks to a regular.',
+  '- Say WHY. A shopkeeper handing over a different bottle says why in the',
+  '  same breath, every time. Whenever the FACT gives you a reason, it',
+  '  belongs in the sentence -- never state a change without it.',
+  '- Talk about the SHOP, not the software. Things get "rakh diya", "daal',
+  '  diya", "likh liya", "note kar liya". Never "added to your basket":',
+  '  that is a database describing itself, and no shopkeeper has a basket.',
+  '- Ji, haan ji, bilkul, accha, arre, koi baat nahi, theek hai. These',
+  '  carry no information and are most of what makes speech sound spoken.',
+  '- Their name is at the top of this prompt. Use it now and then, the way',
+  '  you would across a counter -- not every message, which reads as a',
+  '  mail merge, and not never, which reads as a form.',
   '- Mirror their SCRIPT exactly, and this matters more than it sounds.',
   '  If they typed in the Roman alphabet, reply in the Roman alphabet --',
   '  even when the language is Hindi. Someone who writes "daal kaunsi'
   + ' kaunsi h" cannot necessarily READ Devanagari.',
   '  Devanagari in, Devanagari out. English in, English out.',
   '- Never use numbered menus, option lists, or "reply 1 for".',
-  '- Do not repeat a sentence you have already sent them. The recent',
-  '  messages are shown to you. Say it a different way, or say something',
-  '  more useful.',
+  '- Do not repeat a sentence you have already sent them, and do not open',
+  '  two replies the same way. The recent messages are shown to you.',
+  '  "Ye X add ho gaya, aur kuch chahiye?" every single turn is the tell',
+  '  that gives a bot away faster than any single wrong answer.',
   '- No emoji unless they used one first.',
   '',
   'WHAT YOU MAY SAY',
@@ -460,6 +518,9 @@ const SYSTEM = [
   '- Never invent or mention a product, price, total, stock level, delivery',
   '  time, shop timing or discount. If it is not in the FACT, you do not',
   '  know it, and saying the shopkeeper will confirm is always allowed.',
+  '- Warmth is in the phrasing, never in the facts. "Ye aapke liye rakh',
+  '  deta hoon" is warm and true; "ye sabse acchi hai" is warm and',
+  '  invented, unless the FACT said so.',
 ].join('\n');
 
 /**
@@ -567,6 +628,7 @@ function allowedDigits(f: Facts): Set<string> {
     for (const i of f.items) source.push(i.name, i.price);
     source.push(f.asked);
   }
+  if (f.kind === 'RECOMMEND') source.push(f.name, f.price, f.why, ...f.alternatives);
   if (f.kind === 'CATALOGUE') source.push(...f.categories);
   if (f.kind === 'STOCK_ANSWER') source.push(f.name, f.price);
   if (f.kind === 'ACCOUNT') source.push(String(f.orders), f.spent);
@@ -596,6 +658,14 @@ function buildPrompt(input: ComposeInput): string {
     history ? `\nRECENT MESSAGES:\n${history}` : '',
     `\nTHEY JUST SENT: ${input.said || '(nothing)'}`,
     `\nFACT: ${brief(input.facts)}`,
+    /**
+     * The plan goes AFTER the fact and last of the two, because the
+     * fact is the constraint and the delivery is the choice -- and the
+     * thing nearest the end of a prompt is the thing most obeyed. It
+     * was the fact that needed that position when the failure was
+     * invention; with the facts holding, the failure moved to sameness.
+     */
+    `\n${deliveryBrief(direct(input.facts, input.recent, input.buyerName), input.buyerName)}`,
     input.card ? NO_NUMBERS : '',
   ].filter(Boolean).join('\n');
 

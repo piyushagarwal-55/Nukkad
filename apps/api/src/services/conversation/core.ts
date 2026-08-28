@@ -171,6 +171,8 @@ function label(f: Facts): { intent: string; goal: string } {
       return { intent: 'CLARIFICATION_QUESTION', goal: 'ORDERING' };
     case 'ELICIT':
       return { intent: 'ELICIT_PREFERENCES', goal: 'RECOMMENDATION' };
+    case 'RECOMMEND':
+      return { intent: 'RECOMMEND', goal: 'RECOMMENDATION' };
     case 'REJECTED':
       return { intent: 'RECOMMEND', goal: 'RECOMMENDATION' };
     case 'STILL_WAITING':
@@ -627,6 +629,9 @@ async function act(
     case 'SEARCH_PRODUCT':
       return question(ctx, decision.products.map((p) => p.query));
 
+    case 'RECOMMEND':
+      return recommend(ctx, decision.products.map((p) => p.query));
+
     case 'CLARIFY':
     case 'NOT_UNDERSTOOD':
     default:
@@ -636,6 +641,13 @@ async function act(
 
 /** below this the shop asks rather than acts */
 const POLICY_FLOOR = 0.45;
+
+/**
+ * How well the WHOLE SENTENCE must match before it counts as naming a
+ * product. See the note at the use site in question(): a span carries a
+ * judgement that a product was named, a bare sentence carries none.
+ */
+const SENTENCE_FLOOR = 0.7;
 
 /** the paper's goal axis, derived from the action rather than classified */
 function goalOf(action: PolicyAction): string {
@@ -983,6 +995,26 @@ async function question(ctx: Ctx, spans: string[]): Promise<OutboundMessage[]> {
    */
   const asked = spans[0] ?? ctx.said;
 
+  /**
+   * A WHOLE SENTENCE IS WEAKER EVIDENCE THAN A SPAN, and it needs a floor
+   * under it that a span does not.
+   *
+   * When the policy layer hands over a span, somebody has already judged
+   * that a product was named. When it hands over nothing and this falls
+   * back to the raw sentence, nobody has -- and the ranker will always
+   * find something, because trigram similarity has no opinion about
+   * whether a sentence is about groceries. Measured:
+   *
+   *   moong dal ka price kitna h        Moong Dal      .830   real
+   *   dukaan kitne baje tak khuli hai   Tata Tea Gold  .588   noise
+   *
+   * The second is the shop answering a question about opening hours by
+   * quoting the price of tea, which is worse than any honest "I will
+   * check" and was the whole reason the QUESTION fact existed. So the
+   * fallback path -- and only that path -- has to clear a bar.
+   */
+  const floor = spans.length ? 0 : SENTENCE_FLOOR;
+
   if (asked.trim()) {
     /**
      * The SAME resolver, so a price question and an order find the same
@@ -1012,7 +1044,9 @@ async function question(ctx: Ctx, spans: string[]): Promise<OutboundMessage[]> {
      * Besan accounts for two words of that question; the other two
      * account for one each. They are not alternatives to it.
      */
-    const top = ref?.line?.chosen;
+    const top = ref?.line?.chosen && ref.line.chosen.fuzzy >= floor
+      ? ref.line.chosen
+      : null;
     const found = top
       ? [top.sku, ...ref!.line!.alternates
           .filter((a) => a.specificity >= top.specificity)
@@ -1065,6 +1099,120 @@ async function question(ctx: Ctx, spans: string[]): Promise<OutboundMessage[]> {
     ctx,
     { kind: 'CATALOGUE', categories: categoriesOf(catalog, stock) },
     copy.catalogue(categoriesOf(catalog, stock)),
+    card,
+  );
+}
+
+/**
+ * THE SHOP CHOOSES, BECAUSE IT WAS ASKED TO.
+ *
+ * "aap hi bata do kaunsi acchi hai" used to reach question(), which
+ * searched for a product in a sentence that names none, found the four
+ * dals it had listed a moment ago and asked which one -- the same
+ * question, back at someone who had just said they did not know. Two
+ * turns of that and the customer picks at random or leaves.
+ *
+ * A shopkeeper asked to choose does three things: picks one, says why,
+ * and leaves the door open. So does this.
+ *
+ * THE REASON IS COMPUTED, NEVER WRITTEN. That is the whole design of the
+ * thing. Handing a model the option names and asking it to recommend one
+ * gets you "ye sabse acchi quality ki hai", which is a claim about the
+ * world that nobody checked -- the exact class of sentence the Facts
+ * split exists to keep out. What goes in the fact is a reason this
+ * codebase can defend:
+ *
+ *   they have bought it before   the order table says so
+ *   it is the cheapest of these  sellPaise says so
+ *
+ * and when neither is true the shop names one and gives no reason at
+ * all, which is honest and still more use than a question.
+ *
+ * WHY THE PRIOR IS THE FIRST CHOICE, and not merely the first available.
+ * "Aap pichli baar yahi le gaye the" is the one thing a shop can say
+ * that no amount of model quality can substitute for -- it is the
+ * memory of a regular, which is what a kirana actually sells. It is also
+ * already loaded on this path for the ranker, so it costs nothing.
+ */
+async function recommend(ctx: Ctx, spans: string[]): Promise<OutboundMessage[]> {
+  const card = ctx.convo.basket.length ? copy.orderCard(ctx.convo.basket) : undefined;
+
+  const [catalog, stock, prior] = await Promise.all([
+    getCatalog(ctx.kiranaId),
+    getStockMap(ctx.kiranaId),
+    buildPrior(ctx.householdId),
+  ]);
+
+  const inStock = catalog.filter((s) => (stock.get(s.id) ?? 0) > 0);
+
+  /**
+   * WHAT WAS ON THE TABLE, in priority order.
+   *
+   * The conversation first: "aap bata do" almost always follows the shop
+   * having just named some options, and those options are exactly what
+   * lastNamed holds. Only when they asked cold -- "koi acchi chai de
+   * do" -- is there anything to search for, and then the ordinary
+   * resolver does it so a recommendation cannot find products an order
+   * would not have.
+   */
+  const remembered = ctx.convo.lastNamed
+    .map((n) => inStock.find((s) => s.id === n.skuId))
+    .filter((s): s is Sku => !!s);
+
+  let options = remembered;
+  if (options.length < 2) {
+    const asked = spans[0] ?? ctx.said;
+    const [ref] = resolve({
+      text: asked, spans: [], catalogue: inStock, prior, lastNamed: ctx.convo.lastNamed,
+    });
+    const top = ref?.line?.chosen;
+    if (top) options = [top.sku, ...ref!.line!.alternates.map((a) => a.sku)];
+  }
+
+  /**
+   * Nothing to choose between. Not a failure -- it is a question the
+   * shop cannot answer yet, and question() already knows how to say so
+   * without pretending otherwise.
+   */
+  if (!options.length) return question(ctx, spans);
+
+  /**
+   * The pick. History wins; price breaks the tie, because between two
+   * things a customer has never bought, the cheaper one is the only
+   * difference the shop can honestly point at.
+   */
+  const pick = [...options].sort((a, b) => {
+    const pa = prior.get(a.id) ?? 0;
+    const pb = prior.get(b.id) ?? 0;
+    if (pa !== pb) return pb - pa;
+    return a.sellPaise - b.sellPaise;
+  })[0]!;
+
+  const bought = (prior.get(pick.id) ?? 0) > 0;
+  const cheapest = options.length > 1 && options.every((o) => o.sellPaise >= pick.sellPaise);
+
+  const why = bought
+    ? 'this household has ordered this same one before'
+    : cheapest
+      ? 'it is the cheapest of the ones on offer'
+      : '';
+
+  // so "haan yahi bhej do" next turn means the thing just recommended
+  remember(ctx, [pick]);
+
+  const name = withoutPack(pick.name);
+  const price = rupeeLabel(pick.sellPaise);
+
+  return speak(
+    ctx,
+    {
+      kind: 'RECOMMEND',
+      name,
+      price,
+      why,
+      alternatives: displayNames(options.filter((o) => o.id !== pick.id).map((o) => o.name)),
+    },
+    copy.recommend(name, price, bought ? 'ye aap pehle bhi le chuke hain' : ''),
     card,
   );
 }

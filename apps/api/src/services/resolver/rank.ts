@@ -72,8 +72,24 @@ const TIE_EPSILON = 0.02;
 /**
  * How close an alternate must be to the leader before it is worth showing
  * a customer. See the note at the use site.
+ *
+ * MEASURED, not chosen. A real peer and a piece of trigram noise sit in
+ * clearly different places, and 0.6 was below both:
+ *
+ *   daal kaunsi kaunsi hai   Toor .786  Moong .704   ratio .90   peer
+ *   daal kaunsi kaunsi hai   Toor .786  Tea   .598   ratio .76   noise
+ *   atta hai kya             Atta .833  Tea   .625   ratio .75   noise
+ *   moong dal ka price       Moong .830 Toor  .780   ratio .94   peer
+ *
+ * Tata Tea Gold scores near .6 against sentences with no tea in them at
+ * all -- short tokens collide in trigram space, and "khuli hai" against
+ * "gold" is a real number, not a bug in the matcher. What was a bug is
+ * that a relative band alone cannot tell a .90 from a .76, so the shop
+ * answered "daal kaunsi kaunsi hai" with a list containing tea. Genuine
+ * ambiguity, which is what this band exists to preserve, sits at .90 and
+ * above: three sunflower oils are a fraction of a point apart.
  */
-const ALT_BAND = 0.6;
+const ALT_BAND = 0.85;
 
 /**
  * Words that state an amount rather than name a product. Hinglish number
