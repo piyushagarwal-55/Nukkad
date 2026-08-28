@@ -461,7 +461,9 @@ function brief(f: Facts): string {
       return f.inStock
         ? [
             `They asked about ${f.name}. It IS in stock at ${f.price}.`,
-            'Tell them, and ask how much they want.',
+            'Tell them naturally -- pack size is part of the name, worth',
+            'saying as a detail. Whether to ask anything back is decided',
+            'by THIS MOMENT below, not here.',
           ].join(' ')
         : [
             `They asked about ${f.name}. It is OUT of stock right now.`,
@@ -508,9 +510,11 @@ function brief(f: Facts): string {
         'They asked what the shop sells, or asked for something too broad',
         'to pick from.',
         `The shop stocks: ${f.categories.join(', ')}.`,
-        'Tell them, in a natural sentence rather than a list, and ask what',
-        'they need. Do NOT number anything and do NOT invent a category',
-        'that is not in that list.',
+        'Do NOT recite that list. Summarise it the way a shopkeeper does',
+        '-- "roz ka ghar ka saara samaan mil jayega" -- naming a handful',
+        'of the categories as examples, then invite them to just say what',
+        'they need and you will check. Never invent a category not in the',
+        'list above.',
       ].join(' ');
 
     case 'QUESTION':
@@ -577,11 +581,17 @@ const RETURN_JSON = 'Return ONLY JSON: {"reply":"..."}';
  */
 const BREVITY_TEXT =
   '- Short. Two or three sentences at the very most. This is WhatsApp.';
-const BREVITY_VOICE =
-  '- You are SPEAKING on a call. Answer in two or three complete,'
-  + ' unhurried sentences, the way a person talks across a counter --'
-  + ' never clipped fragments, and never padding either. A full thought,'
-  + ' warmly said, then stop.';
+const BREVITY_VOICE = [
+  '- You are SPEAKING to a customer on a phone call, not replying in a',
+  '  chat box. Sound like a helpful, attentive shopkeeper: acknowledge',
+  '  what they actually said, answer with the verified information you',
+  '  were given, add ONE useful detail when it helps, and keep the',
+  '  conversation moving when that is natural. Do not sound like a',
+  '  database, a menu, an FAQ, or a transaction receipt.',
+  '- Vary your openings and sentence shapes. Sometimes a short answer is',
+  '  right; when they are exploring, confused, or deciding, be more',
+  '  conversational and helpful. Never pad a reply to make it longer.',
+].join('\n');
 const RETURN_PROSE = 'Return the sentence itself. No JSON, no quotes, no label.';
 
 const SYSTEM = [

@@ -81,8 +81,91 @@ export type Structure = 'REACT_THEN_INFO' | 'INFO_ONLY' | 'INFO_THEN_OFFER';
 
 export type Energy = 'BRISK' | 'CASUAL' | 'CAREFUL' | 'APOLOGETIC';
 
+/**
+ * WHERE IN THE SHOPPING JOURNEY THIS REPLY LANDS, because the same fact
+ * wants different telling at different points. A price, told to someone
+ * browsing, is information to share generously; told to someone with a
+ * full basket saying "bas", it is a bill. The reflex this exists to
+ * kill: "Kitna bhejun?" after every product question, which treats a
+ * customer looking at the shelf as a customer at the till. Browsing is
+ * not buying. Asking a price is not committing to purchase.
+ *
+ * Derived from the fact kind and the basket -- never classified by a
+ * model, for the same reason as everything else in this file.
+ */
+export type Mode =
+  | 'OPENING'
+  | 'BROWSING'
+  | 'DECIDING'
+  | 'BUYING'
+  | 'CHECKOUT'
+  | 'ENQUIRY'
+  | 'GENERAL';
+
+function modeOf(f: Facts): Mode {
+  switch (f.kind) {
+    case 'GREETING':
+    case 'ASK_PURPOSE':
+      return 'OPENING';
+    case 'STOCK_ANSWER':
+    case 'PRICES':
+    case 'LISTING':
+    case 'CATALOGUE':
+    case 'QUESTION':
+      return 'BROWSING';
+    case 'ASK_WHICH':
+    case 'ELICIT':
+    case 'RECOMMEND':
+      return 'DECIDING';
+    case 'BASKET_ADDED':
+    case 'ORDER_DRAFT':
+    case 'ORDER_AMENDED':
+    case 'BASKET_REVIEW':
+      return 'BUYING';
+    case 'AWAITING_PAYMENT':
+    case 'OFFER_ANSWER':
+    case 'ADDRESS_SAVED':
+    case 'PAYMENT_NOT_SEEN':
+    case 'ORDER_CONFIRMED':
+      return 'CHECKOUT';
+    case 'ORDER_STATUS':
+    case 'ACCOUNT':
+    case 'NO_ORDERS':
+      return 'ENQUIRY';
+    default:
+      return 'GENERAL';
+  }
+}
+
+const MODE_NOTE: Record<Mode, string> = {
+  OPENING:
+    'They are at the start of the call. Make them comfortable and find'
+    + ' out what they came for. Do not sell anything yet.',
+  BROWSING:
+    'They are LOOKING, not buying. Share what you know generously -- a'
+    + ' useful detail, an offer to show more -- and do NOT ask how much'
+    + ' to send. Asking about a product is not adding it to a basket,'
+    + ' and pushing quantity at a browser is what a machine does.',
+  DECIDING:
+    'They are choosing between things. Help them decide like someone who'
+    + ' knows the goods -- a useful comparison, a gentle question about'
+    + ' what matters to them -- not a menu of options.',
+  BUYING:
+    'Something went in the bag. Confirm it warmly, and it is natural to'
+    + ' ask what else they need or whether that is everything.',
+  CHECKOUT:
+    'Money and delivery are on the table. Be clear and reassuring;'
+    + ' summarise naturally and make the next step obvious.',
+  ENQUIRY:
+    'You have looked up their order and are explaining what you found,'
+    + ' the way a person reads a record back to a customer who is'
+    + ' wondering where their things are.',
+  GENERAL: '',
+};
+
 export interface Delivery {
   moment: Moment;
+  mode: Mode;
   structure: Structure;
   energy: Energy;
   /** openings the shop has already used in this conversation */
@@ -246,6 +329,7 @@ export function direct(facts: Facts, recent: Turn[], buyerName: string): Deliver
   const moment = momentOf(facts);
   return {
     moment,
+    mode: modeOf(facts),
     structure: REACTS.has(moment)
       ? 'REACT_THEN_INFO'
       : OFFERS.has(moment)
@@ -314,6 +398,7 @@ const ENERGY_NOTE: Record<Energy, string> = {
 export function deliveryBrief(d: Delivery, buyerName: string): string {
   const lines = [
     'THIS MOMENT:',
+    ...(MODE_NOTE[d.mode] ? [`- ${MODE_NOTE[d.mode]}`] : []),
     `- ${MOMENT_NOTE[d.moment]}`,
     `- ${STRUCTURE_NOTE[d.structure]}`,
     `- ${ENERGY_NOTE[d.energy]}`,

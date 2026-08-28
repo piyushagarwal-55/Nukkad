@@ -93,10 +93,10 @@ function variantsFor(f: Facts, named: string | null): Variant[] {
        * person would actually say across a counter.
        */
       return [
-        { opening: 'ji', text: `Ji, ${what} rakh diya hai aapke liye. Aur kuch chahiye aapko?` },
-        { opening: 'ho', text: `Ho gaya, ${what} likh liya hai. Bataiye, aur kya bhejun?` },
-        { opening: what.split(' ')[0]!.toLowerCase(), text: `${what} daal diya hai bag mein. Kuch aur bhi chahiye kya?` },
-        { opening: 'theek', text: `Theek hai ji, ${what} note kar liya hai. Aur bataiye kya chahiye.` },
+        { opening: 'ji', text: `Ji, ${what} rakh diya hai aapke liye. Aur kuch groceries bhi leni hain, ya filhaal itna hi?` },
+        { opening: 'ho', text: `Ho gaya, ${what} likh liya hai order mein. Bataiye, aur kya kya chahiye aapko?` },
+        { opening: what.split(' ')[0]!.toLowerCase(), text: `${what} daal diya hai bag mein. Aur kuch bhi chahiye ho to bolte jaiye.` },
+        { opening: 'theek', text: `Theek hai ji, ${what} note kar liya hai. Aur kuch lena ho to bata dijiye.` },
       ];
     }
 
@@ -121,10 +121,17 @@ function variantsFor(f: Facts, named: string | null): Variant[] {
      */
     case 'STOCK_ANSWER': {
       if (!f.inStock) return [];
+      /**
+       * BROWSING, NOT BUYING. These used to end in "Kitna bhejun?" --
+       * the quantity push at somebody who only asked what the shelf
+       * holds, which is the single most machine-like habit this shop
+       * had. A stock answer offers MORE INFORMATION, not a transaction;
+       * the customer says when they want it in the bag.
+       */
       return [
-        { opening: 'ji', text: `Ji haan, ${f.name} hai humare paas, ${f.price} ka. Kitna bhejun aapko?` },
-        { opening: 'hai', text: `Hai ji bilkul, ${f.name} ${f.price} ka mil jayega. Kitna chahiye?` },
-        { opening: f.name.split(' ')[0]!.toLowerCase(), text: `${f.name} available hai, ${f.price} ka. Bataiye kitna dun?` },
+        { opening: 'ji', text: `Ji haan, ${f.name} hai humare paas, ${f.price} ka. Aap chahein to aur options bhi bata doon?` },
+        { opening: 'hai', text: `Hai ji bilkul, ${f.name} ${f.price} ka mil jayega. Koi aur cheez bhi dekhni ho to bataiye.` },
+        { opening: f.name.split(' ')[0]!.toLowerCase(), text: `${f.name} available hai ji, ${f.price} ka. Aur kuch jaanna ho iske baare mein to pooch lijiye.` },
       ];
     }
 
