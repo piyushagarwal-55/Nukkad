@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { span } from '../telemetry/span.js';
+import { routeOf } from './routing.js';
 import { prisma } from '@nukkad/db';
 import { rupeeLabel } from '@nukkad/shared';
 import type { InboundMessage, OutboundMessage, ResolvedLine, Sku } from '@nukkad/shared';
@@ -23,7 +26,7 @@ import { compose, composeStream, type Facts, type Swap, type PackAsk } from './c
 import { retrieveKb } from '../kb/retrieve.js';
 import type { Prior } from '../resolver/prior.js';
 import {
-  loadConvo, save, flatten, isStale,
+  findConvo, loadConvo, save, flatten, isStale,
   type Convo, type Pending, type PendingLine, type OrderMeta,
 } from './state.js';
 import * as copy from './messages.js';
@@ -214,9 +217,32 @@ export async function handle(
    * kiranas, and you would silently serve them the wrong catalogue, the
    * wrong prices and the wrong stock.
    */
-  let kirana = await prisma.kirana.findFirst({
-    where: { OR: [{ whatsappNumber: msg.recipientId }, { phone: msg.recipientId }] },
-  });
+  /**
+   * ROUTING IN ONE ROUND TRIP, not three.
+   *
+   * These three questions -- which shop, which household, what were we
+   * talking about -- were asked one after another because each looked
+   * like it needed the answer before it. Measured at 595ms before any
+   * work began, on a link with a ~200ms floor to ap-northeast-2, which is
+   * a fifth of a voice turn spent finding out who is speaking.
+   *
+   * Only the second dependency was real, and only in the rare case. The
+   * household lookup by phone alone answers the common case outright --
+   * it comes back with its kirana attached, so if that kirana is the one
+   * the message was sent to, no further query is needed. The precise
+   * per-tenant lookup below runs only when it is not, which means only
+   * when one person shops at two kiranas.
+   *
+   * The conversation never depended on either. It is keyed by channel and
+   * phone number, both of which are on the inbound message.
+   */
+  const [{ kirana: kiranaByNumber, household: knownHousehold }, convoRow] =
+    await span('route', () => Promise.all([
+      routeOf(msg.senderId, msg.recipientId),
+      findConvo(msg.channel, msg.senderId),
+    ]));
+
+  let kirana = kiranaByNumber;
 
   /**
    * SANDBOX FALLBACK, and it is a fallback for one specific reason.
@@ -232,11 +258,7 @@ export async function handle(
    * numbers exist.
    */
   if (!kirana && msg.recipientId === SANDBOX_NUMBER) {
-    const known = await prisma.household.findFirst({
-      where: { phone: msg.senderId },
-      include: { kirana: true },
-    });
-    kirana = known?.kirana ?? null;
+    kirana = knownHousehold?.kirana ?? null;
   }
 
   if (!kirana) {
@@ -245,9 +267,16 @@ export async function handle(
     return [];
   }
 
-  const household = await prisma.household.findUnique({
-    where: { kiranaId_phone: { kiranaId: kirana.id, phone: msg.senderId } },
-  });
+  /**
+   * The prefetch answers this outright unless the customer shops at more
+   * than one kirana, which is the only case that can put a household on
+   * this phone number under a DIFFERENT shop.
+   */
+  const household = knownHousehold?.kiranaId === kirana.id
+    ? knownHousehold
+    : await span('db.household.exact', () => prisma.household.findUnique({
+        where: { kiranaId_phone: { kiranaId: kirana!.id, phone: msg.senderId } },
+      }));
 
   if (!household) {
     // No conversation row for an unknown number, so this one reply is
@@ -259,7 +288,7 @@ export async function handle(
     );
   }
 
-  const convo = await loadConvo(msg.channel, msg.senderId, household.id, kirana.id);
+  const convo = await span('db.convo', () => loadConvo(msg.channel, msg.senderId, household.id, kirana!.id, convoRow));
 
   // ---- 1. get text, from whichever modality arrived -------------------
   let text = msg.text ?? '';
@@ -293,7 +322,7 @@ export async function handle(
     },
   };
 
-  const out = await turn(ctx, msg);
+  const out = await span('turn', () => turn(ctx, msg));
 
   /**
    * ANNOTATE THE INBOUND MESSAGE, two axes.
@@ -308,11 +337,29 @@ export async function handle(
    * ordering turns into a question, whether elicitation ever converts --
    * and answer it from production rather than from a guess.
    */
-  if (ctx.annotation) {
-    await prisma.message.updateMany({
-      where: { externalId: msg.externalId },
-      data: ctx.annotation,
-    });
+  /**
+   * SCOPED BY CONVERSATION, AND NOT WAITED FOR.
+   *
+   * Two bugs in one line. The where clause named externalId alone, and
+   * the only index covering it is @@unique([conversationId, externalId])
+   * -- a composite cannot serve a lookup on its second column, so this
+   * was a sequential scan of every message ever sent, measured at 637ms
+   * and growing. Adding the conversation makes it an index hit, and makes
+   * it correct: two transports can mint the same external id.
+   *
+   * And nothing in this turn reads it. It is annotation for later
+   * analysis, so waiting for it only delays the reply. Errors are logged
+   * rather than thrown, because a missing label is not worth failing a
+   * conversation over.
+   */
+  const annotation = ctx.annotation;
+  if (annotation) {
+    void prisma.message
+      .updateMany({
+        where: { conversationId: convo.id, externalId: msg.externalId },
+        data: annotation,
+      })
+      .catch((err) => console.error('annotate failed', err));
   }
 
   /**
@@ -324,7 +371,7 @@ export async function handle(
    */
   if (text.trim()) convo.recent.push({ role: 'user', text });
   for (const o of out) convo.recent.push({ role: 'shop', text: o.text });
-  await save(convo);
+  await span('db.save', () => save(convo, { householdId: household.id, kiranaId: kirana!.id }));
 
   return out;
 }
@@ -1611,8 +1658,34 @@ async function writeOrder(ctx: Ctx): Promise<OutboundMessage[]> {
   const lines = ctx.convo.basket;
   const total = lines.reduce((sum, l) => sum + l.unitPricePaise * l.quantity, 0);
 
-  const order = await prisma.order.create({
+  /**
+   * THE ID IS MINTED HERE, so the row and the payment link can be made at
+   * the same time.
+   *
+   * These were sequential for the obvious reason -- Razorpay needs a
+   * reference and the reference was the row's id, so the row had to exist
+   * first. Measured at 1561ms for the write and 1488ms for the link, back
+   * to back, in the one turn where the customer is most likely to be
+   * watching: the one where they are about to pay.
+   *
+   * Nothing about a cuid requires a database to produce it. Generating it
+   * up front makes the two independent, and checkout costs the slower of
+   * them instead of the sum.
+   *
+   * IF THE WRITE FAILS after the link was created, the link is orphaned.
+   * That is the right way round: an unpaid link nobody has seen expires
+   * on its own, and settle.ts looks orders up by id, so a webhook for a
+   * row that does not exist finds nothing and does nothing. The reverse
+   * -- a row with no way to pay it -- is the case that needs a human.
+   */
+  // any unique string is a valid id here; the schema's cuid() default only
+  // applies when one is not supplied
+  const orderId = randomUUID();
+
+  const [order, link] = await Promise.all([
+    span('db.order.create', () => prisma.order.create({
     data: {
+      id: orderId,
       kiranaId: ctx.kiranaId,
       householdId: ctx.householdId,
       // straight to CONFIRMED: the customer just said so, and there is no
@@ -1642,7 +1715,9 @@ async function writeOrder(ctx: Ctx): Promise<OutboundMessage[]> {
         })),
       },
     },
-  });
+  })),
+    span('rzp.link', () => paymentLinkFor(ctx, orderId, Math.round(total))),
+  ]);
 
   ctx.convo.pending = null;
 
@@ -1657,7 +1732,6 @@ async function writeOrder(ctx: Ctx): Promise<OutboundMessage[]> {
    * The basket is kept for the same reason: a customer who does not pay
    * still has their shopping when they come back.
    */
-  const link = await paymentLinkFor(ctx, order.id, Math.round(total));
 
   /**
    * The link and the total are appended by CODE, like every other figure

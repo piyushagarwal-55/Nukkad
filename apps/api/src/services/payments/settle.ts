@@ -36,6 +36,15 @@ export interface Settlement {
   /** E.164, where the bill should go */
   to: string;
   text: string;
+  /**
+   * Lines the shelf could not cover, after the money had already landed.
+   *
+   * Almost always empty. When it is not, somebody has paid for something
+   * this shop cannot hand over, and the caller must say so rather than
+   * quietly deliver a smaller bag. See the guarded decrement below for
+   * how two customers end up buying the same last packet.
+   */
+  short: Array<{ skuId: string; name: string; quantity: number }>;
 }
 
 /**
@@ -108,13 +117,57 @@ export async function settle(orderId: string, paidPaise: number): Promise<Settle
    * Decrementing when the link was sent would let anyone empty a shop's
    * shelf by starting checkouts they never pay for.
    */
-  for (const line of order.lines) {
-    if (!line.skuId) continue;
-    await prisma.stock.updateMany({
-      where: { skuId: line.skuId },
-      data: { quantity: { decrement: line.quantity } },
-    });
-  }
+  /**
+   * GUARDED, AND IN ONE TRANSACTION. Both halves were bugs.
+   *
+   * THE RACE. A bare decrement cannot fail, so it cannot refuse. Stock is
+   * checked when a line goes into a basket -- against a cached map, sixty
+   * seconds stale by design -- and taken here, when the money lands. Two
+   * households can sit between those two moments at the same time: both
+   * are told the last bag is available, both check out, both pay, and the
+   * shelf goes to minus one. Nobody notices until a delivery is short,
+   * which is the worst possible time to find out.
+   *
+   * The `gte` makes the write refuse instead. updateMany reports how many
+   * rows it changed, so a count of zero IS the answer to "was there
+   * enough" -- and it is the database answering, atomically, rather than
+   * a read followed by a hopeful write.
+   *
+   * THE ROUND TRIPS. This looped with an await inside it, so a five-line
+   * order was five sequential trips to a database 3,000km away. They do
+   * not depend on each other; the only reason they were serial is that
+   * the loop was written before anyone measured one.
+   */
+  const stocked = order.lines.filter((l) => l.skuId);
+
+  const results = await prisma.$transaction(
+    stocked.map((line) =>
+      prisma.stock.updateMany({
+        where: { skuId: line.skuId!, quantity: { gte: line.quantity } },
+        data: { quantity: { decrement: line.quantity } },
+      }),
+    ),
+  );
+
+  /**
+   * WHAT COULD NOT BE TAKEN, and it must not be swallowed.
+   *
+   * The guard above stops the shelf going negative; it does not stop the
+   * customer having paid. Silently shipping one fewer bag is how a shop
+   * loses a regular. So the shortfall is recorded on the order and handed
+   * back to the caller, whose job it is to tell somebody -- see the
+   * `short` field on Settlement.
+   */
+  const short = stocked
+    .filter((_, i) => results[i]?.count === 0)
+    .map((l) => ({ skuId: l.skuId!, name: l.sku?.name ?? l.sourceText, quantity: l.quantity }));
+
+  /**
+   * The order stays CONFIRMED, because it is: the money landed. What did
+   * not land is a bag, and that is a fulfilment problem for a human, not
+   * a payment problem for the state machine.
+   */
+  if (short.length) console.error({ orderId, short }, 'paid order could not be fully stocked');
 
   /**
    * The two caches that just went stale, cleared at the moment they did.
@@ -134,7 +187,7 @@ export async function settle(orderId: string, paidPaise: number): Promise<Settle
     data: { contextJson: emptyBasket() },
   });
 
-  return { to: order.household.phone, text: bill(order) };
+  return { to: order.household.phone, text: bill(order), short };
 }
 
 /** keeps the transcript and the pending question, drops only the basket */

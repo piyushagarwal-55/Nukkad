@@ -3,6 +3,7 @@ import { groq } from '../../lib/groq.js';
 import { env, hasSarvam } from '../../config/env.js';
 import { romanise, isRoman } from '../lang/romanise.js';
 import { transcribeShunya } from './shunya.js';
+import { span } from '../telemetry/span.js';
 
 export interface Transcription {
   /** Roman, ready for the resolver */
@@ -47,11 +48,11 @@ export interface Transcription {
  * milliseconds as indicative and the ORDER as the finding.
  */
 export async function transcribe(path: string, fast = false): Promise<Transcription> {
-  return (
+  return span('asr', async () => (
     (await transcribeSarvam(path)) ??
     (await transcribeShunya(path)) ??
     (await transcribeGroq(path, fast))
-  );
+  ), (t) => t.engine);
 }
 
 export async function transcribeGroq(path: string, fast = false): Promise<Transcription> {

@@ -6,6 +6,7 @@ import { toWav16k } from '../asr/audio.js';
 import { speak } from './tts.js';
 import { prisma } from '@nukkad/db';
 import { transcribe } from '../asr/index.js';
+import { warm } from '../conversation/routing.js';
 
 /**
  * ONE VOICE TURN, with no telephony anywhere in it.
@@ -80,6 +81,54 @@ function speakable(reply: string): string {
   return (prose ?? reply).trim();
 }
 
+/**
+ * THE NOISE A PERSON MAKES WHILE THINKING.
+ *
+ * Measured: first sound at 3990ms, against a turn total of 4152ms. The
+ * composer streams sentence by sentence and it buys almost nothing,
+ * because a short reply comes back from the model in one or two chunks --
+ * the sentences all finish within a few tens of milliseconds of each
+ * other. Streaming was the right shape and the wrong bottleneck.
+ *
+ * What actually costs the caller is the structure of the turn: the ear,
+ * then a policy call, then a resolver, then a composer, and only then a
+ * mouth. Nothing can be said until all of it is done, so the line is
+ * silent for four seconds. On a phone, four seconds of silence is a
+ * dropped call -- people say "hello?" and start again.
+ *
+ * So the shop makes the sound a shopkeeper makes when they have heard you
+ * and are reaching for the shelf. It carries no information, which is
+ * exactly why it is safe: it cannot be wrong about a price, a product or
+ * a payment, and every rule about what this system may claim is untouched
+ * by it.
+ *
+ * ONLY IF THE TURN IS ACTUALLY SLOW. A filler on a fast turn is worse
+ * than none -- it delays the real answer to say nothing. The timer is
+ * cancelled the instant a real sentence appears, so a quick turn never
+ * hears it, which is also how people behave: you only say "haan..." when
+ * you need the moment.
+ *
+ * VOICE ONLY. WhatsApp has a typing indicator and a message that arrives
+ * when it arrives; a bubble saying "ji" followed by a bubble with the
+ * answer is clutter, not warmth.
+ */
+const THINKING_AFTER_MS = 700;
+
+const FILLERS = ['Ji...', 'Haan ji...', 'Ek second...', 'Achha...'];
+
+function fillerFor(text: string): string {
+  /**
+   * Chosen from what they SAID rather than at random, so the same
+   * question twice gets the same noise and a demo is reproducible. Random
+   * would also mean Math.random(), which is banned in workflow scripts
+   * for the same reason it is a bad idea here: nothing that has to be
+   * replayed should roll dice.
+   */
+  let h = 0;
+  for (const ch of text) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return FILLERS[h % FILLERS.length]!;
+}
+
 export async function voiceTurn(
   audioIn: Buffer,
   opts: {
@@ -125,20 +174,65 @@ export async function voiceTurn(
    * in the whole trace: nearly every voice bug is visible the moment you
    * can see what the ear actually got.
    */
-  const heard = await transcribe(wav);
+  /**
+   * THE EAR AND THE LOOKUPS AT THE SAME TIME.
+   *
+   * Transcription is ~760ms during which nothing else happens, and
+   * everything the next step needs -- which shop, which household, the
+   * catalogue, the stock map, the reorder prior -- is knowable from the
+   * phone numbers alone, which arrived with the audio. Doing them in
+   * series was about a second of a voice turn spent twice.
+   *
+   * warm() never throws and never blocks the real path: if it loses the
+   * race, handle() does the work itself exactly as before.
+   */
+  const [heard] = await Promise.all([
+    transcribe(wav),
+    warm(opts.phone, opts.shopPhone),
+  ]);
 
-  const replies = await handle(
-    {
-      channel: 'sim',
-      senderId: opts.phone,
-      recipientId: opts.shopPhone,
-      text: heard.text,
-      media: [],
-      externalId: `voice_${randomUUID()}`,
-      receivedAt: new Date(),
-    },
-    { onSentence: opts.onSentence },
-  );
+  /**
+   * The filler races the composer, and loses on any turn that is quick.
+   * Wrapping onSentence rather than sitting beside it means one place
+   * decides whether anything has been said yet, so the two can never both
+   * think they are first.
+   */
+  let spokenYet = false;
+  const relay = opts.onSentence;
+  const onSentence = relay
+    ? async (sentence: string) => {
+        spokenYet = true;
+        clearTimeout(thinking);
+        await relay(sentence);
+      }
+    : undefined;
+
+  const thinking = relay
+    ? setTimeout(() => {
+        if (!spokenYet && heard.text.trim()) {
+          spokenYet = true;
+          void relay(fillerFor(heard.text));
+        }
+      }, THINKING_AFTER_MS)
+    : undefined;
+
+  let replies;
+  try {
+    replies = await handle(
+      {
+        channel: 'sim',
+        senderId: opts.phone,
+        recipientId: opts.shopPhone,
+        text: heard.text,
+        media: [],
+        externalId: `voice_${randomUUID()}`,
+        receivedAt: new Date(),
+      },
+      { onSentence },
+    );
+  } finally {
+    clearTimeout(thinking);
+  }
 
   const reply = replies.map((r) => r.text).join('\n') || '';
   const spoken = speakable(reply);

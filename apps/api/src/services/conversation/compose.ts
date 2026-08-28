@@ -3,6 +3,7 @@ import { groq } from '../../lib/groq.js';
 import { env } from '../../config/env.js';
 import type { Turn } from './state.js';
 import { direct, deliveryBrief } from './director.js';
+import { span } from '../telemetry/span.js';
 
 /**
  * THE VOICE OF THE SHOP.
@@ -679,7 +680,7 @@ export async function compose(input: ComposeInput): Promise<string> {
   const allowed = allowedDigits(input.facts);
 
   try {
-    const res = await groq.chat.completions.create({
+    const res = await span('llm.compose', () => groq.chat.completions.create({
       model: env.GROQ_LLM_MODEL_FAST,
       // Some warmth is the entire point, so this is not zero. It is also
       // not high: the model is choosing phrasing, not choosing facts.
@@ -689,7 +690,7 @@ export async function compose(input: ComposeInput): Promise<string> {
         { role: 'system', content: SYSTEM },
         { role: 'user', content: user },
       ],
-    });
+    }));
     const parsed = schema.safeParse(JSON.parse(res.choices[0]?.message?.content ?? '{}'));
     if (parsed.success) {
       const clean = sanitise(parsed.data.reply);
@@ -758,7 +759,7 @@ export async function composeStream(
   };
 
   try {
-    const stream = await groq.chat.completions.create({
+    const stream = await span('llm.compose.stream', () => groq.chat.completions.create({
       model: env.GROQ_LLM_MODEL_FAST,
       temperature: 0.6,
       stream: true,
@@ -766,7 +767,7 @@ export async function composeStream(
         { role: 'system', content: SYSTEM.replace(RETURN_JSON, RETURN_PROSE) },
         { role: 'user', content: user },
       ],
-    });
+    }));
 
     for await (const part of stream) {
       const delta = part.choices[0]?.delta?.content;

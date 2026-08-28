@@ -1,3 +1,4 @@
+import { span } from '../telemetry/span.js';
 import { env } from '../../config/env.js';
 
 /**
@@ -38,6 +39,8 @@ export interface Spoken {
  */
 export async function speak(text: string): Promise<Spoken | null> {
   if (!env.SARVAM_API_KEY || !text.trim()) return null;
+  // captured so the narrowing survives into the span closure below
+  const key = env.SARVAM_API_KEY;
 
   const speaker = SPEAKERS_V3.includes(env.SARVAM_TTS_SPEAKER)
     ? env.SARVAM_TTS_SPEAKER
@@ -45,10 +48,10 @@ export async function speak(text: string): Promise<Spoken | null> {
 
   const t0 = Date.now();
   try {
-    const res = await fetch(`${env.SARVAM_BASE_URL}/text-to-speech`, {
+    const res = await span('tts', () => fetch(`${env.SARVAM_BASE_URL}/text-to-speech`, {
       method: 'POST',
       headers: {
-        'api-subscription-key': env.SARVAM_API_KEY,
+        'api-subscription-key': key,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -62,7 +65,7 @@ export async function speak(text: string): Promise<Spoken | null> {
         speaker,
         model: env.SARVAM_TTS_MODEL,
       }),
-    });
+    }));
 
     if (!res.ok) return null;
 

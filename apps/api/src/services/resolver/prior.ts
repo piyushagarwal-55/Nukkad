@@ -1,4 +1,5 @@
 import { prisma } from '@nukkad/db';
+import { mark, span } from '../telemetry/span.js';
 
 /**
  * The household's own reorder history.
@@ -37,9 +38,12 @@ export function invalidatePrior(householdId?: string): void {
 
 export async function buildPrior(householdId: string): Promise<Prior> {
   const hit = cache.get(householdId);
-  if (hit && Date.now() - hit.loadedAt < TTL_MS) return hit.prior;
+  if (hit && Date.now() - hit.loadedAt < TTL_MS) {
+    mark('prior', 'hit');
+    return hit.prior;
+  }
 
-  return cache.set(householdId, { prior: await load(householdId), loadedAt: Date.now() })
+  return cache.set(householdId, { prior: await span('db.prior', () => load(householdId)), loadedAt: Date.now() })
     .get(householdId)!.prior;
 }
 

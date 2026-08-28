@@ -200,21 +200,8 @@ interface Stored {
  * inbound messages off for idempotency, and the simulator never goes
  * through the route at all. Both paths must work.
  */
-export async function loadConvo(
-  channel: ChannelId,
-  peerPhone: string,
-  householdId: string,
-  kiranaId: string,
-): Promise<Convo> {
-  const row = await prisma.conversation.upsert({
-    where: { channel_peerPhone: { channel, peerPhone } },
-    create: { channel, peerPhone, partyRole: 'HOUSEHOLD', householdId, kiranaId },
-    // backfilled on every turn: the route creates this row before anyone
-    // knows which shop or household the number belongs to
-    update: { householdId, kiranaId },
-    select: { id: true, contextJson: true },
-  });
-
+/** the stored blob unpacked, with the empty conversation as the default */
+export function hydrate(row: { id: string; contextJson: unknown }): Convo {
   const stored = (row.contextJson as Stored | null) ?? null;
   return {
     id: row.id,
@@ -223,6 +210,47 @@ export async function loadConvo(
     basket: stored?.basket ?? [],
     lastNamed: stored?.lastNamed ?? [],
   };
+}
+
+/** the read on its own, so it can be issued alongside the routing queries */
+export function findConvo(channel: ChannelId, peerPhone: string) {
+  return prisma.conversation.findUnique({
+    where: { channel_peerPhone: { channel, peerPhone } },
+    select: { id: true, contextJson: true },
+  });
+}
+
+/**
+ * PREFETCHED ON THE HOT PATH, upserted only when there is nothing to
+ * prefetch.
+ *
+ * This used to be an unconditional upsert, and an upsert cannot be issued
+ * in parallel with the queries that produce its own arguments -- it needs
+ * householdId and kiranaId, which is what made the first three database
+ * calls of every turn strictly sequential. Measured at 595ms of routing
+ * before a single useful thing happened, on a connection with a ~200ms
+ * floor to ap-northeast-2.
+ *
+ * Splitting the read out lets all three go at once. The backfill the
+ * upsert existed for has moved into save(), which was already writing
+ * this row at the end of the turn, so it costs nothing at all now.
+ */
+export async function loadConvo(
+  channel: ChannelId,
+  peerPhone: string,
+  householdId: string,
+  kiranaId: string,
+  prefetched?: { id: string; contextJson: unknown } | null,
+): Promise<Convo> {
+  if (prefetched) return hydrate(prefetched);
+
+  const row = await prisma.conversation.upsert({
+    where: { channel_peerPhone: { channel, peerPhone } },
+    create: { channel, peerPhone, partyRole: 'HOUSEHOLD', householdId, kiranaId },
+    update: { householdId, kiranaId },
+    select: { id: true, contextJson: true },
+  });
+  return hydrate(row);
 }
 
 type StateName =
@@ -240,7 +268,17 @@ const STATE_OF: Record<Pending['kind'], StateName> = {
  * The recent transcript is trimmed here rather than at every append, so a
  * long conversation cannot grow contextJson without bound.
  */
-export async function save(convo: Convo): Promise<void> {
+export async function save(
+  convo: Convo,
+  /**
+   * Carried so the row can be attributed on the way out. The Twilio route
+   * creates a conversation before anyone knows which shop or household the
+   * number belongs to, so somebody has to fill those in -- it used to be
+   * the upsert in loadConvo, at the cost of making the read sequential.
+   * Doing it here is free: this write was always happening.
+   */
+  owner?: { householdId: string; kiranaId: string },
+): Promise<void> {
   const stored: Stored = {
     pending: convo.pending,
     recent: convo.recent.slice(-RECENT_MAX),
@@ -252,6 +290,7 @@ export async function save(convo: Convo): Promise<void> {
     data: {
       state: convo.pending ? STATE_OF[convo.pending.kind] : 'IDLE',
       contextJson: stored as never,
+      ...(owner ?? {}),
     },
   });
 }

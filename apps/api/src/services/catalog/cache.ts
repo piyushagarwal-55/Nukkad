@@ -1,3 +1,4 @@
+import { mark, span } from '../telemetry/span.js';
 import { prisma } from '@nukkad/db';
 import type { Sku } from '@nukkad/shared';
 
@@ -15,12 +16,15 @@ const TTL_MS = 5 * 60_000;
 
 export async function getCatalog(kiranaId: string, force = false): Promise<Sku[]> {
   const hit = cache.get(kiranaId);
-  if (!force && hit && Date.now() - hit.loadedAt < TTL_MS) return hit.skus;
+  if (!force && hit && Date.now() - hit.loadedAt < TTL_MS) {
+    mark('catalog', 'hit');
+    return hit.skus;
+  }
 
-  const rows = await prisma.sku.findMany({
+  const rows = await span('db.catalog', () => prisma.sku.findMany({
     where: { kiranaId, active: true },
     include: { stock: true },
-  });
+  }));
 
   const skus: Sku[] = rows.map((r) => ({
     id: r.id,
@@ -63,9 +67,12 @@ const STOCK_TTL_MS = 10_000;
 
 export async function getStockMap(kiranaId: string): Promise<Map<string, number>> {
   const hit = stockCache.get(kiranaId);
-  if (hit && Date.now() - hit.loadedAt < STOCK_TTL_MS) return hit.map;
+  if (hit && Date.now() - hit.loadedAt < STOCK_TTL_MS) {
+    mark('stock', 'hit');
+    return hit.map;
+  }
 
-  const rows = await prisma.stock.findMany({ where: { sku: { kiranaId } } });
+  const rows = await span('db.stock', () => prisma.stock.findMany({ where: { sku: { kiranaId } } }));
   const map = new Map(rows.map((r) => [r.skuId, r.quantity]));
   stockCache.set(kiranaId, { map, loadedAt: Date.now() });
   return map;

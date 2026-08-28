@@ -18,7 +18,8 @@
     "voice": "dotenv -e ../../.env -- tsx src/scripts/voice.ts",
     "backfill:subnames": "dotenv -e ../../.env -- tsx src/scripts/backfill-subnames.ts",
     "backfill:transcripts": "dotenv -e ../../.env -- tsx src/scripts/backfill-transcripts.ts",
-    "fold": "tsx src/scripts/fold.ts"
+    "fold": "tsx src/scripts/fold.ts",
+    "latency": "dotenv -e ../../.env -- tsx src/scripts/latency.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

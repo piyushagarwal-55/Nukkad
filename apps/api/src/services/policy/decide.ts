@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { groq } from '../../lib/groq.js';
 import { env } from '../../config/env.js';
 import { maskActions } from '../resolver/action.js';
+import { span } from '../telemetry/span.js';
 
 /**
  * THE POLICY MODEL. It decides what to DO, not what was said.
@@ -236,7 +237,30 @@ export async function decide(input: PolicyInput): Promise<Decision> {
   ].filter(Boolean).join('\n');
 
   try {
-    const res = await groq.chat.completions.create({
+    const res = await span('llm.policy', () => groq.chat.completions.create({
+      /**
+       * THE BIG MODEL, AND IT STAYS. Measured, because it did not look
+       * like it should.
+       *
+       * This is a classification into a closed enum of seventeen tokens,
+       * with a validator behind it, while the composer -- which actually
+       * writes prose -- runs on the 20b. Moving this one down looked free
+       * and would have saved 400-500ms a turn.
+       *
+       * It broke two things, both silently:
+       *
+       *   "do kilo chini bhej dena"   quantity dropped, 1 x Sugar not 2 x
+       *   "mera hisaab kitna hua"     read as a catalogue browse
+       *
+       * Dialogue suite 16/17 -> 15/17. Neither failure is a phrasing
+       * difference; one puts the wrong amount in a basket and the other
+       * answers a question about money with a product list. The extra
+       * half second buys the two hardest parts of this job -- pulling a
+       * quantity off a sentence, and telling a question about an account
+       * from a question about stock.
+       *
+       * Do not "optimise" this without re-running npm run dialogue.
+       */
       model: env.GROQ_LLM_MODEL,
       // a router, not a writer: no room for invention
       temperature: 0,
@@ -245,7 +269,7 @@ export async function decide(input: PolicyInput): Promise<Decision> {
         { role: 'system', content: SYSTEM },
         { role: 'user', content: user },
       ],
-    });
+    }));
 
     const parsed = schema.safeParse(JSON.parse(res.choices[0]?.message?.content ?? '{}'));
     if (!parsed.success) return LOST;
