@@ -180,6 +180,9 @@ export async function streamRoutes(app: FastifyInstance) {
       let heard!: () => void;
       const sounded = new Promise<void>((r) => { heard = r; });
 
+      /** set when a transfer happens; consumed by the next utterance end */
+      let pauseNext = false;
+
       const mouth = openMouth({
         onAudio: (b64) => {
           if (ctrl.signal.aborted) return;
@@ -188,6 +191,17 @@ export async function streamRoutes(app: FastifyInstance) {
             heard();
           }
           send({ type: 'audio', b64 });
+        },
+        /**
+         * The utterance boundary. Audio is serialized per connection, so
+         * the first completion after a transfer is the old desk's
+         * goodbye finishing -- exactly where the pause belongs, and the
+         * only place the server can know it.
+         */
+        onDone: () => {
+          if (!pauseNext || ctrl.signal.aborted) return;
+          pauseNext = false;
+          send({ type: 'pause', ms: 650 });
         },
         onError: (message) => app.log.warn({ message }, 'tts stream'),
       });
@@ -266,6 +280,15 @@ export async function streamRoutes(app: FastifyInstance) {
              */
             onDesk: (desk: Desk) => {
               turnDesks.push(desk);
+              /**
+               * A transfer mid-turn earns a BREATH. The goodbye and the
+               * new desk's first sentence are synthesized back-to-back
+               * on one socket, which plays as one person rushing rather
+               * than two people. The flag is consumed by onDone below --
+               * Sarvam emits a completion event per flush, and the first
+               * one after a transfer is the goodbye finishing.
+               */
+              if (turnDesks.length > 1) pauseNext = true;
               mouth.setSpeaker(voiceFor(desk));
               send({ type: 'desk', desk });
             },

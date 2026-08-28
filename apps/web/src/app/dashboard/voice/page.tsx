@@ -175,6 +175,7 @@ export default function Voice() {
             | { type: 'listening' }
             | { type: 'thinking' }
             | { type: 'audio'; b64: string }
+            | { type: 'pause'; ms: number }
             | ({ type: 'turn' } & Trace)
             | { type: 'error'; message: string }
             | { type: 'ear-closed' };
@@ -190,6 +191,16 @@ export default function Voice() {
             setPhase('thinking');
           } else if (ev.type === 'audio') {
             play(ev.b64);
+          } else if (ev.type === 'pause') {
+            /**
+             * The breath in a handover: the next scheduled chunk starts
+             * this much later, so the old desk finishes, the line goes
+             * quiet for a beat, and a different voice picks up. Silence
+             * is the thing that makes the transfer audible as a transfer.
+             */
+            const ctx = speaker();
+            nextPlayTime.current =
+              Math.max(nextPlayTime.current, ctx.currentTime) + ev.ms / 1000;
           } else if (ev.type === 'turn') {
             setTurns((t) => [...t, ev]);
             setPartial('');
