@@ -3,6 +3,7 @@ import { groq } from '../../lib/groq.js';
 import { env } from '../../config/env.js';
 import type { Turn } from './state.js';
 import { direct, deliveryBrief } from './director.js';
+import { realize } from './realize.js';
 import { span } from '../telemetry/span.js';
 
 /**
@@ -674,6 +675,25 @@ function buildPrompt(input: ComposeInput): string {
 }
 
 export async function compose(input: ComposeInput): Promise<string> {
+  /**
+   * THE FAST PATH FIRST. See realize.ts: outcomes with no judgement in
+   * them are rendered from the facts rather than described to a model,
+   * which is 400-1600ms of somebody else's queue not spent turning
+   * {added:["Atta"]} into "Atta rakh diya". It returns null the moment
+   * anything needs saying rather than stating -- including when every
+   * variant has been used recently, which is how it stays out of the
+   * if/else bot this codebase deleted.
+   */
+  const fast = realize(
+    input.facts,
+    direct(input.facts, input.recent, input.buyerName),
+    input.said,
+    input.buyerName,
+  );
+  if (fast) return input.card ? `${fast}
+
+${input.card}` : fast;
+
   const user = buildPrompt(input);
 
   let reply = input.fallback;
@@ -731,6 +751,25 @@ export async function composeStream(
   input: ComposeInput,
   onSentence: (sentence: string) => void | Promise<void>,
 ): Promise<string> {
+  /**
+   * The same short circuit, and it matters more here: on the voice path
+   * this is the difference between first sound at ~2.4s and at ~1.1s,
+   * because nothing can be spoken until the first sentence exists and
+   * this one exists already.
+   */
+  const fast = realize(
+    input.facts,
+    direct(input.facts, input.recent, input.buyerName),
+    input.said,
+    input.buyerName,
+  );
+  if (fast) {
+    await onSentence(fast);
+    return input.card ? `${fast}
+
+${input.card}` : fast;
+  }
+
   const user = buildPrompt(input);
   const allowed = allowedDigits(input.facts);
 

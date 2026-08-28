@@ -6,6 +6,7 @@ import { toWav16k } from '../asr/audio.js';
 import { speak } from './tts.js';
 import { prisma } from '@nukkad/db';
 import { transcribe } from '../asr/index.js';
+import type { PolicyAction } from '../policy/decide.js';
 import { warm } from '../conversation/routing.js';
 
 /**
@@ -82,51 +83,79 @@ function speakable(reply: string): string {
 }
 
 /**
- * THE NOISE A PERSON MAKES WHILE THINKING.
+ * THE NOISE A PERSON MAKES WHILE REACHING FOR THE SHELF.
  *
- * Measured: first sound at 3990ms, against a turn total of 4152ms. The
- * composer streams sentence by sentence and it buys almost nothing,
- * because a short reply comes back from the model in one or two chunks --
- * the sentences all finish within a few tens of milliseconds of each
- * other. Streaming was the right shape and the wrong bottleneck.
+ * Measured: first sound at 3990ms against a 4152ms turn. The composer
+ * streams sentence by sentence and it buys almost nothing, because a
+ * short reply comes back from the model in one or two chunks -- the
+ * sentences all finish within tens of milliseconds of each other.
+ * Streaming was the right shape and the wrong bottleneck.
  *
- * What actually costs the caller is the structure of the turn: the ear,
- * then a policy call, then a resolver, then a composer, and only then a
- * mouth. Nothing can be said until all of it is done, so the line is
- * silent for four seconds. On a phone, four seconds of silence is a
- * dropped call -- people say "hello?" and start again.
+ * What costs the caller is the SHAPE of the turn: ear, then policy, then
+ * resolver, then composer, and only then a mouth. Nothing can be said
+ * until all of it is done, so the line is silent for four seconds, and
+ * four seconds of silence on a phone is a dropped call -- people say
+ * "hello?" and start again.
  *
- * So the shop makes the sound a shopkeeper makes when they have heard you
- * and are reaching for the shelf. It carries no information, which is
- * exactly why it is safe: it cannot be wrong about a price, a product or
- * a payment, and every rule about what this system may claim is untouched
- * by it.
+ * KEYED ON THE ACTION, not a single generic filler. "Hmm" before every
+ * turn is the tic the Response Director exists to prevent, rebuilt one
+ * layer down: a shopkeeper reaching for a bag and a shopkeeper checking
+ * a price make different noises, and the policy layer already knows
+ * which is happening ~600ms in -- see the onDecision hook.
  *
- * ONLY IF THE TURN IS ACTUALLY SLOW. A filler on a fast turn is worse
- * than none -- it delays the real answer to say nothing. The timer is
- * cancelled the instant a real sentence appears, so a quick turn never
- * hears it, which is also how people behave: you only say "haan..." when
- * you need the moment.
+ * It carries no information, which is what makes it safe. It cannot be
+ * wrong about a price, a product or a payment, and every rule about what
+ * this system may claim is untouched by it.
  *
- * VOICE ONLY. WhatsApp has a typing indicator and a message that arrives
- * when it arrives; a bubble saying "ji" followed by a bubble with the
- * answer is clutter, not warmth.
+ * SILENCE IS AN OPTION, and for the ambiguous cases it is the right one.
+ * A turn heading for "kaunsa chahiye?" should not be prefixed with a
+ * confident-sounding "karta hoon" -- the shop is about to admit it does
+ * not know, and sounding busy first makes that worse.
+ *
+ * ONLY IF THE TURN IS ACTUALLY SLOW. A reaction on a fast turn is worse
+ * than none: it delays the real answer in order to say nothing. The
+ * timer is cancelled the instant a real sentence appears, so the fast
+ * path in realize.ts -- which is most adds -- never triggers it at all.
+ *
+ * VOICE ONLY. WhatsApp has a typing indicator; a bubble saying "ji"
+ * followed by a bubble with the answer is clutter, not warmth.
  */
-const THINKING_AFTER_MS = 700;
+const REACT_AFTER_MS = 700;
 
-const FILLERS = ['Ji...', 'Haan ji...', 'Ek second...', 'Achha...'];
+const REACTIONS: Partial<Record<PolicyAction, string[]>> = {
+  ADD_EXPLICIT_PRODUCT: ['Haan, rakhta hoon...', 'Ji, likh raha hoon...'],
+  ADD_FROM_STATE: ['Haan ji, karta hoon...', 'Theek hai, rakh raha hoon...'],
+  REMOVE_EXPLICIT_PRODUCT: ['Haan, hata raha hoon...'],
+  REMOVE_FROM_STATE: ['Ji, hata deta hoon...'],
+  ANSWER_PRICE: ['Ek second, dekhta hoon...', 'Haan, rate dekh raha hoon...'],
+  ANSWER_STOCK: ['Ruko, dekhta hoon...', 'Haan, check karta hoon...'],
+  SEARCH_PRODUCT: ['Ek minute, dekhta hoon...'],
+  RECOMMEND: ['Hmm, sochne dijiye...', 'Achha, ek second...'],
+  REPEAT_LAST_ORDER: ['Haan, pichhla order nikaal raha hoon...'],
+  ACCOUNT_SUMMARY: ['Ek second, hisaab dekh raha hoon...'],
+  CHECKOUT: ['Haan ji, total nikaal raha hoon...'],
+  PAYMENT_STATUS_QUERY: ['Ek second, check karta hoon...'],
 
-function fillerFor(text: string): string {
   /**
-   * Chosen from what they SAID rather than at random, so the same
-   * question twice gets the same noise and a demo is reproducible. Random
-   * would also mean Math.random(), which is banned in workflow scripts
-   * for the same reason it is a bad idea here: nothing that has to be
-   * replayed should roll dice.
+   * Deliberately absent: CLARIFY, NOT_UNDERSTOOD, GREET,
+   * CONFIRM/REJECT_PENDING_ACTION, CANCEL_ORDER. The first two are about
+   * to ask a question, the rest are fast enough that the timer never
+   * fires. An empty entry means silence, and silence is a valid reaction.
+   */
+};
+
+function reactionFor(action: PolicyAction, said: string): string | null {
+  const options = REACTIONS[action];
+  if (!options?.length) return null;
+
+  /**
+   * Hashed off what they said rather than random, so a demo is
+   * reproducible: the same sentence twice makes the same noise, and a
+   * bug that shows up one turn in four is one nobody can hold still.
    */
   let h = 0;
-  for (const ch of text) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return FILLERS[h % FILLERS.length]!;
+  for (const ch of said) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return options[h % options.length]!;
 }
 
 export async function voiceTurn(
@@ -198,22 +227,32 @@ export async function voiceTurn(
    * think they are first.
    */
   let spokenYet = false;
+  let reacting: NodeJS.Timeout | undefined;
   const relay = opts.onSentence;
+
   const onSentence = relay
     ? async (sentence: string) => {
         spokenYet = true;
-        clearTimeout(thinking);
+        clearTimeout(reacting);
         await relay(sentence);
       }
     : undefined;
 
-  const thinking = relay
-    ? setTimeout(() => {
-        if (!spokenYet && heard.text.trim()) {
+  /**
+   * The timer starts only once the action is known, so the reaction can
+   * be the right one. That costs nothing: the policy call resolves ~600ms
+   * in and the pipeline still has the resolver and the composer to go.
+   */
+  const onDecision = relay
+    ? (action: PolicyAction) => {
+        const line = reactionFor(action, heard.text);
+        if (!line) return;
+        reacting = setTimeout(() => {
+          if (spokenYet) return;
           spokenYet = true;
-          void relay(fillerFor(heard.text));
-        }
-      }, THINKING_AFTER_MS)
+          void relay(line);
+        }, REACT_AFTER_MS);
+      }
     : undefined;
 
   let replies;
@@ -228,10 +267,10 @@ export async function voiceTurn(
         externalId: `voice_${randomUUID()}`,
         receivedAt: new Date(),
       },
-      { onSentence },
+      { onSentence, onDecision },
     );
   } finally {
-    clearTimeout(thinking);
+    clearTimeout(reacting);
   }
 
   const reply = replies.map((r) => r.text).join('\n') || '';

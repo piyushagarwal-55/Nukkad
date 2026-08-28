@@ -58,8 +58,26 @@ async function reset() {
   });
 }
 
-const totals: Array<{ say: string; ms: number; firstSound: number; spans: Span[] }> = [];
+/**
+ * REPEATED, because one pass measures the weather.
+ *
+ * Groq and Sarvam are somebody else's queue. The same turn was 1920ms on
+ * one run and 3603ms on the next with no code between them, which is the
+ * lesson the ASR bench taught when a clip scored 0/3 and then 2/3
+ * unchanged: a single number off a shared service is an anecdote, and
+ * optimising against anecdotes is how you spend a day making something
+ * slower and believing otherwise.
+ *
+ * Three passes, median per turn. The first pass also pays for the cold
+ * caches and the connection, so it is reported separately rather than
+ * folded in -- both numbers are real and only one of them is the demo.
+ */
+const RUNS = 3;
 
+const totals: Array<{ say: string; ms: number; firstSound: number; spans: Span[] }> = [];
+const byTurn = new Map<string, { ms: number[]; sound: number[] }>();
+
+for (let run = 0; run < RUNS; run++) {
 await reset();
 
 for (const say of SCRIPT) {
@@ -88,10 +106,19 @@ for (const say of SCRIPT) {
       },
     }));
 
-  totals.push({ say, ms: totalMs, firstSound, spans });
-  console.log(`\n${'='.repeat(64)}\n> ${say}`);
-  console.log(report(spans, totalMs));
-  console.log(`\n  first sentence ${firstSentenceAt}ms -> first sound ${firstSound}ms`);
+  const seen = byTurn.get(say) ?? { ms: [], sound: [] };
+  seen.ms.push(totalMs);
+  if (firstSound) seen.sound.push(firstSound);
+  byTurn.set(say, seen);
+
+  // only the first pass prints its tree; three copies is noise
+  if (run === 0) {
+    totals.push({ say, ms: totalMs, firstSound, spans });
+    console.log(`\n${'='.repeat(64)}\n> ${say}`);
+    console.log(report(spans, totalMs));
+    console.log(`\n  first sentence ${firstSentenceAt}ms -> first sound ${firstSound}ms`);
+  }
+}
 }
 
 /**
@@ -109,23 +136,25 @@ for (const line of ['Ji, atta rakh diya.', 'Aur kuch chahiye?']) {
   console.log(`  ${String(Date.now() - at).padStart(5)}ms  ${said ? `${said.audio.length} bytes` : 'FAILED'}  "${line}"`);
 }
 
-console.log(`\n${'='.repeat(64)}\nper turn`);
-console.log('   total  1st sound');
-for (const t of totals) {
-  console.log(`  ${String(t.ms).padStart(6)}ms ${String(t.firstSound).padStart(7)}ms  ${t.say}`);
-}
-
-/**
- * MEDIAN, NOT MEAN. Groq and Sarvam are somebody else's queue, and a
- * single slow turn drags an average somewhere no turn actually was --
- * the same lesson the ASR bench taught when one clip scored 0/3 and then
- * 2/3 unchanged.
- */
-const warm = totals.slice(1);
+/** median, not mean: one slow turn drags an average somewhere no turn was */
 const mid = (xs: number[]) => xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)] ?? 0;
 
-console.log(`\n  cold (first turn)  ${totals[0]!.ms}ms total, ${totals[0]!.firstSound}ms to first sound`);
-console.log(`  warm median        ${mid(warm.map((t) => t.ms))}ms total`);
-console.log(`  warm median        ${mid(warm.filter((t) => t.firstSound).map((t) => t.firstSound))}ms to FIRST SOUND`);
+console.log(`\n${'='.repeat(64)}\nmedian of ${RUNS} runs`);
+console.log('   total  1st sound   spread');
+for (const say of SCRIPT) {
+  const t = byTurn.get(say)!;
+  const lo = Math.min(...t.ms);
+  const hi = Math.max(...t.ms);
+  console.log(
+    `  ${String(mid(t.ms)).padStart(6)}ms ${String(mid(t.sound)).padStart(7)}ms`
+    + `  ${String(lo).padStart(5)}-${String(hi).padEnd(5)}  ${say}`,
+  );
+}
+
+const allSound = SCRIPT.flatMap((s) => byTurn.get(s)!.sound);
+const allMs = SCRIPT.flatMap((s) => byTurn.get(s)!.ms);
+console.log(`\n  cold (first turn of run 1)  ${totals[0]!.ms}ms total, ${totals[0]!.firstSound}ms to first sound`);
+console.log(`  median across every turn    ${mid(allMs)}ms total`);
+console.log(`  median across every turn    ${mid(allSound)}ms to FIRST SOUND`);
 
 await prisma.$disconnect();

@@ -41,7 +41,23 @@ export interface LinkArgs {
   expiresInMins?: number;
 }
 
-export async function createInvoiceLink(orderId: string, args: LinkArgs) {
+/**
+ * SPLIT IN TWO, because only one half can run early.
+ *
+ * The order row and the payment link used to be made one after the other
+ * -- 1561ms then 1488ms, back to back, in the one turn where the customer
+ * is most likely to be watching. Minting the order id ourselves makes
+ * them independent, but only as far as RAZORPAY is concerned: the invoice
+ * row has a foreign key to the order and cannot be written before it.
+ *
+ * And the invoice row is not bookkeeping. webhook.ts reconciles THROUGH
+ * it -- a payment arrives, the invoice is found by its Razorpay link id,
+ * and settle() is called with the order it points at. Skipping it, or
+ * firing it and not waiting, would mean a customer who has paid whose
+ * order never confirms. So the external call goes early and the write
+ * that depends on the order stays where it belongs.
+ */
+export async function createRazorpayLink(orderId: string, args: LinkArgs) {
   const referenceId = `nukkad_${randomUUID().slice(0, 18)}`;
 
   const link = await razorpay.paymentLink.create({
@@ -62,17 +78,38 @@ export async function createInvoiceLink(orderId: string, args: LinkArgs) {
     notes: { orderId, source: 'nukkad' },
   });
 
-  const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+  return {
+    referenceId,
+    linkId: String(link.id),
+    shortUrl: String(link.short_url),
+  };
+}
 
+export type RazorpayLink = Awaited<ReturnType<typeof createRazorpayLink>>;
+
+/**
+ * The row the webhook will look this payment up by. Written once the
+ * order exists, which is the only ordering constraint left.
+ *
+ * kiranaId and householdId come from the caller rather than a re-read of
+ * the order, which used to be an extra round trip to fetch two ids the
+ * caller was already holding.
+ */
+export async function recordInvoice(
+  orderId: string,
+  owner: { kiranaId: string; householdId: string },
+  args: LinkArgs,
+  link: RazorpayLink,
+) {
   return prisma.invoice.create({
     data: {
       orderId,
-      kiranaId: order.kiranaId,
-      householdId: order.householdId,
+      kiranaId: owner.kiranaId,
+      householdId: owner.householdId,
       amountPaise: args.amountPaise,
-      referenceId,
-      razorpayLinkId: String(link.id),
-      razorpayShortUrl: String(link.short_url),
+      referenceId: link.referenceId,
+      razorpayLinkId: link.linkId,
+      razorpayShortUrl: link.shortUrl,
       acceptPartial: args.acceptPartial ?? true,
       firstMinPartialPaise: args.firstMinPartialPaise ?? null,
     },

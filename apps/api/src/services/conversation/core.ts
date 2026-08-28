@@ -19,7 +19,7 @@ import { hasVision, env } from '../../config/env.js';
 import { readAnswer } from './reply.js';
 import { resolve, pickFrom } from '../resolver/resolve.js';
 import { decide, type PolicyAction } from '../policy/decide.js';
-import { createInvoiceLink } from '../payments/razorpay.js';
+import { createRazorpayLink, recordInvoice, type RazorpayLink } from '../payments/razorpay.js';
 import { checkAndSettle } from '../payments/settle.js';
 import { maskActions } from '../resolver/action.js';
 import { compose, composeStream, type Facts, type Swap, type PackAsk } from './compose.js';
@@ -99,6 +99,7 @@ interface Ctx {
    * would just be a message sent twice.
    */
   onSentence?: (sentence: string) => void | Promise<void>;
+  onDecision?: (action: PolicyAction) => void;
 }
 
 /** say something true, in the customer's own words */
@@ -204,7 +205,18 @@ function label(f: Facts): { intent: string; goal: string } {
 
 export async function handle(
   msg: InboundMessage,
-  hooks: { onSentence?: (s: string) => void | Promise<void> } = {},
+  hooks: {
+    onSentence?: (s: string) => void | Promise<void>;
+    /**
+     * Called the instant the policy layer picks an action, which is
+     * roughly 600ms into a turn and well before there is anything to
+     * say. The voice transport uses it to choose what noise to make
+     * while the rest of the pipeline runs -- "dekhta hoon" for a
+     * question and "karta hoon" for an add are different noises, and a
+     * single generic filler becomes a tic by the third turn.
+     */
+    onDecision?: (action: PolicyAction) => void;
+  } = {},
 ): Promise<OutboundMessage[]> {
   const started = Date.now();
 
@@ -312,6 +324,7 @@ export async function handle(
     shopName: kirana.name,
     said: text,
     onSentence: hooks.onSentence,
+    onDecision: hooks.onDecision,
     meta: {
       source: audio ? 'VOICE' : 'TEXT',
       rawText: msg.text ?? null,
@@ -568,6 +581,7 @@ async function act(
     basket: ctx.convo.basket.map((l) => l.name),
   };
   const decision = await decide({ message: ctx.said, recent: ctx.convo.recent, state });
+  ctx.onDecision?.(decision.action);
 
   ctx.annotation = { intent: decision.action, goal: goalOf(decision.action) };
 
@@ -1682,7 +1696,7 @@ async function writeOrder(ctx: Ctx): Promise<OutboundMessage[]> {
   // applies when one is not supplied
   const orderId = randomUUID();
 
-  const [order, link] = await Promise.all([
+  const [order, rzp] = await Promise.all([
     span('db.order.create', () => prisma.order.create({
     data: {
       id: orderId,
@@ -1716,8 +1730,31 @@ async function writeOrder(ctx: Ctx): Promise<OutboundMessage[]> {
       },
     },
   })),
-    span('rzp.link', () => paymentLinkFor(ctx, orderId, Math.round(total))),
+    span('rzp.link', () => razorpayLinkFor(ctx, orderId, Math.round(total))),
   ]);
+
+  /**
+   * The invoice row, which the webhook reconciles through, written once
+   * the order it points at exists. Awaited on purpose: a customer who
+   * has paid against a link with no invoice row is a payment that never
+   * settles, and that is not a risk worth 200ms.
+   */
+  const link = rzp
+    ? await span('db.invoice', async () => {
+        try {
+          await recordInvoice(
+            orderId,
+            { kiranaId: ctx.kiranaId, householdId: ctx.householdId },
+            linkArgsFor(ctx, orderId, Math.round(total)),
+            rzp,
+          );
+          return rzp.shortUrl;
+        } catch {
+          // no row means no reconciliation, so do not offer the link
+          return null;
+        }
+      })
+    : null;
 
   ctx.convo.pending = null;
 
@@ -1754,17 +1791,24 @@ async function writeOrder(ctx: Ctx): Promise<OutboundMessage[]> {
  * the whole checkout because a payment provider timed out would be a
  * far worse trade.
  */
-async function paymentLinkFor(
+function linkArgsFor(ctx: Ctx, orderId: string, amountPaise: number) {
+  return {
+    amountPaise,
+    description: `Order #${orderId.slice(-6)}`,
+    customerName: ctx.buyerName,
+    customerPhone: ctx.buyerPhone,
+  };
+}
+
+/**
+ * Ask Razorpay for a link. Nothing is written here, so this can run
+ * before the order row exists -- see the note in payments/razorpay.ts.
+ */
+async function razorpayLinkFor(
   ctx: Ctx, orderId: string, amountPaise: number,
-): Promise<string | null> {
+): Promise<RazorpayLink | null> {
   try {
-    const invoice = await createInvoiceLink(orderId, {
-      amountPaise,
-      description: `Order #${orderId.slice(-6)}`,
-      customerName: ctx.buyerName,
-      customerPhone: ctx.buyerPhone,
-    });
-    return invoice.razorpayShortUrl;
+    return await createRazorpayLink(orderId, linkArgsFor(ctx, orderId, amountPaise));
   } catch {
     return null;
   }
