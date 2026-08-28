@@ -56,16 +56,16 @@ const CACHE_MAX_ENTRIES = 64;
 const cache = new Map<string, Spoken>();
 
 function remember(text: string, said: Spoken): void {
-  if (text.length > CACHE_MAX_CHARS) return;
+  if (text.length > CACHE_MAX_CHARS + 24) return;
   // oldest out first: insertion order is what Map iteration gives us
   if (cache.size >= CACHE_MAX_ENTRIES) cache.delete(cache.keys().next().value!);
   cache.set(text, said);
 }
 
-export async function speak(text: string): Promise<Spoken | null> {
+export async function speak(text: string, voice?: string): Promise<Spoken | null> {
   if (!env.SARVAM_API_KEY || !text.trim()) return null;
 
-  const hit = cache.get(text);
+  const hit = cache.get(`${voice ?? ''}|${text}`);
   if (hit) {
     mark('tts', 'hit');
     // latency reported as zero because that is what the caller experienced
@@ -75,9 +75,9 @@ export async function speak(text: string): Promise<Spoken | null> {
   // captured so the narrowing survives into the span closure below
   const key = env.SARVAM_API_KEY;
 
-  const speaker = SPEAKERS_V3.includes(env.SARVAM_TTS_SPEAKER)
+  const speaker = voice ?? (SPEAKERS_V3.includes(env.SARVAM_TTS_SPEAKER)
     ? env.SARVAM_TTS_SPEAKER
-    : 'ritu';
+    : 'ritu');
 
   const t0 = Date.now();
   try {
@@ -111,7 +111,7 @@ export async function speak(text: string): Promise<Spoken | null> {
       latencyMs: Date.now() - t0,
       speaker,
     };
-    remember(text, said);
+    remember(`${voice ?? ''}|${text}`, said);
     return said;
   } catch {
     return null;

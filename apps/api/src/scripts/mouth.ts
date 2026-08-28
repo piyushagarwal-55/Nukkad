@@ -140,4 +140,64 @@ console.log(`  batch:     ${batchMs}ms for ${said ? said.audio.length : 0} bytes
 console.log(`
   A SENTENCE BECOMES SOUND IN ${firstChunkMs - firstFlushMs}ms, against ${batchMs}ms for the whole reply`);
 
+
+
+/**
+ * THE HANDOFF, AS AUDIO. Old voice, transfer line, one config frame,
+ * new voice -- on the SAME socket.
+ *
+ * What this proves and what it cannot: it proves the protocol accepts a
+ * speaker change mid-stream without reconnecting and that audio keeps
+ * flowing after the switch, with the old-voice text flushed first. It
+ * cannot prove the two voices SOUND different -- that needs ears, not
+ * asserts. Byte-counts per phase are printed as circumstantial evidence:
+ * two runs of the same text in genuinely different voices should differ.
+ */
+console.log(`\n${'='.repeat(64)}\nSPEAKER SWITCH, same socket`);
+
+
+await new Promise<void>((done) => {
+  const at2 = Date.now();
+  let phase = 'OLD';
+  const bytesBy: Record<string, number> = { OLD: 0, NEW: 0 };
+  let chunksAfterSwitch = 0;
+
+  const m = openMouth({
+    onAudio: (b64) => {
+      const n = Buffer.from(b64, 'base64').length;
+      bytesBy[phase] = (bytesBy[phase] ?? 0) + n;
+      if (phase === 'NEW') chunksAfterSwitch++;
+      console.log(`${String(Date.now() - at2).padStart(5)}ms  audio [${phase}] ${n} bytes`);
+    },
+    onDone: () => {
+      if (phase === 'OLD') return; // first utterance finished; wait for the second
+      console.log(`\n  seller-voice bytes ${bytesBy.OLD}, checkout-voice bytes ${bytesBy.NEW}`);
+      console.log(
+        chunksAfterSwitch > 0
+          ? '  AUDIO CONTINUED AFTER THE SWITCH on the same connection, which is the point'
+          : '  no audio after the switch -- the config frame killed the stream',
+      );
+      m.close();
+      done();
+    },
+    onError: (msg) => {
+      console.error(`  ERROR ${msg}`);
+      m.close();
+      done();
+    },
+  }, { speaker: 'rahul' });
+
+  m.say('Bilkul ji, billing counter pe bhej raha hoon. ');
+  m.flush();
+
+  // the switch goes in behind the flushed text, exactly as a transfer does
+  setTimeout(() => {
+    phase = 'NEW';
+    m.setSpeaker('ritu');
+    m.say('Haan ji, aapka order mere paas aa gaya hai. Total dekh leta hoon. ');
+    m.flush();
+  }, 1200);
+
+  setTimeout(() => done(), 15_000);
+});
 process.exit(0);

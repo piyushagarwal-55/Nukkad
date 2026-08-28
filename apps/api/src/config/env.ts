@@ -69,6 +69,12 @@ const schema = z.object({
    */
   SARVAM_TTS_MODEL: z.string().default('bulbul:v3'),
   SARVAM_TTS_SPEAKER: z.string().default('ritu'),
+  // one voice per customer-facing desk, so a handoff is audible.
+  // All bulbul:v3 speakers -- same shop, different counters.
+  SARVAM_VOICE_RECEPTION: z.string().default('priya'),
+  SARVAM_VOICE_SELLER: z.string().default('rahul'),
+  SARVAM_VOICE_CHECKOUT: z.string().default('ritu'),
+  SARVAM_VOICE_ENQUIRY: z.string().default('aditya'),
   SARVAM_TTS_LANGUAGE: z.string().default('hi-IN'),
 
   // Razorpay

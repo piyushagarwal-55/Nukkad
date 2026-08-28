@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { openEar } from '../services/asr/realtime.js';
 import { handle } from '../services/conversation/core.js';
 import { openMouth } from '../services/voice/mouth.js';
+import { voiceFor } from '../services/voice/voices.js';
+import type { Desk } from '../services/policy/desks.js';
 import { warm } from '../services/conversation/routing.js';
 import { resetConvo } from '../services/conversation/state.js';
 import { randomUUID } from 'node:crypto';
@@ -239,6 +241,17 @@ export async function streamRoutes(app: FastifyInstance) {
             receivedAt: new Date(),
           },
           {
+            /**
+             * The desk's voice, switched on the open socket. At turn
+             * start this edits the config before the handshake; on a
+             * transfer it is one frame, and Sarvam flushes the old
+             * desk's goodbye in the old voice before applying it. No
+             * reconnect, no gap -- see setSpeaker in voice/mouth.ts.
+             */
+            onDesk: (desk: Desk) => {
+              mouth.setSpeaker(voiceFor(desk));
+              send({ type: 'desk', desk });
+            },
             onDecision: (chosen: SpeechAct) => {
               act = chosen;
             },

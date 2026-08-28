@@ -109,6 +109,14 @@ interface Ctx {
    */
   onSentence?: (sentence: string) => void | Promise<void>;
   onDecision?: (act: SpeechAct) => void;
+  /**
+   * Voice only: which desk's voice the NEXT sentences belong to. Fired
+   * once at turn start and again on every transfer, AFTER the transfer
+   * line has been queued -- so the old desk finishes its goodbye in its
+   * own voice and the new desk answers in another. Presentation, not
+   * authority: see voice/voices.ts.
+   */
+  onDesk?: (desk: Desk) => void;
 }
 
 /** say something true, in the customer's own words */
@@ -222,6 +230,7 @@ export async function handle(
   msg: InboundMessage,
   hooks: {
     onSentence?: (s: string) => void | Promise<void>;
+    onDesk?: (desk: Desk) => void;
     /**
      * Called the instant the policy layer picks an action, which is
      * roughly 600ms into a turn and well before there is anything to
@@ -339,6 +348,7 @@ export async function handle(
     shopName: kirana.name,
     said: text,
     onSentence: hooks.onSentence,
+    onDesk: hooks.onDesk,
     onDecision: hooks.onDecision,
     meta: {
       source: audio ? 'VOICE' : 'TEXT',
@@ -350,6 +360,7 @@ export async function handle(
     },
   };
 
+  hooks.onDesk?.(convo.desk);
   const out = await span('turn', () => turn(ctx, msg));
 
   /**
@@ -676,6 +687,8 @@ async function act(
       const line = transferLine(outcome.transfer, ctx.said);
       if (line) void ctx.onSentence(line);
     }
+    // the goodbye is queued in the old voice; everything after is the new desk
+    ctx.onDesk?.(outcome.transfer);
     ctx.handoff = handoffNoteFor(ctx.convo.desk, frame);
 
     ctx.convo.desk = outcome.transfer;

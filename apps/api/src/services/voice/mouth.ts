@@ -37,6 +37,18 @@ export interface StreamingMouth {
   say(text: string): void;
   /** synthesise whatever is buffered, now */
   flush(): void;
+  /**
+   * CHANGE WHO IS SPEAKING, on the same connection.
+   *
+   * One JSON frame, not a reconnect. Sarvam's protocol states that a
+   * config message "can be updated at any time during the WebSocket
+   * lifecycle" and that "any text currently in the buffer will be
+   * automatically flushed and processed before applying the new
+   * configuration" -- which is exactly the ordering a handoff needs:
+   * the old desk's transfer line finishes in the old voice, and the
+   * next sentence arrives in the new one. No TLS setup, no gap.
+   */
+  setSpeaker(speaker: string): void;
   close(): void;
 }
 
@@ -59,15 +71,25 @@ export interface MouthHandlers {
  * carry prosody; above about 200 it is waiting for text it could already
  * have spoken.
  */
-const CONFIG = {
-  speaker: env.SARVAM_TTS_SPEAKER,
+const BASE_CONFIG = {
   language_code: env.SARVAM_TTS_LANGUAGE,
   output_audio_codec: 'linear16',
   min_buffer_size: 40,
   max_chunk_length: 180,
 };
 
-export function openMouth(handlers: MouthHandlers): StreamingMouth {
+export function openMouth(
+  handlers: MouthHandlers,
+  opts: { speaker?: string } = {},
+): StreamingMouth {
+  /**
+   * Mutable, because the speaker can change before the socket opens: the
+   * desk is known ~150ms into a turn and the handshake takes longer, so
+   * an early setSpeaker() edits the config that will be sent on open
+   * rather than racing it.
+   */
+  let speaker = opts.speaker ?? env.SARVAM_TTS_SPEAKER;
+
   const key = env.SARVAM_API_KEY ?? '';
   const url = `${env.SARVAM_BASE_URL.replace(/^http/, 'ws')}/text-to-speech/ws`
     + `?model=${encodeURIComponent(env.SARVAM_TTS_MODEL)}&send_completion_event=true`;
@@ -98,7 +120,7 @@ export function openMouth(handlers: MouthHandlers): StreamingMouth {
   };
 
   ws.on('open', () => {
-    ws.send(JSON.stringify({ type: 'config', data: CONFIG }));
+    ws.send(JSON.stringify({ type: 'config', data: { ...BASE_CONFIG, speaker } }));
     open = true;
     for (const text of backlog.splice(0)) push(text);
     if (flushPending) {
@@ -141,6 +163,15 @@ export function openMouth(handlers: MouthHandlers): StreamingMouth {
     flush() {
       if (open && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'flush' }));
       else flushPending = true;
+    },
+    setSpeaker(next) {
+      if (next === speaker) return;
+      speaker = next;
+      // before open, the edited config goes out with the handshake;
+      // after, it is one frame and the server flushes old-voice text first
+      if (open && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'config', data: { ...BASE_CONFIG, speaker } }));
+      }
     },
     close() {
       clearInterval(keepalive);
