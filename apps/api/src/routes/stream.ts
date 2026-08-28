@@ -3,7 +3,7 @@ import { openEar } from '../services/asr/realtime.js';
 import { handle } from '../services/conversation/core.js';
 import { openMouth } from '../services/voice/mouth.js';
 import { warm } from '../services/conversation/routing.js';
-import { prisma } from '@nukkad/db';
+import { resetConvo } from '../services/conversation/state.js';
 import { randomUUID } from 'node:crypto';
 import type { PolicyAction } from '../services/policy/decide.js';
 
@@ -64,6 +64,20 @@ export async function streamRoutes(app: FastifyInstance) {
      * the page is still rendering. Idempotent and cached, so calling it
      * on every partial would be harmless -- once is simply enough.
      */
+    /**
+     * WHAT THE SHOP SAID TO FILL THE LAST SILENCE, remembered for the
+     * length of the call.
+     *
+     * Without this the filler was on every single reply -- "haan ji" as
+     * reliably as a dial tone, which is the exact tic the Response
+     * Director exists to prevent, rebuilt two layers down. A filler is
+     * only ever worth saying when it is unexpected; the moment a customer
+     * can predict it, it has stopped covering a silence and started being
+     * a verbal habit they hear instead of the words.
+     */
+    let lastFiller: string | null = null;
+    let filledLastTurn = false;
+
     let prepared = false;
     const prepare = () => {
       if (prepared) return;
@@ -161,14 +175,42 @@ export async function streamRoutes(app: FastifyInstance) {
        * 1711ms for a batch render of all of it.
        */
       let spokenYet = false;
-      let reaction: string | null = 'Haan ji, ';
+      let action: PolicyAction | null = null;
+      let filled = false;
 
+      /**
+       * THE FILLER IS FOR SILENCES, AND MOST TURNS NO LONGER HAVE ONE.
+       *
+       * At 700ms it fired on effectively every reply, because the fast
+       * path in realize.ts still needs route plus policy -- about 1.0 to
+       * 1.5 seconds -- before it has a sentence. So the threshold was
+       * below the normal case rather than above it, and a filler that
+       * happens every time is not covering anything. It is a tic.
+       *
+       * 1200ms sits above the fast path and below the composed one, so
+       * an ordinary add or price answer is simply silent for a moment
+       * and then speaks, while a turn that has to write prose gets
+       * something to sit on.
+       */
       const timer = setTimeout(() => {
-        if (spokenYet || !reaction || ctrl.signal.aborted) return;
+        if (spokenYet || ctrl.signal.aborted) return;
+
+        /**
+         * Two silences in a row get one filler, not two. Whatever the
+         * second one would have said, the customer has just heard, and
+         * hearing it again is worse than the pause it was covering.
+         */
+        if (filledLastTurn) return;
+
+        const line = fillerFor(action, lastFiller);
+        if (!line) return;
+
+        filled = true;
+        lastFiller = line;
         spokenYet = true;
-        mouth.say(reaction);
+        mouth.say(line);
         mouth.flush();
-      }, 700);
+      }, 1200);
 
       try {
         const replies = await handle(
@@ -182,22 +224,25 @@ export async function streamRoutes(app: FastifyInstance) {
             receivedAt: new Date(),
           },
           {
-            onDecision: (action: PolicyAction) => {
-              reaction = REACTIONS[action] ?? null;
+            onDecision: (chosen: PolicyAction) => {
+              action = chosen;
             },
             onSentence: (sentence) => {
               clearTimeout(timer);
               /**
-               * If the reaction has not been said yet, it is prepended
-               * to this sentence rather than spoken as its own job.
-               * "Haan ji, yeh Aashirvaad Atta hai" is one utterance with
-               * one prosodic contour; the two spoken separately are a
-               * greeting followed by a pause followed by an answer, and
-               * the pause is the thing being removed.
+               * NOTHING IS PREPENDED HERE, and the version that did is
+               * why every reply began with "haan ji".
+               *
+               * The idea was sound -- a filler merged into the front of
+               * the answer is one utterance instead of a greeting, a
+               * pause and an answer. The implementation was not: it
+               * prepended whenever the filler had not already been
+               * spoken, which on a fast turn is always. So the merge
+               * that existed to remove a gap put a greeting on replies
+               * that never had one.
                */
-              const lead = spokenYet || !reaction ? '' : reaction;
               spokenYet = true;
-              mouth.say(`${lead}${sentence} `);
+              mouth.say(`${sentence} `);
               mouth.flush();
             },
           },
@@ -225,6 +270,8 @@ export async function streamRoutes(app: FastifyInstance) {
         send({ type: 'error', message: (err as Error).message, fatal: false });
       } finally {
         clearTimeout(timer);
+        // so the next silence knows this one was already covered
+        filledLastTurn = filled;
         /**
          * Held open briefly after the last sentence, because the final
          * chunks of an utterance arrive after the text that produced
@@ -261,31 +308,54 @@ export async function streamRoutes(app: FastifyInstance) {
 
   /** the same fresh start the button page has */
   app.post('/voice/stream/reset', async () => {
-    await prisma.conversation.updateMany({
-      where: { channel: 'sim', peerPhone: HOUSEHOLD },
-      data: { state: 'IDLE', contextJson: null as never },
-    });
+    await resetConvo('sim', HOUSEHOLD);
     return { ok: true };
   });
 }
 
 /**
- * What the shop says while it is still working it out, keyed on what it
- * has decided to do. A single filler becomes a tic by the third turn;
- * CLARIFY and NOT_UNDERSTOOD get silence, because a turn about to admit
- * it does not know should not sound busy first.
+ * WHAT THE SHOP SAYS WHILE IT IS STILL WORKING IT OUT.
+ *
+ * Variants per action, because one string per branch is a template and
+ * this codebase deleted its templates for a reason. A shopkeeper
+ * reaching for a bag and one checking a price make different noises, and
+ * neither makes the same noise twice running.
+ *
+ * The empty entries are deliberate. CLARIFY and NOT_UNDERSTOOD are about
+ * to admit the shop did not follow, and sounding busy first makes that
+ * worse; GREET and the confirmations are fast enough that the timer
+ * never reaches them. An action with no entry gets silence, and silence
+ * is a valid thing to say.
  */
-const REACTIONS: Partial<Record<PolicyAction, string>> = {
-  ADD_EXPLICIT_PRODUCT: 'Haan, rakhta hoon...',
-  ADD_FROM_STATE: 'Haan ji, karta hoon...',
-  REMOVE_EXPLICIT_PRODUCT: 'Haan, hata raha hoon...',
-  REMOVE_FROM_STATE: 'Ji, hata deta hoon...',
-  ANSWER_PRICE: 'Ek second, dekhta hoon...',
-  ANSWER_STOCK: 'Ruko, dekhta hoon...',
-  SEARCH_PRODUCT: 'Ek minute, dekhta hoon...',
-  RECOMMEND: 'Hmm, sochne dijiye...',
-  REPEAT_LAST_ORDER: 'Haan, pichhla order nikaal raha hoon...',
-  ACCOUNT_SUMMARY: 'Ek second, hisaab dekh raha hoon...',
-  CHECKOUT: 'Haan ji, total nikaal raha hoon...',
-  PAYMENT_STATUS_QUERY: 'Ek second, check karta hoon...',
+const REACTIONS: Partial<Record<PolicyAction, string[]>> = {
+  ADD_EXPLICIT_PRODUCT: ['Haan, rakhta hoon...', 'Ji, likh raha hoon...'],
+  ADD_FROM_STATE: ['Haan ji, karta hoon...', 'Theek hai, rakh raha hoon...'],
+  REMOVE_EXPLICIT_PRODUCT: ['Haan, hata raha hoon...', 'Ji, nikaal deta hoon...'],
+  REMOVE_FROM_STATE: ['Ji, hata deta hoon...', 'Theek hai, nikaal raha hoon...'],
+  ANSWER_PRICE: ['Ek second, dekhta hoon...', 'Haan, rate dekh raha hoon...'],
+  ANSWER_STOCK: ['Ruko, dekhta hoon...', 'Haan, check karta hoon...'],
+  SEARCH_PRODUCT: ['Ek minute, dekhta hoon...', 'Dekhta hoon kya kya hai...'],
+  RECOMMEND: ['Hmm, sochne dijiye...', 'Achha, ek second...'],
+  REPEAT_LAST_ORDER: ['Haan, pichhla order nikaal raha hoon...'],
+  ACCOUNT_SUMMARY: ['Ek second, hisaab dekh raha hoon...'],
+  CHECKOUT: ['Haan ji, total nikaal raha hoon...', 'Theek hai, jod raha hoon...'],
+  PAYMENT_STATUS_QUERY: ['Ek second, check karta hoon...'],
 };
+
+/** said when the policy has not answered yet, which is most of the time */
+const NEUTRAL = ['Haan ji...', 'Ji...', 'Achha...', 'Ek second...'];
+
+/**
+ * A line the shop has not just used.
+ *
+ * `avoid` is whatever filled the previous silence, so the same noise
+ * cannot land twice in a row even across different actions. When the
+ * only candidate is the one just used, this returns null and the shop
+ * simply waits -- a repeated filler is worse than the pause it covers.
+ */
+function fillerFor(action: PolicyAction | null, avoid: string | null): string | null {
+  const options = (action && REACTIONS[action]) ?? NEUTRAL;
+  const fresh = options.filter((o) => o !== avoid);
+  if (!fresh.length) return null;
+  return fresh[Math.floor(Date.now() / 1000) % fresh.length]!;
+}
