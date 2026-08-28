@@ -161,6 +161,9 @@ export const recommend = (name: string, price: string, why: string): string =>
   why ? `${name} ${price} le lijiye, ${why}. Kitna bhejun?`
       : `${name} ${price} le lijiye. Kitna bhejun?`;
 
+export const addressSaved = (address: string): string =>
+  `Theek hai, delivery ${address} par ho jayegi. Payment hote hi nikal denge.`;
+
 export const orderStatus = (ref: string, stage: string): string =>
   `Aapka order (#${ref}) ${stage}. Jaise hi aage badhega, bata denge.`;
 

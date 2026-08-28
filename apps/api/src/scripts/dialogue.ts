@@ -51,8 +51,6 @@ interface Turn {
   expect?: string;
   /** substring the reply must NOT contain */
   reject?: string;
-  /** digits seeded by this suite's own fixtures (e.g. the Rs 20 offer) */
-  allowDigits?: string[];
   /**
    * Digits the reply may legitimately contain beyond the card and the
    * customer's own words -- numbers seeded into fixtures, like the Rs 20

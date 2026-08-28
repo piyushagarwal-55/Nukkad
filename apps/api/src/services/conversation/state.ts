@@ -39,6 +39,13 @@ export type Pending =
    * the basket: a row is written once, when the customer says send it.
    */
   | { kind: 'CHECKOUT'; askedAt: string }
+  /**
+   * CHECKOUT ASKED WHERE TO DELIVER. Set only when the household has no
+   * saved address; the next message that reads like a location is stored
+   * and never asked for again. A payment claim or a checkout word is NOT
+   * an address, whatever state we are in -- see answer() in core.ts.
+   */
+  | { kind: 'ADDRESS'; askedAt: string }
   | {
       kind: 'DISAMBIGUATE';
       /** every line of the order, including the ones already settled */
@@ -59,6 +66,8 @@ export interface PendingLine {
   quantity: number;
   unitHint: string | null;
   skuId: string | null;
+  /** the SKU's category, so a same-category correction can replace */
+  category?: string | null;
   name: string;
   unitPricePaise: number;
   method: string;
@@ -116,6 +125,7 @@ export function flatten(line: ResolvedLine): PendingLine {
     quantity: line.quantity,
     unitHint: line.unitHint,
     skuId: line.chosen?.sku.id ?? null,
+    category: line.chosen?.sku.category ?? null,
     name: line.chosen?.sku.name ?? line.sourceText,
     unitPricePaise: line.chosen?.sku.sellPaise ?? 0,
     method: line.chosen?.method ?? 'UNRESOLVED',
@@ -273,6 +283,7 @@ type StateName =
 
 const STATE_OF: Record<Pending['kind'], StateName> = {
   CHECKOUT: 'AWAITING_CONFIRM',
+  ADDRESS: 'AWAITING_CONFIRM',
   DISAMBIGUATE: 'AWAITING_DISAMBIGUATION',
 };
 
@@ -386,4 +397,33 @@ export async function clearBasket(householdId: string): Promise<void> {
       });
     }),
   );
+}
+
+/**
+ * A NEW CALL STARTS AT RECEPTION, whoever answered last time.
+ *
+ * The desk persists with the conversation -- correct for WhatsApp, where
+ * a thread is one continuous exchange -- and wrong for a phone call,
+ * where hanging up and calling back means somebody picks the phone up
+ * again. Without this, a caller whose last session ended at the counter
+ * was greeted by the counter, and the whole reception layer silently
+ * never ran. Everything else -- basket, referents, the open question --
+ * is deliberately kept: the ORGANISATION remembers you even though a
+ * different person answered.
+ */
+export async function deskTo(channel: ChannelId, peerPhone: string, desk: Desk): Promise<void> {
+  const row = await findConvo(channel, peerPhone);
+  if (!row) return;
+  const stored = (row.contextJson as Stored | null) ?? null;
+  const kept: Stored = {
+    desk,
+    pending: stored?.pending ?? null,
+    recent: stored?.recent ?? [],
+    basket: stored?.basket ?? [],
+    lastNamed: stored?.lastNamed ?? [],
+  };
+  await prisma.conversation.update({
+    where: { id: row.id },
+    data: { contextJson: kept as never },
+  });
 }

@@ -31,6 +31,10 @@ interface Trace {
   reply: string;
   action: string;
   goal: string;
+  /** which desk answered, and where the turn started when it crossed one */
+  desk?: string | null;
+  from?: string | null;
+  handoff?: boolean;
   firstSoundMs: number;
   totalMs: number;
 }
@@ -350,6 +354,11 @@ export default function Voice() {
 
           <p className="mt-4 text-xs font-semibold tracking-wide uppercase opacity-60">
             Said &middot; {t.action} / {t.goal}
+            {t.desk ? (
+              <span className="ml-2 rounded border border-[var(--ink)] px-1.5 py-0.5 normal-case">
+                {t.handoff && t.from ? `${t.from} → ${t.desk}` : t.desk}
+              </span>
+            ) : null}
           </p>
           <p className="mt-1 text-lg whitespace-pre-wrap">{t.reply}</p>
         </section>

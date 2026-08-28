@@ -5,7 +5,7 @@ import { openMouth } from '../services/voice/mouth.js';
 import { voiceFor } from '../services/voice/voices.js';
 import type { Desk } from '../services/policy/desks.js';
 import { warm } from '../services/conversation/routing.js';
-import { resetConvo } from '../services/conversation/state.js';
+import { resetConvo, deskTo } from '../services/conversation/state.js';
 import { randomUUID } from 'node:crypto';
 import type { SpeechAct } from '../services/policy/intent.js';
 
@@ -49,6 +49,21 @@ export async function streamRoutes(app: FastifyInstance) {
     const send = (o: unknown) => {
       if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(o));
     };
+
+    /**
+     * SOMEBODY PICKS THE PHONE UP. A new call starts at reception even
+     * when the last one ended at the counter -- the desk persisted with
+     * the conversation, which is right for a WhatsApp thread and wrong
+     * for a phone line. This was found from a live trace: "Hello" was
+     * answered with the SELLER's greeting because the previous session
+     * had left the desk there, and the entire reception layer silently
+     * never ran. Basket and referents are kept; only the person answering
+     * changes.
+     */
+    void deskTo('sim', HOUSEHOLD, 'RECEPTION');
+
+    /** which desks spoke this turn, in order -- the trace's ownership proof */
+    let turnDesks: Desk[] = [];
 
     /**
      * One turn at a time, and a new utterance cancels the last. If the
@@ -133,6 +148,7 @@ export async function streamRoutes(app: FastifyInstance) {
      */
     async function runTurn(text: string, ctrl: AbortController) {
       const started = Date.now();
+      turnDesks = [];
       let firstSoundMs = 0;
 
       /**
@@ -249,6 +265,7 @@ export async function streamRoutes(app: FastifyInstance) {
              * reconnect, no gap -- see setSpeaker in voice/mouth.ts.
              */
             onDesk: (desk: Desk) => {
+              turnDesks.push(desk);
               mouth.setSpeaker(voiceFor(desk));
               send({ type: 'desk', desk });
             },
@@ -287,12 +304,21 @@ export async function streamRoutes(app: FastifyInstance) {
         if (ctrl.signal.aborted) return;
 
         const reply = replies.map((r) => r.text).join('\n');
+        /**
+         * OWNERSHIP IS IN THE TRACE. Which desk answered, and whether
+         * this turn crossed one -- the thing a reply's intent/goal label
+         * cannot show, and the reason a working transfer looked like a
+         * generic QA path from the outside.
+         */
         send({
           type: 'turn',
           heard: text,
           reply,
           action: replies[0]?.intent ?? 'UNKNOWN',
           goal: replies[0]?.goal ?? 'UNKNOWN',
+          desk: turnDesks[turnDesks.length - 1] ?? null,
+          from: turnDesks.length > 1 ? turnDesks[0] : null,
+          handoff: turnDesks.length > 1,
           firstSoundMs,
           totalMs: Date.now() - started,
         });

@@ -117,7 +117,17 @@ export type Facts =
    * Checked out, link sent, waiting on money. NOT confirmed -- the goods
    * have not moved and will not until Razorpay says so.
    */
-  | { kind: 'AWAITING_PAYMENT'; ref: string; link: string | null }
+  | {
+      kind: 'AWAITING_PAYMENT';
+      ref: string;
+      link: string | null;
+      /** the household has no saved address yet: ask, once, in this reply */
+      askAddress?: boolean;
+      /** the saved address the order will go to, when one exists */
+      deliverTo?: string | null;
+    }
+  /** checkout heard a delivery address and stored it */
+  | { kind: 'ADDRESS_SAVED'; address: string }
   /** they asked about a payment and Razorpay has not seen it */
   | { kind: 'PAYMENT_NOT_SEEN' }
   /** they asked about a payment and there is no order waiting on one */
@@ -323,6 +333,13 @@ function brief(f: Facts): string {
     case 'ORDER_CONFIRMED':
       return `The order is confirmed and going out. Reference ${f.ref}. Reassure them briefly.`;
 
+    case 'ADDRESS_SAVED':
+      return [
+        `Their delivery address is noted: "${f.address}". Confirm it back`,
+        'in a few words and say the order will go there once payment',
+        'arrives. Do not re-read the whole address, just the gist.',
+      ].join(' ');
+
     case 'AWAITING_PAYMENT':
       return [
         `Their order is placed and waiting on payment. Reference ${f.ref}.`,
@@ -332,8 +349,14 @@ function brief(f: Facts): string {
             + ' because it is not until they pay.'
           : 'Online payment is not available right now, so tell them they'
             + ' can pay when the goods arrive.',
+        f.askAddress
+          ? 'Also ask, in the same breath, where this order should be'
+            + ' delivered -- one short question, no form-filling tone.'
+          : f.deliverTo
+            ? `Delivery goes to their saved address (${f.deliverTo}); mention it in passing.`
+            : '',
         'Keep it short.',
-      ].join(' ');
+      ].filter(Boolean).join(' ');
 
     case 'PAYMENT_NOT_SEEN':
       return [
@@ -725,7 +748,8 @@ function allowedDigits(f: Facts): Set<string> {
     if (f.almost) source.push(f.almost.title, f.almost.needs);
   }
   if (f.kind === 'ORDER_CONFIRMED') source.push(f.ref);
-  if (f.kind === 'AWAITING_PAYMENT') source.push(f.ref);
+  if (f.kind === 'AWAITING_PAYMENT') source.push(f.ref, f.deliverTo ?? '');
+  if (f.kind === 'ADDRESS_SAVED') source.push(f.address);
 
   const out = new Set<string>();
   for (const s of source) for (const d of s.match(/\d+/g) ?? []) out.add(d);

@@ -89,6 +89,8 @@ interface Ctx {
   buyerName: string;
   /** E.164, needed on a Razorpay link and nowhere else */
   buyerPhone: string;
+  /** the saved delivery address, or null -- checkout asks once and stores it */
+  buyerAddress: string | null;
   shopName: string;
   /** what the buyer sent this turn, so the voice can mirror their register */
   said: string;
@@ -212,6 +214,8 @@ function label(f: Facts): { intent: string; goal: string } {
     case 'NO_ORDERS':
     case 'OFFER_ANSWER':
       return { intent: 'ANSWER', goal: 'QA' };
+    case 'ADDRESS_SAVED':
+      return { intent: 'ANSWER', goal: 'ORDERING' };
     case 'QUESTION':
       return { intent: 'ANSWER', goal: 'SEARCH' };
     case 'NOT_STOCKED':
@@ -345,6 +349,7 @@ export async function handle(
     kiranaId: kirana.id,
     householdId: household.id,
     buyerName: household.name,
+    buyerAddress: household.address ?? null,
     buyerPhone: household.phone,
     shopName: kirana.name,
     said: text,
@@ -1087,7 +1092,7 @@ export interface Handoff {
   entities: string[];
   basketSize: number;
   /** the question left open at the old desk, if any */
-  pending: 'CHECKOUT' | 'DISAMBIGUATE' | null;
+  pending: 'CHECKOUT' | 'DISAMBIGUATE' | 'ADDRESS' | null;
 }
 
 /**
@@ -1131,6 +1136,7 @@ function describePending(ctx: Ctx): string | null {
   const p = ctx.convo.pending;
   if (!p) return null;
   if (p.kind === 'CHECKOUT') return 'whether to send the order';
+  if (p.kind === 'ADDRESS') return 'the delivery address';
   return `which product they meant: ${p.options.map((o) => o.name).join(', ')}`;
 }
 
@@ -2028,7 +2034,10 @@ async function placeOrder(
    * asks what sugar costs, more things go in the bag, and the bill is
    * added up once at the end. Nothing is written until they say send it.
    */
-  ctx.convo.basket = mergeBasket(ctx.convo.basket, kept);
+  ctx.convo.basket = mergeBasket(ctx.convo.basket, kept, {
+    recent: ctx.convo.lastNamed.map((n) => n.skuId),
+    additive: soundsAdditive(ctx.said),
+  });
   ctx.convo.pending = null;
 
   /**
@@ -2064,15 +2073,47 @@ async function placeOrder(
  * not five. Position is kept so the card does not reshuffle between
  * messages.
  */
-function mergeBasket(basket: PendingLine[], fresh: PendingLine[]): PendingLine[] {
+function mergeBasket(
+  basket: PendingLine[],
+  fresh: PendingLine[],
+  opts: {
+    /**
+     * The SKUs the conversation was just about, and whether the sentence
+     * sounded additive. "Sona masoori wala" straight after the shop
+     * confirmed Basmati is a CORRECTION -- same category, no "aur", no
+     * "bhi" -- and stacking it made a two-item order three. "Ek kilo
+     * chini bhi" carries the additive word and stacks, as it should.
+     */
+    recent?: string[];
+    additive?: boolean;
+  } = {},
+): PendingLine[] {
   const out = [...basket];
   for (const line of fresh) {
     const at = line.skuId ? out.findIndex((b) => b.skuId === line.skuId) : -1;
-    if (at >= 0) out[at] = line;
-    else out.push(line);
+    if (at >= 0) {
+      out[at] = line;
+      continue;
+    }
+
+    if (!opts.additive && line.category) {
+      const swap = out.findIndex(
+        (b) => b.skuId && b.category === line.category && opts.recent?.includes(b.skuId),
+      );
+      if (swap >= 0) {
+        out[swap] = line;
+        continue;
+      }
+    }
+
+    out.push(line);
   }
   return out;
 }
+
+/** "aur", "bhi", "also": the words that make a mention an addition */
+const soundsAdditive = (said: string): boolean =>
+  /\b(aur|bhi|also|and|plus)\b/i.test(said);
 
 /**
  * Read the basket back and ask for the word that writes it down.
@@ -2196,7 +2237,14 @@ async function writeOrder(ctx: Ctx): Promise<OutboundMessage[]> {
       })
     : null;
 
-  ctx.convo.pending = null;
+  /**
+   * DELIVERY: asked exactly once, in the same breath as the payment ask.
+   * A household with a saved address is never asked again -- the order
+   * simply goes there, which is what being a regular means.
+   */
+  ctx.convo.pending = ctx.buyerAddress
+    ? null
+    : { kind: 'ADDRESS', askedAt: new Date().toISOString() };
 
   /**
    * THE CART IS FROZEN, NOT COMMITTED.
@@ -2217,7 +2265,13 @@ async function writeOrder(ctx: Ctx): Promise<OutboundMessage[]> {
    */
   return speak(
     ctx,
-    { kind: 'AWAITING_PAYMENT', ref: order.id.slice(-6), link },
+    {
+      kind: 'AWAITING_PAYMENT',
+      ref: order.id.slice(-6),
+      link,
+      askAddress: !ctx.buyerAddress,
+      deliverTo: ctx.buyerAddress,
+    },
     copy.awaitingPayment(order.totalPaise, link),
     copy.paymentSlip(order.totalPaise, link, order.id.slice(-6)),
   );
@@ -2265,6 +2319,31 @@ async function razorpayLinkFor(
  * short.
  */
 async function answer(ctx: Ctx, pending: Pending): Promise<OutboundMessage[] | null> {
+  /**
+   * THE ADDRESS QUESTION IS OPEN. Whatever they say next is probably the
+   * answer -- but only probably, and the guards are the point: a payment
+   * claim, a checkout word or a couple of characters is NOT a location,
+   * and swallowing "payment ho gayi" as an address would eat the exact
+   * message the payment gate exists to answer. Anything that fails the
+   * guards falls through and is read as a fresh instruction.
+   */
+  if (pending.kind === 'ADDRESS') {
+    const t = ctx.said.trim();
+    const notAnAddress =
+      t.length < 8
+      || /payment|paisa|\bpaid\b|\bpay\b|upi|link/i.test(t)
+      || saysCheckout(t);
+    if (notAnAddress) return null;
+
+    await prisma.household.update({
+      where: { id: ctx.householdId },
+      data: { address: t },
+    });
+    ctx.convo.pending = null;
+    ctx.annotation = { intent: 'DISCLOSE', goal: 'ORDERING' };
+    return speak(ctx, { kind: 'ADDRESS_SAVED', address: t }, copy.addressSaved(t));
+  }
+
   if (pending.kind === 'CHECKOUT') {
     const a = readAnswer(ctx.said, 3);
 
