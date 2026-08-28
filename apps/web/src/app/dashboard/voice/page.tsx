@@ -47,6 +47,7 @@ export default function Voice() {
   const [turns, setTurns] = useState<Trace[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
+  const [typed, setTyped] = useState('');
 
   const ws = useRef<WebSocket | null>(null);
   const audio = useRef<AudioContext | null>(null);
@@ -248,6 +249,16 @@ export default function Voice() {
     mutedRef.current = muted;
   }, [muted]);
 
+  /** a typed turn: same pipeline as speech, entered at the final-transcript door */
+  const sendTyped = useCallback(() => {
+    const text = typed.trim();
+    if (!text || ws.current?.readyState !== WebSocket.OPEN) return;
+    hush(); // typing over the shop is barge-in too
+    ws.current.send(JSON.stringify({ type: 'text', text }));
+    setTyped('');
+    setPhase('thinking');
+  }, [typed, hush]);
+
   const reset = useCallback(async () => {
     await fetch(`${API}/voice/stream/reset`, { method: 'POST' });
     setTurns([]);
@@ -314,7 +325,22 @@ export default function Voice() {
                 kya hai&rdquo; &middot; &ldquo;haan daal do&rdquo;
               </span>
             </p>
-            <div className="mt-3 flex flex-wrap gap-2.5">
+            <div className="mt-3 flex flex-wrap items-center gap-2.5">
+              <input
+                value={typed}
+                onChange={(e) => setTyped(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') sendTyped();
+                }}
+                placeholder="ya yahan type karke test karein…"
+                className="min-w-[220px] flex-1 rounded-lg border-2 border-[var(--ink)] bg-[var(--panel,transparent)] px-3 py-2 text-sm"
+              />
+              <button
+                onClick={sendTyped}
+                className="rounded-lg border-2 border-[var(--ink)] bg-[var(--accent)] px-3.5 py-2 text-xs font-semibold"
+              >
+                Send
+              </button>
               <button
                 onClick={() => setMuted((m) => !m)}
                 className="rounded-lg border-2 border-[var(--ink)] px-3.5 py-2 text-xs font-semibold"

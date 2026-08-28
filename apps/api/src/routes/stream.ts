@@ -122,23 +122,30 @@ export async function streamRoutes(app: FastifyInstance) {
 
       onSpeechEnd: () => send({ type: 'thinking' }),
 
-      onFinal: (text) => {
-        if (busy) return;
-        busy = true;
-
-        const ctrl = new AbortController();
-        inFlight?.abort();
-        inFlight = ctrl;
-
-        void runTurn(text, ctrl).finally(() => {
-          busy = false;
-          if (inFlight === ctrl) inFlight = null;
-        });
-      },
+      onFinal: (text) => startTurn(text),
 
       onError: (message, fatal) => send({ type: 'error', message, fatal }),
       onClose: () => send({ type: 'ear-closed' }),
     });
+
+    /**
+     * One entry point for a turn, whichever way the words arrived --
+     * the recogniser's final, or a typed line from the page. Everything
+     * downstream is identical: same desks, same voices, same guards.
+     */
+    function startTurn(text: string) {
+      if (busy || !text.trim()) return;
+      busy = true;
+
+      const ctrl = new AbortController();
+      inFlight?.abort();
+      inFlight = ctrl;
+
+      void runTurn(text, ctrl).finally(() => {
+        busy = false;
+        if (inFlight === ctrl) inFlight = null;
+      });
+    }
 
     /**
      * The turn itself, which is the ordinary agent with a microphone in
@@ -378,8 +385,14 @@ export async function streamRoutes(app: FastifyInstance) {
         return;
       }
       try {
-        const msg = JSON.parse(data.toString()) as { type?: string };
+        const msg = JSON.parse(data.toString()) as { type?: string; text?: string };
         if (msg.type === 'stop') inFlight?.abort();
+        /**
+         * A typed message, for testing without a microphone. It enters
+         * exactly where a final transcript does, so what it exercises is
+         * the real pipeline rather than a parallel one.
+         */
+        if (msg.type === 'text' && typeof msg.text === 'string') startTurn(msg.text);
       } catch {
         // a malformed control frame is not worth closing a call over
       }
