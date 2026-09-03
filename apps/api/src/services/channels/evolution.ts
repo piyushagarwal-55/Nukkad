@@ -57,6 +57,18 @@ export async function sendText(to: string, text: string): Promise<SendResult> {
       return { ok: true };
     }
   } catch (err) {
-    return { ok: false, error: (err as Error).message };
+    const e = err as Error & { cause?: { code?: string; message?: string } };
+    const cause = e.cause?.code ?? e.cause?.message;
+    const base = (() => {
+      try {
+        return env.EVOLUTION_URL ? new URL(env.EVOLUTION_URL).origin : 'unknown Evolution URL';
+      } catch {
+        return 'invalid Evolution URL';
+      }
+    })();
+    return {
+      ok: false,
+      error: cause ? `${e.message} (${cause}) while calling ${base}` : `${e.message} while calling ${base}`,
+    };
   }
 }
