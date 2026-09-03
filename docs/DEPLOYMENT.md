@@ -140,6 +140,43 @@ npm install
 npm run build:web
 ```
 
+### 3b. Web: Render Web Service
+
+Render can also host the dashboard as a separate Web Service.
+
+Use a second Render Web Service, not the API service.
+
+Root directory:
+
+```text
+.
+```
+
+Build command:
+
+```bash
+npm install && npm run render:web:build
+```
+
+Start command:
+
+```bash
+npm run render:web:start
+```
+
+Environment:
+
+```text
+NODE_VERSION=20.18.0
+NEXT_PUBLIC_API_URL=https://<api-host>
+```
+
+For the current API deployment:
+
+```text
+NEXT_PUBLIC_API_URL=https://nukkad-api.onrender.com
+```
+
 ### 4. WhatsApp: Evolution API
 
 Only the shop/bot number is connected to Evolution:

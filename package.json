@@ -13,6 +13,8 @@
     "build:api": "turbo build --filter=@nukkad/api",
     "build:web": "turbo build --filter=@nukkad/web",
     "render:api:build": "npm run db:generate && npm run build:api",
+    "render:web:build": "npm run build:web",
+    "render:web:start": "npm run render:start --workspace=@nukkad/web",
     "lint": "turbo lint",
     "type-check": "turbo type-check",
     "test": "turbo test",

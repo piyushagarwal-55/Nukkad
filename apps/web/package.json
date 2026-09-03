@@ -6,6 +6,8 @@
     "dev": "next dev --webpack -p 3001",
     "build": "next build --webpack",
     "start": "next start -p 3001",
+    "render:web:build": "npm run build --workspace=@nukkad/web",
+    "render:start": "next start -p ${PORT:-3001}",
     "lint": "eslint",
     "type-check": "tsc --noEmit"
   },
