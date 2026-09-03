@@ -6,10 +6,15 @@ export const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000';
  * browser silently drops it and every authenticated route 401s.
  */
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (init?.body !== undefined && !headers.has('content-type')) {
+    headers.set('content-type', 'application/json');
+  }
+
   const res = await fetch(`${API}${path}`, {
     ...init,
     credentials: 'include',
-    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+    headers,
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((body as { error?: string }).error ?? `${path} -> ${res.status}`);
@@ -18,7 +23,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const get = <T,>(path: string) => req<T>(path, { cache: 'no-store' });
 export const post = <T,>(path: string, body?: unknown) =>
-  req<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined });
+  req<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
 export const patch = <T,>(path: string, body: unknown) =>
   req<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
 export const del = <T,>(path: string) => req<T>(path, { method: 'DELETE' });
