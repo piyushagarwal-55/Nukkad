@@ -46,7 +46,7 @@ Root directory:
 Build command:
 
 ```bash
-npm install && npm run db:generate && npm run build
+npm install && npm run render:api:build
 ```
 
 Start command:
@@ -137,7 +137,7 @@ root as the root directory and set:
 
 ```bash
 npm install
-npm run build --workspace=@nukkad/web
+npm run build:web
 ```
 
 ### 4. WhatsApp: Evolution API
