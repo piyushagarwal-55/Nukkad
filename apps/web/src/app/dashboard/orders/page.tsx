@@ -56,7 +56,15 @@ const METHOD: Record<string, { cls: string; label: string; why: string }> = {
 
 const STATUS: Record<string, string> = {
   FULFILLED: 'ost-fulfilled', CONFIRMED: 'ost-confirmed',
-  AWAITING: 'ost-awaiting', CANCELLED: 'ost-cancelled', DRAFT: 'ost-draft',
+  // checkout writes PAYMENT_PENDING, never AWAITING -- see writeOrder(). The
+  // old map had only AWAITING, so every unpaid order rendered as a draft.
+  PAYMENT_PENDING: 'ost-awaiting', AWAITING: 'ost-awaiting',
+  CANCELLED: 'ost-cancelled', DRAFT: 'ost-draft',
+};
+
+/** what a status is called out loud, since PAYMENT_PENDING is not a phrase */
+const STATUS_LABEL: Record<string, string> = {
+  PAYMENT_PENDING: 'payment pending',
 };
 
 const SOURCE: Record<string, string> = {
@@ -66,7 +74,7 @@ const SOURCE: Record<string, string> = {
 
 const TABS = [
   { key: 'all', label: 'All' },
-  { key: 'AWAITING', label: 'Waiting on them' },
+  { key: 'PAYMENT_PENDING', label: 'Waiting on them' },
   { key: 'CONFIRMED', label: 'Confirmed' },
   { key: 'FULFILLED', label: 'Fulfilled' },
   { key: 'owed', label: 'Money owed' },
@@ -102,7 +110,7 @@ function OrderRow({ o }: { o: Order }) {
         <div className="min-w-0 flex-1">
           <p className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
             <span className="font-medium">{o.household}</span>
-            <span className={`ost ${st}`}>{o.status.toLowerCase()}</span>
+            <span className={`ost ${st}`}>{STATUS_LABEL[o.status] ?? o.status.toLowerCase()}</span>
           </p>
           <p className="muted mt-0.5 text-xs">
             {when(o.createdAt)} &middot; {SOURCE[o.source] ?? o.source.toLowerCase()} &middot;{' '}
@@ -166,7 +174,7 @@ export default function Orders() {
     return {
       total: o.length,
       owed: o.reduce((n, x) => n + x.outstandingPaise, 0),
-      awaiting: o.filter((x) => x.status === 'AWAITING').length,
+      awaiting: o.filter((x) => x.status === 'PAYMENT_PENDING' || x.status === 'AWAITING').length,
       voice: o.filter((x) => x.source === 'VOICE').length,
     };
   }, [orders]);

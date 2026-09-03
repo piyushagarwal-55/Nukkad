@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { get, post } from '@/lib/api';
 import { IntelSkeleton } from '@/components/Loading';
+import { SupplierDesk } from '@/components/SupplierDesk';
 
 /**
  * INVENTORY INTELLIGENCE, WITH THE LOOP CLOSED. Attention cards from
@@ -157,6 +158,9 @@ export default function Inventory() {
           {actions.length === 0 && <p className="muted text-sm">Abhi koi action nahi bani.</p>}
         </div>
       </section>
+
+      {/* the supplier leg -- the loop's other end */}
+      <SupplierDesk />
 
       {/* stock */}
       <section className="pane card-in mt-6 p-6">

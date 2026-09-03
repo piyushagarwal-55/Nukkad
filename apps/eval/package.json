@@ -7,7 +7,8 @@
     "eval": "tsx src/run.ts",
     "type-check": "tsc --noEmit",
     "clean": "rm -rf dist out",
-    "eval:bill": "dotenv -e ../../.env -- tsx src/bill.ts"
+    "eval:bill": "dotenv -e ../../.env -- tsx src/bill.ts",
+    "eval:adversarial": "dotenv -e ../../.env -- tsx src/adversarial.ts"
   },
   "dependencies": {
     "@nukkad/api": "*",

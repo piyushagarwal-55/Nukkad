@@ -65,7 +65,9 @@ const ICON = {
   insights: 'M4 20V11m5.5 9V4m5.5 16v-6m5 6V8',
   customers: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-6 9a6 6 0 0 1 12 0M17 8a3 3 0 1 0-2-5.2M15 14a5 5 0 0 1 6 5',
   inventory: 'M4 8l8-4 8 4v9l-8 4-8-4V8Zm8 4 8-4M12 12 4 8m8 4v9',
+  procurement: 'M6 7h12l2 5v6h-2a2 2 0 0 1-4 0h-4a2 2 0 0 1-4 0H4V9a2 2 0 0 1 2-2Zm12 0v5h2M7 18a2 2 0 1 0 0 .1M16 18a2 2 0 1 0 0 .1M8 4h7',
   workforce: 'M12 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 0v3m-6 3a3 3 0 1 0 0 6m0-6a3 3 0 0 1 0 6m0-6h12m0 0a3 3 0 1 1 0 6m0-6a3 3 0 0 0 0 6',
+  evidence: 'M12 3 5 6v5c0 4.5 2.7 8.2 7 10 4.3-1.8 7-5.5 7-10V6l-7-3Zm-3 9 2 2 4-5',
 } as const;
 
 const NAV = [
@@ -78,7 +80,9 @@ const NAV = [
   { href: '/dashboard/insights', label: 'Insights', icon: ICON.insights, fill: false },
   { href: '/dashboard/customers', label: 'Customers', icon: ICON.customers, fill: false },
   { href: '/dashboard/inventory', label: 'Inventory', icon: ICON.inventory, fill: false },
+  { href: '/dashboard/procurement', label: 'Procurement', icon: ICON.procurement, fill: false },
   { href: '/dashboard/workforce', label: 'AI Workforce', icon: ICON.workforce, fill: false },
+  { href: '/dashboard/evidence', label: 'Evidence', icon: ICON.evidence, fill: false },
 ];
 
 export function Sidebar({ shopName }: { shopName: string }) {

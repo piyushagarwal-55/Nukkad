@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { span } from '../telemetry/span.js';
+import { currentProfile, isProfiling, profile, span, type Span } from '../telemetry/span.js';
 import { routeOf } from './routing.js';
 import { DESKS, DEFAULT_DESK, refuseTransfer, type Desk } from '../policy/desks.js';
 import { understand } from '../policy/understand.js';
@@ -26,6 +26,7 @@ import { createRazorpayLink, recordInvoice, type RazorpayLink } from '../payment
 import { checkAndSettle } from '../payments/settle.js';
 import { maskActions } from '../resolver/action.js';
 import { compose, composeStream, type Facts, type Swap, type PackAsk } from './compose.js';
+import { guardedReply, verifyReply } from './verify.js';
 import { retrieveKb } from '../kb/retrieve.js';
 import type { Prior } from '../resolver/prior.js';
 import {
@@ -150,7 +151,11 @@ async function speak(
     ? await composeStream(input, ctx.onSentence)
     : await compose(input);
 
-  return [{ text, ...label(facts) }];
+  const checked = ctx.onSentence
+    ? { text, verification: verifyReply(facts, text, false) }
+    : guardedReply(facts, text, fallback, card);
+
+  return [{ text: checked.text, verification: checked.verification, ...label(facts) }];
 }
 
 /**
@@ -233,9 +238,7 @@ function label(f: Facts): { intent: string; goal: string } {
   }
 }
 
-export async function handle(
-  msg: InboundMessage,
-  hooks: {
+type HandleHooks = {
     onSentence?: (s: string) => void | Promise<void>;
     onDesk?: (desk: Desk) => void;
     /**
@@ -247,7 +250,32 @@ export async function handle(
      * single generic filler becomes a tic by the third turn.
      */
     onDecision?: (act: SpeechAct) => void;
-  } = {},
+  };
+
+function withTrace(out: OutboundMessage[], trace: { spans: Span[]; totalMs: number } | null): OutboundMessage[] {
+  if (!trace) return out;
+  return out.map((msg) => ({
+    ...msg,
+    trace: {
+      totalMs: trace.totalMs,
+      spans: trace.spans,
+    },
+  }));
+}
+
+export async function handle(msg: InboundMessage, hooks: HandleHooks = {}): Promise<OutboundMessage[]> {
+  if (isProfiling()) {
+    const out = await handleCore(msg, hooks);
+    return withTrace(out, currentProfile());
+  }
+
+  const traced = await profile(() => handleCore(msg, hooks));
+  return withTrace(traced.value, { spans: traced.spans, totalMs: traced.totalMs });
+}
+
+async function handleCore(
+  msg: InboundMessage,
+  hooks: HandleHooks = {},
 ): Promise<OutboundMessage[]> {
   const started = Date.now();
 

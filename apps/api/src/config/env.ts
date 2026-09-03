@@ -85,10 +85,22 @@ const schema = z.object({
   EVOLUTION_INSTANCE: z.string().default('nukkad'),
   // which shop the paired number answers for (kirana routing key)
   EVOLUTION_SHOP_PHONE: z.string().default(''),
+  /**
+   * The shop OWNER's WhatsApp -- who the nightly procurement pass asks
+   * before anything reaches a distributor. Falls back to Kirana.phone,
+   * which is the honest default; overridden here because a demo handset
+   * and a registered shop number are rarely the same phone.
+   */
+  OWNER_WHATSAPP: z.string().default(''),
 
   RAZORPAY_KEY_ID: z.string().startsWith('rzp_'),
   RAZORPAY_KEY_SECRET: z.string().min(10),
   RAZORPAY_WEBHOOK_SECRET: z.string().min(8),
+
+  // Payment Correctness recovery channel. Nukkad interprets customer speech;
+  // the correctness engine remains authoritative for collection decisions.
+  PAYCORRECT_URL: z.string().url().default('http://127.0.0.1:4310'),
+  PAYCORRECT_CHANNEL_SECRET: z.string().min(24).default('nukkad-recovery-channel-secret-change-me'),
 
   SESSION_SECRET: z.string().min(16),
 

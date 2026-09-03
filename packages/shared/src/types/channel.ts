@@ -50,9 +50,35 @@ export interface QuickReply {
   label: string;
 }
 
+export interface TraceSpan {
+  name: string;
+  ms: number;
+  depth: number;
+  note?: string;
+}
+
+export interface TurnTrace {
+  totalMs: number;
+  spans: TraceSpan[];
+}
+
+export interface ReplyVerification {
+  ok: boolean;
+  issues: string[];
+  allowedDigits: string[];
+  fallbackUsed: boolean;
+}
+
 export interface OutboundMessage {
   text: string;
   quickReplies?: QuickReply[];
+  /**
+   * Saathi-style receipt for a turn: what the system measured and what the
+   * outbound guard allowed. Transport adapters can ignore these fields; the
+   * simulator and eval harness use them as evidence.
+   */
+  trace?: TurnTrace;
+  verification?: ReplyVerification;
   /**
    * What the SHOP just did, on the same two axes the inbound side is
    * annotated with -- see Message.intent/goal in the Prisma schema and

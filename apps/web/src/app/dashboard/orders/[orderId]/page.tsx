@@ -69,7 +69,10 @@ const METHOD: Record<string, { cls: string; label: string; colour: string }> = {
 };
 const STATUS: Record<string, string> = {
   FULFILLED: 'ost-fulfilled', CONFIRMED: 'ost-confirmed',
-  AWAITING: 'ost-awaiting', CANCELLED: 'ost-cancelled', DRAFT: 'ost-draft',
+  // checkout writes PAYMENT_PENDING, never AWAITING. Without this row an
+  // unpaid order was styled as a draft on its own detail page.
+  PAYMENT_PENDING: 'ost-awaiting', AWAITING: 'ost-awaiting',
+  CANCELLED: 'ost-cancelled', DRAFT: 'ost-draft',
 };
 const SOURCE: Record<string, string> = {
   VOICE: 'said out loud', TEXT: 'typed on WhatsApp', PHOTO: 'sent a photo',

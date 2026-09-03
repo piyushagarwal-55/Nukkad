@@ -49,6 +49,16 @@ export async function profile<T>(fn: () => Promise<T>): Promise<{ value: T; span
   return { value, spans: turn.spans, totalMs: Date.now() - turn.startedAt };
 }
 
+export function isProfiling(): boolean {
+  return Boolean(store.getStore());
+}
+
+export function currentProfile(): { spans: Span[]; totalMs: number } | null {
+  const turn = store.getStore();
+  if (!turn) return null;
+  return { spans: [...turn.spans], totalMs: Date.now() - turn.startedAt };
+}
+
 /**
  * Measure one step. Records nothing outside a profile(), which is what
  * lets these sit permanently in the hot path.

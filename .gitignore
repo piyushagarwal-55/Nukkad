@@ -18,3 +18,4 @@ dist/
 *.tsbuildinfo
 next-env.d.ts
 .turbo/
+.codex-temp/

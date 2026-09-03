@@ -15,6 +15,7 @@
     "asr:bench": "dotenv -e ../../.env -- tsx src/scripts/asr-bench.ts",
     "dialogue": "dotenv -e ../../.env -- tsx src/scripts/dialogue.ts",
     "photo": "dotenv -e ../../.env -- tsx src/scripts/photo.ts",
+    "procure": "dotenv -e ../../.env -- tsx src/workers/procurement-scheduler.ts",
     "voice": "dotenv -e ../../.env -- tsx src/scripts/voice.ts",
     "backfill:subnames": "dotenv -e ../../.env -- tsx src/scripts/backfill-subnames.ts",
     "backfill:transcripts": "dotenv -e ../../.env -- tsx src/scripts/backfill-transcripts.ts",

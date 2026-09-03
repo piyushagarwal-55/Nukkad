@@ -844,3 +844,101 @@ model RestockAction {
 
   @@index([kiranaId, status])
 }
+
+// ---------------------------------------------------------------- procurement
+
+/**
+ * WHERE A PURCHASE ORDER IS IN ITS LIFE.
+ *
+ * The shape of the night: a planner drafts, the OWNER is asked on
+ * WhatsApp, the owner edits or approves, the SUPPLIER is told, the
+ * supplier bills, and only then does money move. Every arrow in that
+ * sentence is a status here, because each one is a place the loop can
+ * legitimately stop for a day.
+ */
+enum PurchaseStatus {
+  /** the planner built it, nobody has seen it */
+  DRAFT
+  /** sent to the owner on WhatsApp, waiting for a human */
+  AWAITING_OWNER
+  /** the owner said no, or let it lapse */
+  DECLINED
+  /** owner approved, order sent to the distributor */
+  SENT
+  /** the distributor replied with a bill */
+  BILLED
+  /** paid, and ONLY ever set from a verified payment */
+  PAID
+  CANCELLED
+}
+
+/**
+ * THE NIGHTLY PURCHASE ORDER.
+ *
+ * Deliberately separate from SupplierBill: that model is a document the
+ * shop RECEIVED and reconciled, this is an intention the shop FORMED.
+ * They meet when a supplier bills against one -- billId below -- and
+ * keeping them apart is what lets the bill agent stay a pure reader of
+ * paper rather than growing an opinion about what was ordered.
+ */
+model PurchaseOrder {
+  id         String         @id @default(cuid())
+  kiranaId   String
+  supplierId String?
+  status     PurchaseStatus @default(DRAFT)
+
+  /** why this order exists tonight, in the shopkeeper's words */
+  reason String?
+
+  /** what the supplier was told, verbatim -- never rebuilt for display */
+  sentText String?
+
+  /**
+   * SupplierBill the distributor answered with, once it arrives. The
+   * money leg reads its lines rather than this order's, because what a
+   * shop OWES is what it was billed, not what it asked for.
+   */
+  billId String?
+
+  /** every owner turn about this order, oldest first. The audit trail. */
+  ownerLog Json?
+
+  createdAt   DateTime  @default(now())
+  askedAt     DateTime?
+  approvedAt  DateTime?
+  sentAt      DateTime?
+  billedAt    DateTime?
+  /** set only from a verified payment. Never from a message. */
+  paidAt      DateTime?
+  amountPaise Int?
+
+  lines PurchaseOrderLine[]
+
+  @@index([kiranaId, status])
+  @@index([kiranaId, createdAt])
+}
+
+model PurchaseOrderLine {
+  id      String @id @default(cuid())
+  orderId String
+  /** null when the owner added something the catalogue does not have yet */
+  skuId   String?
+
+  /** what it is called when we talk about it */
+  name     String
+  quantity Float
+
+  /**
+   * WHY THIS QUANTITY, kept as text because the owner is going to be
+   * asked to approve it and "6 packet" with no reason is not a question
+   * anybody can answer. Written by arithmetic, never by a model.
+   */
+  why      String?
+  inStock  Float   @default(0)
+  /** what the shop last paid, when it is known. Not a quote. */
+  costPaise Int?
+
+  order PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}

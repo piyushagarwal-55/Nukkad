@@ -179,6 +179,18 @@ async function main() {
   });
   console.log(`kirana ${kirana.name}`);
 
+  await prisma.supplier.upsert({
+    where: { kiranaId_phone: { kiranaId: kirana.id, phone: '+916394831542' } },
+    create: {
+      kiranaId: kirana.id,
+      name: 'Primary Supplier',
+      phone: '+916394831542',
+      active: true,
+    },
+    update: { name: 'Primary Supplier', active: true },
+  });
+  console.log('supplier Primary Supplier +916394831542');
+
   const skuByName = new Map<string, string>();
   for (const s of CATALOG) {
     const row = await prisma.sku.create({
