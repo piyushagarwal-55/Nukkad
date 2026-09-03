@@ -14,6 +14,7 @@ const signupSchema = z.object({
 
 const phoneSchema = z.object({ phone: z.string().min(10) });
 const verifySchema = z.object({ phone: z.string().min(10), otp: z.string().length(6) });
+const secureCookies = env.NODE_ENV === 'production' || env.PUBLIC_BASE_URL?.startsWith('https://');
 
 /** Throws a 401-shaped error if there is no valid session. */
 export function requireSession(req: FastifyRequest): Session {
@@ -105,8 +106,10 @@ export async function authRoutes(app: FastifyInstance) {
     });
 
     reply.setCookie(COOKIE, issue(user.id, user.kiranaId), {
-      path: '/', httpOnly: true, sameSite: 'lax',
-      secure: env.NODE_ENV === 'production',
+      path: '/',
+      httpOnly: true,
+      sameSite: secureCookies ? 'none' : 'lax',
+      secure: secureCookies,
       maxAge: 30 * 86_400,
     });
 
@@ -134,7 +137,11 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.post('/auth/logout', async (_req, reply) => {
-    reply.clearCookie(COOKIE, { path: '/' });
+    reply.clearCookie(COOKIE, {
+      path: '/',
+      sameSite: secureCookies ? 'none' : 'lax',
+      secure: secureCookies,
+    });
     return { ok: true };
   });
 }
