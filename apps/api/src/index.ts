@@ -24,20 +24,6 @@ import { procurementRoutes } from './routes/procurement.js';
 
 const app = Fastify({ logger: loggerConfig, bodyLimit: 20 * 1024 * 1024 });
 
-app.removeContentTypeParser('application/json');
-app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
-  const text = typeof body === 'string' ? body : body.toString('utf8');
-  if (text.length === 0) {
-    done(null, undefined);
-    return;
-  }
-  try {
-    done(null, JSON.parse(text));
-  } catch (err) {
-    done(err as Error, undefined);
-  }
-});
-
 // credentials:true so the session cookie survives the web app's origin
 await app.register(cors, { origin: true, credentials: true });
 await app.register(cookie);
