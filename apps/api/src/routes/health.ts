@@ -3,6 +3,8 @@ import { prisma } from '@nukkad/db';
 import { env, hasVision, hasSarvam } from '../config/env.js';
 
 export async function healthRoutes(app: FastifyInstance) {
+  app.get('/', async () => ({ ok: true, service: 'nukkad-api', health: '/health' }));
+
   app.get('/health', async () => {
     const t0 = Date.now();
     let db = 'down';
