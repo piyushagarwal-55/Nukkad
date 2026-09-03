@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "dotenv -e ../../.env -- tsx watch src/index.ts",
     "build": "tsc",
-    "render:api:build": "npm run generate --workspace=@nukkad/db && npm run build --workspace=@nukkad/api",
+    "render:api:build": "npm run generate --workspace=@nukkad/db && npm run build --workspace=@nukkad/shared && npm run build --workspace=@nukkad/db && npm run build --workspace=@nukkad/api",
     "start": "node dist/index.js",
     "worker:nudge": "dotenv -e ../../.env -- tsx src/workers/nudge-scheduler.ts",
     "type-check": "tsc --noEmit",
