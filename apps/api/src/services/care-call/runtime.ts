@@ -65,6 +65,7 @@ export interface CareCallSessionHooks {
   };
   closeAfter(text: string): void;
   interruptSpeech(): void;
+  sendReceipt?: (text: string) => Promise<void>;
   onTurn?: (turn: CareCallTurn) => void;
   onDesk?: (desk: Desk) => void;
   onLog?: (event: string, data: Record<string, unknown>) => void;
@@ -288,12 +289,7 @@ export class CareCallSession {
     }
 
     const agentText = careCallTextForAgent(frame, this.call.dueItems, text);
-    const handoffOutcome = outcome(
-      'ORDER_ENGINE_HANDOFF',
-      ['intent_detected', 'conversation_state_loaded'],
-      ['conversation_handle', 'catalogue_resolver', 'payment_link_if_checkout'],
-      'ORDER',
-    );
+    const handoffTools = ['conversation_handle', 'catalogue_resolver', 'payment_link_if_checkout'];
     let streamed = false;
     const agentSpeech = this.hooks.agentSpeech?.(ctrl);
     const replies = await handle(
@@ -321,6 +317,22 @@ export class CareCallSession {
 
     const said = replies.map((r) => r.text).filter(Boolean).join(' ') || 'Theek hai ji.';
     this.lastPrompt = said;
+    if (isCheckoutReceipt(said) && this.hooks.sendReceipt) {
+      await this.hooks.sendReceipt(said);
+      handoffTools.push('whatsapp_receipt');
+      this.recordEvent('TOOL_EXECUTED', {
+        goal: this.fsm('CHECKOUT'),
+        heard: text,
+        reply: 'whatsapp_receipt_sent',
+        latencyMs: Date.now() - started,
+      });
+    }
+    const handoffOutcome = outcome(
+      'ORDER_ENGINE_HANDOFF',
+      ['intent_detected', 'conversation_state_loaded'],
+      handoffTools,
+      'ORDER',
+    );
     this.hooks.onLog?.('care-call turn', { heard: text, agentText, said, channel: this.channel });
     emitTurn(said, handoffOutcome, { persist: false, agentText });
     if (!streamed) this.hooks.speak(said.split('\n\n')[0] || said, ctrl);
@@ -487,4 +499,10 @@ function careCallTextForAgent(frame: CareCallFrame, dueItems: string[], heard: s
   }
   if (frame.act === 'ORDER_ACCEPTED' || frame.act === 'CHECKOUT' || wantsCheckout(heard)) return 'bhej do';
   return heard;
+}
+
+function isCheckoutReceipt(text: string): boolean {
+  return /(^|\n)Total:\s*Rs\s*\d/i.test(text)
+    && (/(^|\n)Pay:\s*https?:\/\//i.test(text) || /Saamaan aane par de dijiye/i.test(text))
+    && /\(#[a-z0-9-]{4,}\)/i.test(text);
 }

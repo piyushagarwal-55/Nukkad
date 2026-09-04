@@ -10,6 +10,7 @@ import { buildCareCallPlans } from '../services/care-call/plan.js';
 import { env } from '../config/env.js';
 import { toE164 } from '../lib/phone.js';
 import { handle } from '../services/conversation/core.js';
+import { twilioAdapter } from '../channels/index.js';
 import { speak } from '../services/voice/tts.js';
 import { openEar } from '../services/asr/realtime.js';
 import { openMouth } from '../services/voice/mouth.js';
@@ -267,6 +268,7 @@ export async function careCallRoutes(app: FastifyInstance) {
           agentSpeech,
           closeAfter,
           interruptSpeech: stopSpeech,
+          sendReceipt: (text) => twilioAdapter.send(call.householdPhone, { text }),
           onDesk: (desk: Desk) => activeAgentMouth?.setSpeaker(voiceFor(desk)),
           onLog: (event, data) => app.log.info({ ...data, streamSid }, event),
           onError: (message) => app.log.warn({ message, streamSid }, 'twilio care-call session'),
