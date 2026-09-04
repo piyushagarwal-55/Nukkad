@@ -29,6 +29,7 @@ const TWILIO_RATE = 8_000;
 const SARVAM_ASR_RATE = 16_000;
 
 interface PendingCareCall {
+  kiranaId: string;
   householdId: string;
   householdName: string;
   householdPhone: string;
@@ -84,6 +85,7 @@ async function playSarvamOrSay(
 }
 
 async function callTwiML(opts: {
+  kiranaId: string;
   householdId: string;
   householdName: string;
   householdPhone: string;
@@ -103,6 +105,7 @@ async function callTwiML(opts: {
     url: `${publicWsBase()}/care-calls/twilio/stream`,
   });
   stream.parameter({ name: 'sessionId', value: sessionId });
+  stream.parameter({ name: 'kiranaId', value: opts.kiranaId });
   stream.parameter({ name: 'householdId', value: opts.householdId });
   stream.parameter({ name: 'householdPhone', value: opts.householdPhone });
   stream.parameter({ name: 'shopPhone', value: opts.shopPhone });
@@ -211,6 +214,7 @@ export async function careCallRoutes(app: FastifyInstance) {
 
     async function runTurn(text: string, ctrl: AbortController) {
       if (!call) return;
+      const started = Date.now();
       const frame = await readCareCallReply({
         stage,
         text,
@@ -224,14 +228,36 @@ export async function careCallRoutes(app: FastifyInstance) {
 
       if (ctrl.signal.aborted) return;
 
+      const saveStageTurn = (reply: string) => {
+        if (!call?.kiranaId || !call.householdId) return;
+        void prisma.agentEvent
+          .create({
+            data: {
+              kiranaId: call.kiranaId,
+              householdId: call.householdId,
+              channel: 'twilio',
+              desk: 'CARE_CALL',
+              act: frame.act,
+              goal: stage,
+              heard: text.slice(0, 500),
+              reply: reply.split('\n')[0]?.slice(0, 300) ?? null,
+              latencyMs: Date.now() - started,
+            },
+          })
+          .catch((err) => app.log.warn({ err }, 'care-call stage event write failed'));
+      };
+
       if (stage === 'PERMISSION') {
         if (frame.act === 'PERMISSION_DENIED') {
-          closeAfter('Theek hai ji, main baad mein pooch lungi. Dhanyavaad.');
+          const reply = 'Theek hai ji, main baad mein pooch lungi. Dhanyavaad.';
+          saveStageTurn(reply);
+          closeAfter(reply);
           return;
         }
 
         if (frame.act === 'PERMISSION_GRANTED') {
           stage = 'ORDER';
+          saveStageTurn(call.contextScript);
           speakToCall(call.contextScript, ctrl);
           return;
         }
@@ -239,7 +265,9 @@ export async function careCallRoutes(app: FastifyInstance) {
         if (frame.act === 'ADD_OR_CHANGE_ITEMS') {
           stage = 'ORDER';
         } else {
-          speakToCall('Maaf kijiye, kya main order ke baare mein do minute baat kar sakti hoon?', ctrl);
+          const reply = 'Maaf kijiye, kya main order ke baare mein do minute baat kar sakti hoon?';
+          saveStageTurn(reply);
+          speakToCall(reply, ctrl);
           return;
         }
       }
@@ -292,6 +320,7 @@ export async function careCallRoutes(app: FastifyInstance) {
         const params = msg.start?.customParameters ?? {};
         call = pendingCareCalls.get(params.sessionId ?? '') ?? {
           householdId: params.householdId ?? '',
+          kiranaId: params.kiranaId ?? '',
           householdName: 'ji',
           householdPhone: params.householdPhone ?? '',
           shopName: 'Sunita Kirana Store',
@@ -377,6 +406,7 @@ export async function careCallRoutes(app: FastifyInstance) {
       to,
       twiml: await callTwiML({
         householdId: plan.household.id,
+        kiranaId,
         householdName: plan.household.name,
         householdPhone: plan.household.phone,
         shopName: plan.shop.name,
