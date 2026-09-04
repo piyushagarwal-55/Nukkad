@@ -702,10 +702,12 @@ function TimelineList({ events, compact = false }: { events: Detail['timeline'];
           </div>
 
           <div className="mt-3 space-y-2 text-sm leading-6">
-            <p className="rounded-xl bg-[#f7f7ff] px-3 py-2">
-              <span className="font-semibold">Heard: </span>
-              {event.heard}
-            </p>
+            {event.heard && (
+              <p className="rounded-xl bg-[#f7f7ff] px-3 py-2">
+                <span className="font-semibold">Heard: </span>
+                {event.heard}
+              </p>
+            )}
             {event.reply && (
               <p className={`rounded-xl bg-[#fffbeb] px-3 py-2 ${compact ? 'line-clamp-3' : ''}`}>
                 <span className="font-semibold">Bot: </span>

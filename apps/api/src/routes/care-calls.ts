@@ -158,6 +158,35 @@ export async function careCallRoutes(app: FastifyInstance) {
       send({ event: 'mark', streamSid, mark: { name: mark } });
     };
 
+    const saveCallEvent = (event: {
+      heard: string;
+      reply: string | null;
+      act?: string | null;
+      goal?: string | null;
+      latencyMs?: number;
+    }) => {
+      if (!call?.kiranaId || !call.householdId) return;
+      void prisma.agentEvent
+        .create({
+          data: {
+            kiranaId: call.kiranaId,
+            householdId: call.householdId,
+            channel: 'twilio',
+            desk: 'CARE_CALL',
+            act: event.act ?? null,
+            goal: event.goal ?? stage,
+            heard: event.heard.slice(0, 500),
+            reply: event.reply?.split('\n')[0]?.slice(0, 300) ?? null,
+            latencyMs: event.latencyMs ?? 0,
+          },
+        })
+        .catch((err) => app.log.warn({ err }, 'care-call event write failed'));
+    };
+
+    const rememberBotPrompt = (text: string, act = 'BOT_PROMPT') => {
+      saveCallEvent({ heard: '', reply: text, act, goal: stage });
+    };
+
     function speakToCall(text: string, ctrl: AbortController, onDone?: () => void) {
       speaking?.abort();
       speaking = ctrl;
@@ -229,22 +258,13 @@ export async function careCallRoutes(app: FastifyInstance) {
       if (ctrl.signal.aborted) return;
 
       const saveStageTurn = (reply: string) => {
-        if (!call?.kiranaId || !call.householdId) return;
-        void prisma.agentEvent
-          .create({
-            data: {
-              kiranaId: call.kiranaId,
-              householdId: call.householdId,
-              channel: 'twilio',
-              desk: 'CARE_CALL',
-              act: frame.act,
-              goal: stage,
-              heard: text.slice(0, 500),
-              reply: reply.split('\n')[0]?.slice(0, 300) ?? null,
-              latencyMs: Date.now() - started,
-            },
-          })
-          .catch((err) => app.log.warn({ err }, 'care-call stage event write failed'));
+        saveCallEvent({
+          heard: text,
+          reply,
+          act: frame.act,
+          goal: stage,
+          latencyMs: Date.now() - started,
+        });
       };
 
       if (stage === 'PERMISSION') {
@@ -273,7 +293,9 @@ export async function careCallRoutes(app: FastifyInstance) {
       }
 
       if (stage === 'ORDER' && frame.act === 'ORDER_DECLINED') {
-        closeAfter('Theek hai ji. Koi baat nahi. Dhanyavaad.');
+        const reply = 'Theek hai ji. Koi baat nahi. Dhanyavaad.';
+        saveStageTurn(reply);
+        closeAfter(reply);
         return;
       }
 
@@ -295,6 +317,7 @@ export async function careCallRoutes(app: FastifyInstance) {
 
       const said = replies.map((r) => r.text).filter(Boolean).join(' ') || 'Theek hai ji.';
       app.log.info({ heard: text, agentText: textForAgent, said, streamSid }, 'twilio stream turn');
+      saveStageTurn(said);
       speakToCall(said, ctrl);
     }
 
@@ -335,6 +358,7 @@ export async function careCallRoutes(app: FastifyInstance) {
         const ctrl = new AbortController();
         inFlight = ctrl;
         stage = 'PERMISSION';
+        rememberBotPrompt(call.permissionScript, 'CALL_OPENED');
         speakToCall(call.permissionScript, ctrl);
         return;
       }
