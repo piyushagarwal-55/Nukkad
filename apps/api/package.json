@@ -10,6 +10,7 @@
     "render:api:build": "npm run render:generate --workspace=@nukkad/db && npm run build --workspace=@nukkad/shared && npm run build --workspace=@nukkad/db && npm run build --workspace=@nukkad/api",
     "start": "node dist/index.js",
     "worker:nudge": "dotenv -e ../../.env -- tsx src/workers/nudge-scheduler.ts",
+    "worker:care-call": "dotenv -e ../../.env -- tsx src/workers/care-call-scheduler.ts",
     "type-check": "tsc --noEmit",
     "clean": "rm -rf dist",
     "smoke": "dotenv -e ../../.env -- tsx src/scripts/smoke.ts",

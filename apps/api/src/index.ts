@@ -21,6 +21,7 @@ import { evolutionRoutes } from './routes/evolution.js';
 import { supplierRoutes } from './routes/suppliers.js';
 import { recoveryRoutes } from './routes/recovery.js';
 import { procurementRoutes } from './routes/procurement.js';
+import { careCallRoutes } from './routes/care-calls.js';
 
 const app = Fastify({ logger: loggerConfig, bodyLimit: 20 * 1024 * 1024 });
 
@@ -53,6 +54,7 @@ await app.register(evolutionRoutes);
 await app.register(supplierRoutes);
 await app.register(recoveryRoutes);
 await app.register(procurementRoutes);
+await app.register(careCallRoutes);
 
 try {
   await app.listen({ port: env.PORT, host: '0.0.0.0' });
