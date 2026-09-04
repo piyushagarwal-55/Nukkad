@@ -50,8 +50,10 @@ export interface CareCallOutcome {
     | 'PERMISSION_REASK'
     | 'DUE_BASKET_SEEDED'
     | 'BASKET_REVIEWED'
+    | 'READY_FOR_CHECKOUT'
     | 'ORDER_DECLINED'
     | 'ORDER_ENGINE_HANDOFF'
+    | 'PAYMENT_LINK_CREATED'
     | 'WHATSAPP_RECEIPT_SENT'
     | 'POST_CHECKOUT_CONTINUE'
     | 'POST_CHECKOUT_CLOSED'
@@ -85,10 +87,17 @@ export interface CareCallSessionHooks {
 const CARE_CALL_FINAL_DEBOUNCE_MS = 900;
 
 type CareDesk = 'RECEPTION' | 'SELLER' | 'CHECKOUT' | 'ENQUIRY';
-type CareState = 'OPENING' | 'BUYING' | 'REVIEWING_BASKET' | 'CHECKOUT' | 'POST_CHECKOUT' | 'ENDED';
+type CareState =
+  | 'OPENING'
+  | 'BUYING'
+  | 'REVIEWING_BASKET'
+  | 'READY_FOR_CHECKOUT'
+  | 'PAYMENT_LINK_CREATED'
+  | 'POST_CHECKOUT'
+  | 'ENDED';
 
 interface MemoryPending {
-  type: 'CONFIRM_DUE_BASKET' | 'CONFIRM_CHECKOUT' | 'ASK_MORE_ITEMS' | 'POST_CHECKOUT_MORE';
+  type: 'CONFIRM_DUE_BASKET' | 'CONFIRM_PAYMENT_LINK' | 'ASK_MORE_ITEMS' | 'POST_CHECKOUT_MORE';
   product: string | null;
   quantity: number | null;
   expiresAfterTurns: number;
@@ -305,6 +314,19 @@ export class CareCallSession {
     }
 
     if (this.stage === 'POST_CHECKOUT') {
+      if (wantsBasketReadback(text)) {
+        const basket = await currentCareCallBasket(this.call, this.channel);
+        const reply = basket.length
+          ? `${basketSummaryReply(basket)}\n\nPayment confirm hote hi order process ho jayega. Aur kuch add ya change karna ho to bataiye.`
+          : 'Abhi order khali hai. Agar kuch chahiye ho to bataiye.';
+        this.setDesk('CHECKOUT');
+        this.memory.state = 'POST_CHECKOUT';
+        this.setPending('POST_CHECKOUT_MORE');
+        emitTurn(reply, outcome('BASKET_REVIEWED', ['payment_link_created', 'basket_state_loaded'], ['load_basket'], 'POST_CHECKOUT'));
+        this.hooks.speak(reply, ctrl);
+        return;
+      }
+
       if (frame.act === 'PERMISSION_DENIED' || frame.act === 'ORDER_DECLINED' || isDoneAfterCheckout(text)) {
         const reply = `Dhanyavaad ji. ${this.call.shopName} se shopping karne ke liye shukriya.`;
         this.memory.state = 'ENDED';
@@ -332,12 +354,21 @@ export class CareCallSession {
         this.hooks.speak(reply, ctrl);
         return;
       }
-
+      this.recordEvent('STATE_CHANGED', {
+        goal: this.fsm('SELLER'),
+        heard: text,
+        reply: 'PAYMENT_LINK_CREATED -> READY_FOR_CHECKOUT',
+        latencyMs: Date.now() - started,
+      });
+      this.memory.state = 'READY_FOR_CHECKOUT';
+      this.setPending('CONFIRM_PAYMENT_LINK');
       this.stage = 'ORDER';
     }
 
     if (this.stage === 'ORDER' && negative?.action === 'CHECKOUT_REJECTED') {
-      const reply = 'Theek hai ji, bill abhi nahi bhejti. Aur kuch badalna ho to bata dijiye.';
+      const reply = this.memory.pending?.type === 'CONFIRM_PAYMENT_LINK'
+        ? 'Theek hai ji, payment link abhi nahi bhejti. Aur kuch add ya change karna ho to bata dijiye.'
+        : 'Theek hai ji, bill abhi nahi bhejti. Aur kuch badalna ho to bata dijiye.';
       this.setDesk('SELLER');
       this.memory.state = 'BUYING';
       this.setPending('ASK_MORE_ITEMS');
@@ -411,11 +442,11 @@ export class CareCallSession {
     if (this.stage === 'ORDER' && (frame.act === 'ASK_QUESTION' || wantsBasketReadback(text)) && wantsBasketReadback(text)) {
       const basket = await currentCareCallBasket(this.call, this.channel);
       const reply = basket.length
-        ? `Abhi order mein ye hai:\n\n${orderCard(basket)}\n\nBhej dun?`
+        ? `${basketSummaryReply(basket)}\n\nAur kuch add ya change karna hai, ya payment link bhej doon?`
         : 'Abhi order khali hai. Bataiye kya chahiye?';
       this.setDesk('CHECKOUT');
-      this.memory.state = basket.length ? 'REVIEWING_BASKET' : 'BUYING';
-      this.setPending(basket.length ? 'CONFIRM_CHECKOUT' : 'ASK_MORE_ITEMS');
+      this.memory.state = basket.length ? 'READY_FOR_CHECKOUT' : 'BUYING';
+      this.setPending(basket.length ? 'CONFIRM_PAYMENT_LINK' : 'ASK_MORE_ITEMS');
       emitTurn(reply, outcome('BASKET_REVIEWED', ['basket_state_loaded'], ['load_basket'], 'ORDER'));
       this.hooks.speak(reply, ctrl);
       return;
@@ -429,19 +460,51 @@ export class CareCallSession {
         latencyMs: Date.now() - started,
       });
       this.setDesk('CHECKOUT');
-      this.memory.state = 'CHECKOUT';
-      this.setPending('CONFIRM_CHECKOUT');
-      text = 'bhej do';
-      frame.act = 'CHECKOUT';
+      this.memory.state = 'READY_FOR_CHECKOUT';
+      this.setPending('CONFIRM_PAYMENT_LINK');
+      const basket = await currentCareCallBasket(this.call, this.channel);
+      const reply = basket.length
+        ? `${basketSummaryReply(basket)}\n\nPayment link bhej doon?`
+        : 'Abhi order khali hai. Bataiye kya chahiye?';
+      emitTurn(reply, outcome('READY_FOR_CHECKOUT', ['basket_finalized_by_no_more_items'], ['load_basket'], 'ORDER'));
+      this.hooks.speak(reply, ctrl);
+      return;
     }
 
     if (frame.act === 'ADD_OR_CHANGE_ITEMS') await clearPendingAddress(this.call, this.channel);
 
-    const agentText = careCallTextForAgent(frame, this.call.dueItems, text);
-    const handoffTools = ['conversation_handle', 'catalogue_resolver', 'payment_link_if_checkout'];
     const mayCheckout = frame.act === 'ORDER_ACCEPTED' || frame.act === 'CHECKOUT' || wantsCheckout(text);
+    const canCreatePaymentLink = this.memory.pending?.type === 'CONFIRM_PAYMENT_LINK'
+      && mayCheckout
+      && isPaymentLinkConfirmation(text);
+    if (this.stage === 'ORDER' && mayCheckout && !canCreatePaymentLink) {
+      const basket = await currentCareCallBasket(this.call, this.channel);
+      const reply = basket.length
+        ? `${basketSummaryReply(basket)}\n\nAur kuch add ya change karna hai, ya payment link bhej doon?`
+        : 'Bilkul ji. Bataiye kya chahiye?';
+      this.setDesk('CHECKOUT');
+      this.memory.state = basket.length ? 'READY_FOR_CHECKOUT' : 'BUYING';
+      this.setPending(basket.length ? 'CONFIRM_PAYMENT_LINK' : 'ASK_MORE_ITEMS');
+      emitTurn(reply, outcome('READY_FOR_CHECKOUT', ['checkout_intent_detected', 'payment_link_not_yet_confirmed'], ['load_basket'], 'ORDER'));
+      this.hooks.speak(reply, ctrl);
+      return;
+    }
+
+    if (canCreatePaymentLink) {
+      this.recordEvent('PAYMENT_LINK_CREATED', {
+        goal: this.fsm('CHECKOUT'),
+        heard: text,
+        reply: 'creating final payment link',
+        latencyMs: Date.now() - started,
+      });
+    }
+
+    const agentText = careCallTextForAgent(frame, this.call.dueItems, text, canCreatePaymentLink);
+    const handoffTools = ['conversation_handle', 'catalogue_resolver', 'payment_link_if_checkout'];
     let streamed = false;
-    const agentSpeech = mayCheckout ? undefined : this.hooks.agentSpeech?.(ctrl);
+    const agentSpeech = mayCheckout || this.memory.pending?.type === 'CONFIRM_PAYMENT_LINK'
+      ? undefined
+      : this.hooks.agentSpeech?.(ctrl);
     const replies = await handle(
       {
         channel: this.channel,
@@ -499,7 +562,7 @@ export class CareCallSession {
         : 'Order aur payment link ban gaya hai, lekin WhatsApp par bill bhejne mein issue aaya. Agar aapko kuch aur chahiye to bataiye.';
       this.lastPrompt = postCheckoutReply;
       this.setDesk('CHECKOUT');
-      this.memory.state = 'POST_CHECKOUT';
+      this.memory.state = 'PAYMENT_LINK_CREATED';
       this.setPending('POST_CHECKOUT_MORE');
       const postCheckoutOutcome = outcome(
         receiptSent ? 'WHATSAPP_RECEIPT_SENT' : 'WHATSAPP_RECEIPT_FAILED',
@@ -508,6 +571,7 @@ export class CareCallSession {
         'POST_CHECKOUT',
       );
       this.stage = 'POST_CHECKOUT';
+      this.memory.state = 'POST_CHECKOUT';
       emitTurn(postCheckoutReply, postCheckoutOutcome, { persist: false, agentText });
       this.hooks.speak(postCheckoutReply, ctrl);
       return;
@@ -519,6 +583,16 @@ export class CareCallSession {
       'ORDER',
     );
     this.hooks.onLog?.('care-call turn', { heard: text, agentText, said, channel: this.channel });
+    if (this.memory.pending?.type === 'CONFIRM_PAYMENT_LINK' && frame.act === 'ADD_OR_CHANGE_ITEMS') {
+      const reply = `${said.split('\n\n')[0] || said}\n\nAur kuch add ya change karna hai, ya payment link bhej doon?`;
+      this.setDesk('CHECKOUT');
+      this.memory.state = 'READY_FOR_CHECKOUT';
+      this.setPending('CONFIRM_PAYMENT_LINK');
+      emitTurn(reply, handoffOutcome, { persist: false, agentText });
+      if (!streamed) this.hooks.speak(reply, ctrl);
+      return;
+    }
+
     if (asksForMoreItems(said)) this.setPending('ASK_MORE_ITEMS');
     else this.memory.pending = null;
     emitTurn(said, handoffOutcome, { persist: false, agentText });
@@ -717,16 +791,21 @@ function wantsCheckout(text: string): boolean {
   return /\b(bhej|bhejo|bhej do|bhej lo|order|kar do|pack|bill|payment|checkout|itna hi|bas itna)\b/i.test(text);
 }
 
+function isPaymentLinkConfirmation(text: string): boolean {
+  return /\b(haan|han|ji|yes|bhej|bhejo|bhej do|bhej lo|payment|link|bill|kar do|kardo|pack|checkout|bas|itna hi|aur kuch nahi|kuch nahi)\b/i.test(text)
+    && !/\b(nahi bhej|mat bhej|bill nahi|payment nahi|link nahi|cancel|radd|rad)\b/i.test(text);
+}
+
 function wantsBasketReadback(text: string): boolean {
   return /\b(kya kya|kya-kya|abhi order|order mein|basket|bag|bill kitna|total|kitna hua)\b/i.test(text);
 }
 
-function careCallTextForAgent(frame: CareCallFrame, dueItems: string[], heard: string): string {
+function careCallTextForAgent(frame: CareCallFrame, dueItems: string[], heard: string, allowCheckout: boolean): string {
   const excluded = negatedDueItems(dueItems, heard);
   if (frame.act === 'ADD_OR_CHANGE_ITEMS' && excluded.length) {
     return `${excluded.map(itemWithoutPack).join(', ')} nahi chahiye`;
   }
-  if (frame.act === 'ORDER_ACCEPTED' || frame.act === 'CHECKOUT' || wantsCheckout(heard)) return 'bhej do';
+  if (allowCheckout && (frame.act === 'ORDER_ACCEPTED' || frame.act === 'CHECKOUT' || wantsCheckout(heard))) return 'bhej do';
   return heard;
 }
 
@@ -751,7 +830,9 @@ function readSemanticNegative(
   if (/\b(nahi|nahin|no|bas|itna hi|aur kuch nahi|kuch nahi)\b/i.test(text) && memory.pending?.type === 'ASK_MORE_ITEMS') {
     return { action: 'NO_MORE_ITEMS' };
   }
-  if (/\b(nahi|nahin|no|mat)\b/i.test(text) && memory.pending?.type === 'CONFIRM_CHECKOUT') {
+  if (/\b(nahi|nahin|no|mat)\b/i.test(text)
+    && memory.pending?.type === 'CONFIRM_PAYMENT_LINK'
+    && /\b(mat\s+bhej|nahi\s+bhej|bill\s+nahi|payment\s+nahi|link\s+nahi)\b/i.test(text)) {
     return { action: 'CHECKOUT_REJECTED' };
   }
   if (/\b(do|teen|char|paanch|ek|kilo|kg|packet|pack|litre|liter|ltr|quantity|qty)\b/i.test(text)) {
@@ -779,4 +860,8 @@ function isDoneAfterMorePrompt(text: string): boolean {
 
 function asksForMoreItems(text: string): boolean {
   return /\b(aur kuch|kuch aur|aur kya|anything else|what else|filhaal itna)\b/i.test(text);
+}
+
+function basketSummaryReply(basket: PendingLine[]): string {
+  return `Abhi order mein ye hai:\n\n${orderCard(basket)}`;
 }
