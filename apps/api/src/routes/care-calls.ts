@@ -133,6 +133,8 @@ export async function careCallRoutes(app: FastifyInstance) {
     let lastPrompt = '';
     let busy = false;
     let inFlight: AbortController | null = null;
+    let speaking: AbortController | null = null;
+    const queuedUtterances: string[] = [];
 
     const send = (msg: unknown) => {
       if (socket.readyState === 1) socket.send(JSON.stringify(msg));
@@ -154,12 +156,15 @@ export async function careCallRoutes(app: FastifyInstance) {
     };
 
     function speakToCall(text: string, ctrl: AbortController, onDone?: () => void) {
+      speaking?.abort();
+      speaking = ctrl;
       const mouth = openMouth({
         onAudio: (b64) => {
           if (!ctrl.signal.aborted) sendCallAudio(b64);
         },
         onDone: () => {
           setTimeout(() => mouth.close(), 250);
+          if (speaking === ctrl) speaking = null;
           onDone?.();
         },
         onError: (message) => app.log.warn({ message }, 'twilio tts stream'),
@@ -171,14 +176,13 @@ export async function careCallRoutes(app: FastifyInstance) {
 
     function closeAfter(text: string) {
       const ctrl = new AbortController();
-      inFlight?.abort();
-      inFlight = ctrl;
       speakToCall(text, ctrl, () => setTimeout(() => socket.close(), 900));
     }
 
     const ear = openEar({
       onSpeechStart: () => {
-        inFlight?.abort();
+        speaking?.abort();
+        speaking = null;
         clearCallAudio();
       },
       onFinal: (text) => startTurn(text),
@@ -187,16 +191,21 @@ export async function careCallRoutes(app: FastifyInstance) {
     });
 
     function startTurn(text: string) {
-      if (busy || !text.trim() || !call) return;
+      if (!text.trim() || !call) return;
+      if (busy) {
+        queuedUtterances.push(text);
+        return;
+      }
       busy = true;
 
       const ctrl = new AbortController();
-      inFlight?.abort();
       inFlight = ctrl;
 
       void runTurn(text, ctrl).finally(() => {
         busy = false;
         if (inFlight === ctrl) inFlight = null;
+        const next = queuedUtterances.splice(0).join(' ').trim();
+        if (next) startTurn(next);
       });
     }
 
