@@ -81,8 +81,6 @@ const NAV = [
   { href: '/dashboard/customers', label: 'Customers', icon: ICON.customers, fill: false },
   { href: '/dashboard/inventory', label: 'Inventory', icon: ICON.inventory, fill: false },
   { href: '/dashboard/procurement', label: 'Procurement', icon: ICON.procurement, fill: false },
-  { href: '/dashboard/workforce', label: 'AI Workforce', icon: ICON.workforce, fill: false },
-  { href: '/dashboard/evidence', label: 'Evidence', icon: ICON.evidence, fill: false },
 ];
 
 export function Sidebar({ shopName }: { shopName: string }) {
