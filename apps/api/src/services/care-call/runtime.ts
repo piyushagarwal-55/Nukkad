@@ -39,6 +39,22 @@ export interface CareCallTurn {
   action: string;
   totalMs: number;
   agentText?: string;
+  outcome: CareCallOutcome;
+}
+
+export interface CareCallOutcome {
+  name:
+    | 'PERMISSION_ALLOWED'
+    | 'PERMISSION_REFUSED'
+    | 'PERMISSION_REASK'
+    | 'DUE_BASKET_SEEDED'
+    | 'BASKET_REVIEWED'
+    | 'ORDER_DECLINED'
+    | 'ORDER_ENGINE_HANDOFF';
+  preconditions: string[];
+  tools: string[];
+  nextStage: CareCallStage | 'ENDED';
+  verified: boolean;
 }
 
 export interface CareCallSessionHooks {
@@ -73,6 +89,7 @@ export class CareCallSession {
   private finalTimer: ReturnType<typeof setTimeout> | null = null;
   private finalBuffer: string[] = [];
   private readonly queuedUtterances: string[] = [];
+  private eventSeq = 0;
 
   constructor(
     private readonly call: PendingCareCall,
@@ -85,17 +102,35 @@ export class CareCallSession {
     const ctrl = new AbortController();
     this.inFlight = ctrl;
     this.stage = 'PERMISSION';
-    this.rememberBotPrompt(this.call.permissionScript, 'CALL_OPENED');
+    this.recordEvent('CALL_STARTED', {
+      goal: this.fsm('IDLE'),
+      reply: this.call.permissionScript,
+      latencyMs: 0,
+    });
+    this.recordEvent('RESPONSE_GENERATED', {
+      goal: this.fsm('RECEPTION'),
+      reply: this.call.permissionScript,
+      latencyMs: 0,
+    });
     this.hooks.speak(this.call.permissionScript, ctrl);
   }
 
   speechStarted() {
     this.inFlight?.abort();
+    this.recordEvent('SPEECH_INTERRUPTED', {
+      goal: this.fsm('UNDERSTANDING'),
+      latencyMs: 0,
+    });
     this.hooks.interruptSpeech();
   }
 
   hearFinal(text: string) {
     if (!text.trim()) return;
+    this.recordEvent('SPEECH_FINAL', {
+      goal: this.fsm('UNDERSTANDING'),
+      heard: text,
+      latencyMs: 0,
+    });
 
     if (this.stage !== 'ORDER') {
       this.startTurn(text);
@@ -115,6 +150,10 @@ export class CareCallSession {
   close() {
     if (this.finalTimer) clearTimeout(this.finalTimer);
     this.inFlight?.abort();
+    this.recordEvent('CALL_ENDED', {
+      goal: this.fsm('ENDED'),
+      latencyMs: 0,
+    });
     this.hooks.interruptSpeech();
   }
 
@@ -154,9 +193,19 @@ export class CareCallSession {
     });
 
     this.hooks.onLog?.('care-call intent', { heard: text, frame, stage: this.stage, channel: this.channel });
+    this.recordEvent('INTENT_DETECTED', {
+      goal: this.fsm('UNDERSTANDING'),
+      heard: text,
+      reply: `confidence=${frame.confidence.toFixed(2)}`,
+      latencyMs: Date.now() - started,
+    });
     if (ctrl.signal.aborted) return;
 
-    const emitTurn = (reply: string, opts: { persist?: boolean; agentText?: string } = {}) => {
+    const emitTurn = (
+      reply: string,
+      outcome: CareCallOutcome,
+      opts: { persist?: boolean; agentText?: string } = {},
+    ) => {
       const turn = {
         stage: this.stage,
         heard: text,
@@ -164,9 +213,11 @@ export class CareCallSession {
         action: frame.act,
         totalMs: Date.now() - started,
         agentText: opts.agentText,
+        outcome,
       };
+      this.recordOutcome(outcome, text, reply, turn.totalMs);
       if (opts.persist !== false) {
-        this.saveEvent({
+        this.recordEvent('TURN_COMPLETED', {
           heard: text,
           reply,
           act: frame.act,
@@ -180,14 +231,23 @@ export class CareCallSession {
     if (this.stage === 'PERMISSION') {
       if (frame.act === 'PERMISSION_DENIED') {
         const reply = 'Theek hai ji, main baad mein pooch lungi. Dhanyavaad.';
-        emitTurn(reply);
+        emitTurn(reply, outcome('PERMISSION_REFUSED', ['permission_reply'], [], 'ENDED'));
         this.hooks.closeAfter(reply);
         return;
       }
 
       if (frame.act === 'PERMISSION_GRANTED') {
         await seedCareCallBasket(this.call, this.channel);
-        emitTurn(this.call.contextScript);
+        emitTurn(
+          this.call.contextScript,
+          outcome('DUE_BASKET_SEEDED', ['permission_granted', 'due_items_available'], ['load_conversation', 'seed_basket'], 'ORDER'),
+        );
+        this.recordEvent('STATE_CHANGED', {
+          goal: this.fsm('SELLER'),
+          heard: text,
+          reply: 'PERMISSION -> ORDER',
+          latencyMs: Date.now() - started,
+        });
         this.stage = 'ORDER';
         this.hooks.speak(this.call.contextScript, ctrl);
         return;
@@ -195,10 +255,16 @@ export class CareCallSession {
 
       if (frame.act === 'ADD_OR_CHANGE_ITEMS') {
         await seedCareCallBasket(this.call, this.channel);
+        this.recordEvent('STATE_CHANGED', {
+          goal: this.fsm('SELLER'),
+          heard: text,
+          reply: 'PERMISSION -> ORDER',
+          latencyMs: Date.now() - started,
+        });
         this.stage = 'ORDER';
       } else {
         const reply = 'Maaf kijiye, kya main order ke baare mein do minute baat kar sakti hoon?';
-        emitTurn(reply);
+        emitTurn(reply, outcome('PERMISSION_REASK', ['unclear_permission'], [], 'PERMISSION'));
         this.hooks.speak(reply, ctrl);
         return;
       }
@@ -206,7 +272,7 @@ export class CareCallSession {
 
     if (this.stage === 'ORDER' && frame.act === 'ORDER_DECLINED') {
       const reply = 'Theek hai ji. Koi baat nahi. Dhanyavaad.';
-      emitTurn(reply);
+      emitTurn(reply, outcome('ORDER_DECLINED', ['customer_declined_order'], [], 'ENDED'));
       this.hooks.closeAfter(reply);
       return;
     }
@@ -216,12 +282,18 @@ export class CareCallSession {
       const reply = basket.length
         ? `Abhi order mein ye hai:\n\n${orderCard(basket)}\n\nBhej dun?`
         : 'Abhi order khali hai. Bataiye kya chahiye?';
-      emitTurn(reply);
+      emitTurn(reply, outcome('BASKET_REVIEWED', ['basket_state_loaded'], ['load_basket'], 'ORDER'));
       this.hooks.speak(reply, ctrl);
       return;
     }
 
     const agentText = careCallTextForAgent(frame, this.call.dueItems, text);
+    const handoffOutcome = outcome(
+      'ORDER_ENGINE_HANDOFF',
+      ['intent_detected', 'conversation_state_loaded'],
+      ['conversation_handle', 'catalogue_resolver', 'payment_link_if_checkout'],
+      'ORDER',
+    );
     let streamed = false;
     const agentSpeech = this.hooks.agentSpeech?.(ctrl);
     const replies = await handle(
@@ -250,17 +322,28 @@ export class CareCallSession {
     const said = replies.map((r) => r.text).filter(Boolean).join(' ') || 'Theek hai ji.';
     this.lastPrompt = said;
     this.hooks.onLog?.('care-call turn', { heard: text, agentText, said, channel: this.channel });
-    emitTurn(said, { persist: false, agentText });
+    emitTurn(said, handoffOutcome, { persist: false, agentText });
     if (!streamed) this.hooks.speak(said.split('\n\n')[0] || said, ctrl);
   }
 
-  private rememberBotPrompt(text: string, act = 'BOT_PROMPT') {
-    this.saveEvent({ heard: '', reply: text, act, goal: this.stage });
+  private recordOutcome(outcome: CareCallOutcome, heard: string, reply: string, latencyMs: number) {
+    this.recordEvent('OUTCOME_READY', {
+      goal: `${this.fsm('ORCHESTRATOR')}.${outcome.nextStage}`,
+      heard,
+      reply: `${outcome.name}; tools=${outcome.tools.join('|') || 'none'}`,
+      latencyMs,
+    });
+    this.recordEvent('RESPONSE_GENERATED', {
+      goal: this.fsm('RESPONSE_ENGINE'),
+      heard,
+      reply,
+      latencyMs,
+    });
   }
 
-  private saveEvent(event: {
-    heard: string;
-    reply: string | null;
+  private recordEvent(name: string, event: {
+    heard?: string;
+    reply?: string | null;
     act?: string | null;
     goal?: string | null;
     latencyMs?: number;
@@ -272,15 +355,28 @@ export class CareCallSession {
           householdId: this.call.householdId,
           channel: this.channel,
           desk: 'CARE_CALL',
-          act: event.act ?? null,
+          act: event.act ?? name,
           goal: event.goal ?? this.stage,
-          heard: event.heard.slice(0, 500),
+          heard: event.heard ? `[${++this.eventSeq}] ${event.heard}`.slice(0, 500) : `[${++this.eventSeq}]`,
           reply: event.reply?.split('\n')[0]?.slice(0, 300) ?? null,
           latencyMs: event.latencyMs ?? 0,
         },
       })
       .catch((err) => this.hooks.onLog?.('care-call event write failed', { err }));
   }
+
+  private fsm(node: string) {
+    return `ACTIVE_CALL.${this.stage}.${node}`;
+  }
+}
+
+function outcome(
+  name: CareCallOutcome['name'],
+  preconditions: string[],
+  tools: string[],
+  nextStage: CareCallOutcome['nextStage'],
+): CareCallOutcome {
+  return { name, preconditions, tools, nextStage, verified: true };
 }
 
 export async function pendingFromPlan(

@@ -26,6 +26,14 @@ interface Turn {
   reply: string;
   action: string;
   totalMs: number;
+  agentText?: string;
+  outcome?: {
+    name: string;
+    preconditions: string[];
+    tools: string[];
+    nextStage: string;
+    verified: boolean;
+  };
 }
 
 const SAMPLE_RATE = 24000;
@@ -224,6 +232,9 @@ export default function CareCallTestPage() {
         `--- care call turn ${index + 1} ---`,
         `STAGE  ${turn.stage}`,
         `ACT    ${turn.action}`,
+        turn.outcome ? `OUTCOME ${turn.outcome.name} -> ${turn.outcome.nextStage}` : null,
+        turn.outcome?.tools.length ? `TOOLS  ${turn.outcome.tools.join(', ')}` : null,
+        turn.agentText ? `AGENT  "${turn.agentText}"` : null,
         turn.heard ? `HEARD  "${turn.heard}"` : null,
         `BOT    ${turn.reply}`,
         `TIME   ${turn.totalMs}ms`,
@@ -349,9 +360,35 @@ export default function CareCallTestPage() {
                 <span className="rounded-full bg-[#ecfdf5] px-2.5 py-1 text-xs font-semibold text-[#047857]">
                   {turn.action}
                 </span>
+                {turn.outcome && (
+                  <span className="rounded-full bg-[#fff7ed] px-2.5 py-1 text-xs font-semibold text-[#c2410c]">
+                    {turn.outcome.name}
+                  </span>
+                )}
               </div>
               <span className="text-xs text-[var(--muted)]">{(turn.totalMs / 1000).toFixed(1)}s</span>
             </div>
+            {turn.outcome && (
+              <div className="mt-3 grid gap-2 rounded-xl bg-white px-3 py-3 text-xs text-[var(--muted)] sm:grid-cols-3">
+                <p>
+                  <span className="block font-semibold uppercase text-[#18181b]">State</span>
+                  {turn.stage} {'->'} {turn.outcome.nextStage}
+                </p>
+                <p>
+                  <span className="block font-semibold uppercase text-[#18181b]">Tools</span>
+                  {turn.outcome.tools.length ? turn.outcome.tools.join(', ') : 'none'}
+                </p>
+                <p>
+                  <span className="block font-semibold uppercase text-[#18181b]">Verified</span>
+                  {turn.outcome.verified ? 'yes' : 'needs check'}
+                </p>
+              </div>
+            )}
+            {turn.agentText && turn.agentText !== turn.heard && (
+              <p className="mt-3 rounded-xl bg-[#eef2ff] px-3 py-2 text-sm text-[#3730a3]">
+                <span className="font-semibold">Agent input: </span>{turn.agentText}
+              </p>
+            )}
             {turn.heard && (
               <p className="mt-3 rounded-xl bg-white px-3 py-2 text-sm">
                 <span className="font-semibold">Heard: </span>{turn.heard}
