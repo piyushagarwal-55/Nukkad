@@ -188,6 +188,7 @@ function CustomerDetail() {
   if (!data) return <IntelSkeleton />;
 
   const c = data.customer;
+  const careCall = data.careCall;
 
   return (
     <>
@@ -196,13 +197,13 @@ function CustomerDetail() {
         Customers
       </Link>
 
-      <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_320px]">
-        <section className="overflow-hidden rounded-[22px] border border-[#c7d2fe] bg-white shadow-[0_18px_50px_-28px_rgba(79,70,229,0.65)]">
-          <div className="border-b border-[#c7d2fe] bg-[#eef2ff] px-6 py-5">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="mt-5 grid items-start gap-5 lg:grid-cols-[1fr_320px]">
+        <section className="overflow-hidden rounded-[20px] bg-[#eef2ff] shadow-[0_18px_48px_-30px_rgba(79,70,229,0.65)]">
+          <div className="px-6 py-5">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="display text-[clamp(2rem,4vw,2.8rem)]">{c.name}</h1>
+                  <h1 className="text-[clamp(1.8rem,3.4vw,2.45rem)] font-semibold leading-tight">{c.name}</h1>
                   <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-[var(--accent)]">
                     {c.autonomyTier.toLowerCase()}
                   </span>
@@ -224,7 +225,7 @@ function CustomerDetail() {
             {callResult && <p className="mt-3 text-sm text-[var(--muted)]">{callResult}</p>}
           </div>
 
-          <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-3 bg-white/70 p-4 sm:grid-cols-2 lg:grid-cols-4">
             <Metric tone="violet" icon={ReceiptText} label="Orders" value={c.orders.toLocaleString('en-IN')} />
             <Metric tone="green" icon={BadgeIndianRupee} label="Total spend" value={rupees(c.spendPaise)} />
             <Metric tone="amber" icon={TrendingUp} label="Avg basket" value={rupees(c.avgBasketPaise)} />
@@ -238,7 +239,7 @@ function CustomerDetail() {
           </div>
         </section>
 
-        <section className="rounded-[22px] border border-[#bbf7d0] bg-[#ecfdf5] p-5 shadow-[0_18px_46px_-30px_rgba(4,120,87,0.55)]">
+        <section className="rounded-[20px] bg-[#ecfdf5] p-5 shadow-[0_18px_46px_-32px_rgba(4,120,87,0.5)]">
           <div className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 text-[var(--accent)]" />
             <h2 className="text-sm font-semibold uppercase text-[var(--muted)]">Autonomy</h2>
@@ -252,21 +253,21 @@ function CustomerDetail() {
         </section>
       </div>
 
-      <section className="mt-6 rounded-[22px] border border-[#fde68a] bg-[#fffbeb] p-6 shadow-[0_18px_46px_-32px_rgba(245,158,11,0.55)]">
+      <section className="mt-6 rounded-[20px] bg-[#fffbeb] p-5 shadow-[0_18px_46px_-34px_rgba(245,158,11,0.55)]">
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-[var(--accent)]" />
           <h2 className="text-sm font-semibold uppercase text-[var(--muted)]">AI summary</h2>
         </div>
         <p className="mt-3 text-[15px] leading-7">{data.summary}</p>
         {data.opportunity && (
-          <p className="mt-3 rounded-xl border border-[#c7d2fe] bg-[#eef2ff] px-4 py-3 text-sm leading-6">
+          <p className="mt-3 rounded-xl bg-[#eef2ff] px-4 py-3 text-sm leading-6">
             {data.opportunity}
           </p>
         )}
       </section>
 
-      <section className="mt-6 grid gap-6 lg:grid-cols-[1fr_360px]">
-        <div className="pane p-6">
+      <section className="mt-6 grid items-start gap-6 lg:grid-cols-[1fr_360px]">
+        <div className="rounded-[20px] bg-[#f7f7ff] p-5 shadow-[0_16px_42px_-32px_rgba(79,70,229,0.5)]">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-2">
               <Radar className="h-4 w-4 text-[var(--accent)]" />
@@ -277,7 +278,7 @@ function CustomerDetail() {
             {data.tracked.length > topTracked.length && (
               <button
                 onClick={() => setModal({ title: 'Item depletion tracking', body: <TrackedList items={data.tracked} /> })}
-                className="rounded-full border border-[var(--line)] bg-white px-3 py-1 text-xs font-semibold text-[var(--accent)]"
+                className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-[var(--accent)] shadow-sm"
               >
                 More
               </button>
@@ -286,7 +287,7 @@ function CustomerDetail() {
 
           <div className="mt-5 space-y-3">
             {topTracked.map((item) => (
-              <div key={item.skuId} className="rounded-2xl border border-[var(--line)] bg-white p-4">
+              <div key={item.skuId} className="rounded-2xl bg-white p-4 shadow-sm">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -322,17 +323,27 @@ function CustomerDetail() {
           </div>
         </div>
 
-        <aside className="rounded-[22px] border border-[#fecaca] bg-[#fef2f2] p-6 shadow-[0_18px_46px_-32px_rgba(220,38,38,0.45)]">
-          <div className="flex items-center gap-2">
-            <PhoneCall className="h-4 w-4 text-[var(--accent)]" />
-            <h2 className="text-sm font-semibold uppercase text-[var(--muted)]">Care-call plan</h2>
+        <aside className="rounded-[20px] bg-[#fef2f2] p-5 shadow-[0_18px_46px_-34px_rgba(220,38,38,0.45)]">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <PhoneCall className="h-4 w-4 text-[var(--accent)]" />
+              <h2 className="text-sm font-semibold uppercase text-[var(--muted)]">Care-call plan</h2>
+            </div>
+            {careCall && (
+              <button
+                onClick={() => setModal({ title: 'Care-call plan', body: <CareCallModal careCall={careCall} /> })}
+                className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-[var(--accent)] shadow-sm"
+              >
+                More
+              </button>
+            )}
           </div>
 
-          {data.careCall ? (
+          {careCall ? (
             <>
               <div className="mt-4 space-y-2">
-                {data.careCall.lines.slice(0, 5).map((line) => (
-                  <div key={line.skuId} className="rounded-xl border border-[var(--line)] bg-white px-3 py-2">
+                {careCall.lines.slice(0, 4).map((line) => (
+                  <div key={line.skuId} className="rounded-xl bg-white px-3 py-2 shadow-sm">
                     <p className="text-sm font-semibold">{line.name}</p>
                     <p className="muted mt-0.5 text-xs">
                       {line.daysSincePurchase !== null ? `${line.daysSincePurchase}d since purchase` : 'no purchase date'}
@@ -341,13 +352,13 @@ function CustomerDetail() {
                   </div>
                 ))}
               </div>
-              {data.careCall.offer && (
+              {careCall.offer && (
                 <p className="mt-4 rounded-xl bg-[#ecfdf5] px-3 py-2 text-sm text-[#047857]">
-                  {data.careCall.offer.title}
+                  {careCall.offer.title}
                 </p>
               )}
-              <div className="mt-4 rounded-2xl bg-[#18181b] p-4 text-sm leading-6 text-white">
-                {data.careCall.openingScript}
+              <div className="mt-4 max-h-[132px] overflow-hidden rounded-2xl bg-[#18181b] p-4 text-xs leading-5 text-white">
+                {careCall.openingScript}
               </div>
             </>
           ) : (
@@ -367,7 +378,7 @@ function CustomerDetail() {
         >
           <div className="flex flex-wrap gap-2">
             {topFrequent.map((f) => (
-              <span key={f.name} className="rounded-full border border-[var(--line)] bg-white px-3 py-1.5 text-sm">
+              <span key={f.name} className="rounded-full bg-white px-3 py-1.5 text-sm shadow-sm">
                 {f.name} · <b>{f.times}x</b>
               </span>
             ))}
@@ -386,7 +397,7 @@ function CustomerDetail() {
         >
           <div className="space-y-3">
             {topUnmet.map((u) => (
-              <div key={u.id} className="rounded-xl border border-[var(--line)] bg-white px-3 py-2">
+              <div key={u.id} className="rounded-xl bg-white px-3 py-2 shadow-sm">
                 <p className="text-sm font-semibold">"{u.query}"</p>
                 <p className="muted mt-1 text-xs">
                   {when(u.createdAt)}{u.offered ? ` · offered ${u.offered}` : ''}
@@ -432,12 +443,12 @@ function CustomerDetail() {
 
       {modal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4 backdrop-blur-sm">
-          <section className="max-h-[82vh] w-full max-w-3xl overflow-hidden rounded-[22px] border border-[var(--line)] bg-white shadow-2xl">
-            <div className="flex items-center justify-between gap-4 border-b border-[var(--line)] bg-[#f7f7ff] px-5 py-4">
+          <section className="max-h-[82vh] w-full max-w-3xl overflow-hidden rounded-[22px] bg-white shadow-2xl">
+            <div className="flex items-center justify-between gap-4 bg-[#f7f7ff] px-5 py-4">
               <h2 className="text-base font-semibold">{modal.title}</h2>
               <button
                 onClick={() => setModal(null)}
-                className="grid h-9 w-9 place-items-center rounded-full border border-[var(--line)] bg-white text-[var(--muted)] hover:text-[var(--ink)]"
+                className="grid h-9 w-9 place-items-center rounded-full bg-white text-[var(--muted)] shadow-sm hover:text-[var(--ink)]"
                 aria-label="Close"
               >
                 <X className="h-4 w-4" />
@@ -472,12 +483,12 @@ function Metric({
   };
 
   return (
-    <div className={`rounded-2xl border p-4 ${tones[tone]}`}>
+    <div className={`min-w-0 rounded-2xl p-4 shadow-sm ${tones[tone]}`}>
       <div className="flex items-center justify-between">
         <p className="text-xs font-semibold uppercase text-[var(--muted)]">{label}</p>
         <Icon className="h-4 w-4 text-[var(--accent)]" />
       </div>
-      <p className="mt-3 text-2xl font-semibold tabular-nums">{value}</p>
+      <p className="mt-3 break-words text-[clamp(1.35rem,2.3vw,1.75rem)] font-semibold leading-tight tabular-nums">{value}</p>
       {note && <p className="muted mt-1 text-xs">{note}</p>}
     </div>
   );
@@ -485,7 +496,7 @@ function Metric({
 
 function Fact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-[var(--line)] pb-2">
+    <div className="flex items-center justify-between gap-4 border-b border-black/10 pb-2">
       <span className="muted">{label}</span>
       <span className="font-semibold">{value}</span>
     </div>
@@ -510,14 +521,14 @@ function Panel({
   tone?: 'violet' | 'green' | 'amber' | 'pink';
 }) {
   const tones = {
-    violet: 'bg-[#f7f7ff] border-[#c7d2fe]',
-    green: 'bg-[#f0fdf4] border-[#bbf7d0]',
-    amber: 'bg-[#fffbeb] border-[#fde68a]',
-    pink: 'bg-[#fdf2f8] border-[#fbcfe8]',
+    violet: 'bg-[#f7f7ff]',
+    green: 'bg-[#f0fdf4]',
+    amber: 'bg-[#fffbeb]',
+    pink: 'bg-[#fdf2f8]',
   };
 
   return (
-    <section className={`overflow-hidden rounded-[22px] border shadow-[0_16px_42px_-30px_rgba(24,24,27,0.45)] ${tones[tone]} ${className}`}>
+    <section className={`overflow-hidden rounded-[20px] shadow-[0_16px_42px_-32px_rgba(24,24,27,0.45)] ${tones[tone]} ${className}`}>
       <div className="flex items-center justify-between gap-3 border-b border-black/5 px-6 py-4">
         <div className="flex items-center gap-2">
           <Icon className="h-4 w-4 text-[var(--accent)]" />
@@ -546,7 +557,7 @@ function TrackedList({ items }: { items: Detail['tracked'] }) {
   return (
     <div className="space-y-3">
       {items.map((item) => (
-        <div key={item.skuId} className="rounded-2xl border border-[var(--line)] bg-white p-4">
+        <div key={item.skuId} className="rounded-2xl bg-white p-4 shadow-sm">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <div className="flex flex-wrap items-center gap-2">
@@ -584,7 +595,7 @@ function FrequentList({ items }: { items: Detail['frequent'] }) {
   return (
     <div className="flex flex-wrap gap-2">
       {items.map((f) => (
-        <span key={f.name} className="rounded-full border border-[var(--line)] bg-white px-3 py-1.5 text-sm">
+        <span key={f.name} className="rounded-full bg-white px-3 py-1.5 text-sm shadow-sm">
           {f.name} · <b>{f.times}x</b> · {f.units} units
         </span>
       ))}
@@ -596,7 +607,7 @@ function UnmetList({ items }: { items: Detail['unmetDemand'] }) {
   return (
     <div className="space-y-3">
       {items.map((u) => (
-        <div key={u.id} className="rounded-xl border border-[var(--line)] bg-white px-3 py-2">
+        <div key={u.id} className="rounded-xl bg-white px-3 py-2 shadow-sm">
           <p className="text-sm font-semibold">"{u.query}"</p>
           <p className="muted mt-1 text-xs">
             {when(u.createdAt)}{u.offered ? ` · offered ${u.offered}` : ''} · score {u.confidence.toFixed(2)}
@@ -611,7 +622,7 @@ function OrderList({ orders, compact = false }: { orders: Detail['recentOrders']
   return (
     <div className="space-y-4">
       {orders.map((order) => (
-        <div key={order.id} className="rounded-2xl border border-[var(--line)] bg-white p-4">
+        <div key={order.id} className="rounded-2xl bg-white p-4 shadow-sm">
           <div className="flex items-center justify-between gap-3">
             <div>
               <p className="text-sm font-semibold">{when(order.createdAt)}</p>
@@ -640,13 +651,42 @@ function NudgeList({ nudges }: { nudges: Detail['nudges'] }) {
   return (
     <div className="space-y-3">
       {nudges.map((nudge) => (
-        <div key={nudge.id} className="rounded-xl border border-[var(--line)] bg-white px-3 py-2">
+        <div key={nudge.id} className="rounded-xl bg-white px-3 py-2 shadow-sm">
           <p className="text-sm font-semibold">{nudge.templateName.replace(/_/g, ' ')}</p>
           <p className="muted mt-1 text-xs">
             {when(nudge.sentAt)} · {nudge.outcome ?? 'waiting'}
           </p>
         </div>
       ))}
+    </div>
+  );
+}
+
+function CareCallModal({ careCall }: { careCall: NonNullable<Detail['careCall']> }) {
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-3 sm:grid-cols-2">
+        {careCall.lines.map((line) => (
+          <div key={line.skuId} className="rounded-2xl bg-[#fef2f2] p-4 shadow-sm">
+            <p className="text-sm font-semibold">{line.name}</p>
+            <p className="muted mt-1 text-xs">
+              {line.daysSincePurchase !== null ? `${line.daysSincePurchase}d since purchase` : 'no purchase date'}
+              {line.quantityHint !== null ? ` · qty hint ${line.quantityHint}` : ''}
+            </p>
+            <p className="muted mt-1 text-xs">{line.reason.replace(/_/g, ' ').toLowerCase()}</p>
+          </div>
+        ))}
+      </div>
+
+      {careCall.offer && (
+        <div className="rounded-2xl bg-[#ecfdf5] p-4 text-sm font-medium text-[#047857]">
+          {careCall.offer.title}
+        </div>
+      )}
+
+      <div className="rounded-2xl bg-[#18181b] p-5 text-sm leading-7 text-white">
+        {careCall.openingScript}
+      </div>
     </div>
   );
 }

@@ -14,6 +14,7 @@ import { speak } from '../services/voice/tts.js';
 import { openEar } from '../services/asr/realtime.js';
 import { openMouth } from '../services/voice/mouth.js';
 import { pcm16ToMuLaw, muLawToPcm16, resamplePcm16 } from '../services/voice/twilio-codec.js';
+import { readCareCallReply, type CareCallStage } from '../services/care-call/intent.js';
 
 const callSchema = z.object({
   householdId: z.string().optional(),
@@ -29,8 +30,13 @@ const SARVAM_ASR_RATE = 16_000;
 
 interface PendingCareCall {
   householdId: string;
+  householdName: string;
   householdPhone: string;
+  shopName: string;
   shopPhone: string;
+  dueItems: string[];
+  permissionScript: string;
+  contextScript: string;
   openingScript: string;
 }
 
@@ -79,8 +85,13 @@ async function playSarvamOrSay(
 
 async function callTwiML(opts: {
   householdId: string;
+  householdName: string;
   householdPhone: string;
+  shopName: string;
   shopPhone: string;
+  dueItems: string[];
+  permissionScript: string;
+  contextScript: string;
   openingScript: string;
 }) {
   const sessionId = randomUUID();
@@ -118,6 +129,8 @@ export async function careCallRoutes(app: FastifyInstance) {
   app.get('/care-calls/twilio/stream', { websocket: true }, (socket) => {
     let streamSid: string | null = null;
     let call: PendingCareCall | null = null;
+    let stage: CareCallStage = 'PERMISSION';
+    let lastPrompt = '';
     let busy = false;
     let inFlight: AbortController | null = null;
 
@@ -140,16 +153,27 @@ export async function careCallRoutes(app: FastifyInstance) {
       send({ event: 'mark', streamSid, mark: { name: mark } });
     };
 
-    function speakToCall(text: string, ctrl: AbortController) {
+    function speakToCall(text: string, ctrl: AbortController, onDone?: () => void) {
       const mouth = openMouth({
         onAudio: (b64) => {
           if (!ctrl.signal.aborted) sendCallAudio(b64);
         },
-        onDone: () => setTimeout(() => mouth.close(), 250),
+        onDone: () => {
+          setTimeout(() => mouth.close(), 250);
+          onDone?.();
+        },
         onError: (message) => app.log.warn({ message }, 'twilio tts stream'),
       });
+      lastPrompt = text;
       mouth.say(text);
       mouth.flush();
+    }
+
+    function closeAfter(text: string) {
+      const ctrl = new AbortController();
+      inFlight?.abort();
+      inFlight = ctrl;
+      speakToCall(text, ctrl, () => setTimeout(() => socket.close(), 900));
     }
 
     const ear = openEar({
@@ -178,11 +202,53 @@ export async function careCallRoutes(app: FastifyInstance) {
 
     async function runTurn(text: string, ctrl: AbortController) {
       if (!call) return;
+      const frame = await readCareCallReply({
+        stage,
+        text,
+        customerName: call.householdName,
+        shopName: call.shopName,
+        dueItems: call.dueItems,
+        lastPrompt,
+      });
+
+      app.log.info({ heard: text, frame, stage, streamSid }, 'twilio care-call intent');
+
+      if (ctrl.signal.aborted) return;
+
+      if (stage === 'PERMISSION') {
+        if (frame.act === 'PERMISSION_DENIED') {
+          closeAfter('Theek hai ji, main baad mein pooch lungi. Dhanyavaad.');
+          return;
+        }
+
+        if (frame.act === 'PERMISSION_GRANTED') {
+          stage = 'ORDER';
+          speakToCall(call.contextScript, ctrl);
+          return;
+        }
+
+        if (frame.act === 'ADD_OR_CHANGE_ITEMS') {
+          stage = 'ORDER';
+        } else {
+          speakToCall('Maaf kijiye, kya main order ke baare mein do minute baat kar sakti hoon?', ctrl);
+          return;
+        }
+      }
+
+      if (stage === 'ORDER' && frame.act === 'ORDER_DECLINED') {
+        closeAfter('Theek hai ji. Koi baat nahi. Dhanyavaad.');
+        return;
+      }
+
+      const textForAgent = frame.act === 'ORDER_ACCEPTED'
+        ? `${call.dueItems.join(', ')} bhej do`
+        : (frame.orderText?.trim() || text);
+
       const replies = await handle({
         channel: 'twilio',
         senderId: toE164(call.householdPhone),
         recipientId: toE164(call.shopPhone),
-        text,
+        text: textForAgent,
         media: [],
         externalId: `twilio_stream_${streamSid ?? randomUUID()}_${Date.now()}`,
         receivedAt: new Date(),
@@ -191,7 +257,7 @@ export async function careCallRoutes(app: FastifyInstance) {
       if (ctrl.signal.aborted) return;
 
       const said = replies.map((r) => r.text).filter(Boolean).join(' ') || 'Theek hai ji.';
-      app.log.info({ heard: text, said, streamSid }, 'twilio stream turn');
+      app.log.info({ heard: text, agentText: textForAgent, said, streamSid }, 'twilio stream turn');
       speakToCall(said, ctrl);
     }
 
@@ -217,15 +283,21 @@ export async function careCallRoutes(app: FastifyInstance) {
         const params = msg.start?.customParameters ?? {};
         call = pendingCareCalls.get(params.sessionId ?? '') ?? {
           householdId: params.householdId ?? '',
+          householdName: 'ji',
           householdPhone: params.householdPhone ?? '',
+          shopName: 'Sunita Kirana Store',
           shopPhone: params.shopPhone ?? env.TWILIO_WHATSAPP_FROM.replace('whatsapp:', ''),
-          openingScript: 'Namaste ji, main Sunita Kirana Store se bol rahi hoon. Kya aapko koi samaan chahiye?',
+          dueItems: [],
+          permissionScript: 'Namaste ji, main Sunita Kirana Store se bol rahi hoon. Kya main aapse order ke baare mein do minute baat kar sakti hoon?',
+          contextScript: 'Aapke kuch regular items due lag rahe hain. Kya main order bana doon?',
+          openingScript: 'Namaste ji, main Sunita Kirana Store se bol rahi hoon. Kya main aapse order ke baare mein do minute baat kar sakti hoon?',
         };
         pendingCareCalls.delete(params.sessionId ?? '');
 
         const ctrl = new AbortController();
         inFlight = ctrl;
-        speakToCall(call.openingScript, ctrl);
+        stage = 'PERMISSION';
+        speakToCall(call.permissionScript, ctrl);
         return;
       }
 
@@ -296,8 +368,15 @@ export async function careCallRoutes(app: FastifyInstance) {
       to,
       twiml: await callTwiML({
         householdId: plan.household.id,
+        householdName: plan.household.name,
         householdPhone: plan.household.phone,
+        shopName: plan.shop.name,
         shopPhone: env.TWILIO_WHATSAPP_FROM.replace('whatsapp:', ''),
+        dueItems: plan.lines.map((line) => line.name),
+        permissionScript: `Namaste ${plan.household.name} ji, main ${plan.shop.name} se bol rahi hoon. Kya main aapse order ke baare mein do minute baat kar sakti hoon?`,
+        contextScript: plan.openingScript
+          .replace(/^Namaste .*? se bol rahi hoon\. /, '')
+          .replace(/^Agar aap free ho to kya main aapse 2 minute baat kar sakti hoon\? /, ''),
         openingScript: plan.openingScript,
       }),
     });
