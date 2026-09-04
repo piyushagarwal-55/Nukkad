@@ -11,6 +11,7 @@ import { env } from '../config/env.js';
 import { toE164 } from '../lib/phone.js';
 import { handle } from '../services/conversation/core.js';
 import { loadConvo, save, type PendingLine } from '../services/conversation/state.js';
+import { orderCard } from '../services/conversation/messages.js';
 import { speak } from '../services/voice/tts.js';
 import { openEar } from '../services/asr/realtime.js';
 import { openMouth } from '../services/voice/mouth.js';
@@ -104,12 +105,20 @@ function itemWithoutPack(item: string): string {
     .trim();
 }
 
+function wantsCheckout(text: string): boolean {
+  return /\b(bhej|bhejo|bhej do|bhej lo|order|kar do|pack|bill|payment|checkout|itna hi|bas itna)\b/i.test(text);
+}
+
+function wantsBasketReadback(text: string): boolean {
+  return /\b(kya kya|kya-kya|abhi order|order mein|basket|bag|bill kitna|total|kitna hua)\b/i.test(text);
+}
+
 function careCallTextForAgent(frame: CareCallFrame, dueItems: string[], heard: string): string {
-  if (frame.act === 'ORDER_ACCEPTED') return `${dueItems.join(', ')} bhej do`;
   const excluded = negatedDueItems(dueItems, heard);
   if (frame.act === 'ADD_OR_CHANGE_ITEMS' && excluded.length) {
     return `${excluded.map(itemWithoutPack).join(', ')} nahi chahiye`;
   }
+  if (frame.act === 'ORDER_ACCEPTED' || frame.act === 'CHECKOUT' || wantsCheckout(heard)) return 'bhej do';
   return heard;
 }
 
@@ -159,6 +168,11 @@ async function seedCareCallBasket(call: PendingCareCall, channel: 'care-call' | 
   convo.basket = lines;
   convo.lastNamed = lines.slice(0, 4).map((line) => ({ skuId: line.skuId!, name: line.name }));
   await save(convo, { householdId: call.householdId, kiranaId: call.kiranaId });
+}
+
+async function currentCareCallBasket(call: PendingCareCall, channel: 'care-call' | 'care-call-test') {
+  const convo = await loadConvo(channel, toE164(call.householdPhone), call.householdId, call.kiranaId);
+  return convo.basket;
 }
 
 function voiceFrom(): string {
@@ -440,6 +454,16 @@ export async function careCallRoutes(app: FastifyInstance) {
         const reply = 'Theek hai ji. Koi baat nahi. Dhanyavaad.';
         saveStageTurn(reply);
         closeAfter(reply);
+        return;
+      }
+
+      if (stage === 'ORDER' && (frame.act === 'ASK_QUESTION' || wantsBasketReadback(text)) && wantsBasketReadback(text)) {
+        const basket = await currentCareCallBasket(call, 'care-call');
+        const reply = basket.length
+          ? `Abhi order mein ye hai:\n\n${orderCard(basket)}\n\nBhej dun?`
+          : 'Abhi order khali hai. Bataiye kya chahiye?';
+        saveStageTurn(reply);
+        speakToCall(reply, ctrl);
         return;
       }
 
@@ -744,6 +768,16 @@ export async function careCallRoutes(app: FastifyInstance) {
         const reply = 'Theek hai ji. Koi baat nahi. Dhanyavaad.';
         sendTurn(reply);
         closeAfter(reply);
+        return;
+      }
+
+      if (stage === 'ORDER' && (frame.act === 'ASK_QUESTION' || wantsBasketReadback(text)) && wantsBasketReadback(text)) {
+        const basket = await currentCareCallBasket(call, 'care-call-test');
+        const reply = basket.length
+          ? `Abhi order mein ye hai:\n\n${orderCard(basket)}\n\nBhej dun?`
+          : 'Abhi order khali hai. Bataiye kya chahiye?';
+        sendTurn(reply);
+        speakToBrowser(reply, ctrl);
         return;
       }
 
