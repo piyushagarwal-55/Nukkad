@@ -50,6 +50,7 @@ export interface CareCallOutcome {
     | 'PERMISSION_REASK'
     | 'DUE_BASKET_SEEDED'
     | 'BASKET_REVIEWED'
+    | 'BASKET_UPDATED'
     | 'READY_FOR_CHECKOUT'
     | 'ORDER_DECLINED'
     | 'ORDER_ENGINE_HANDOFF'
@@ -473,6 +474,36 @@ export class CareCallSession {
 
     if (frame.act === 'ADD_OR_CHANGE_ITEMS') await clearPendingAddress(this.call, this.channel);
 
+    const removal = await removeCareCallBasketItems(this.call, this.channel, text);
+    if (removal.removed.length) {
+      this.recordEvent('TOOL_EXECUTED', {
+        goal: this.fsm('SELLER'),
+        heard: text,
+        reply: `removed=${removal.removed.join('|')}`,
+        latencyMs: Date.now() - started,
+      });
+      this.setDesk('CHECKOUT');
+      this.memory.state = removal.basket.length ? 'READY_FOR_CHECKOUT' : 'BUYING';
+      this.setPending(removal.basket.length ? 'CONFIRM_PAYMENT_LINK' : 'ASK_MORE_ITEMS');
+
+      if (!removal.basket.length) {
+        const reply = `${displayNames(removal.removed)} hata diya. Abhi order khali hai. Bataiye kya chahiye?`;
+        emitTurn(reply, outcome('BASKET_UPDATED', ['explicit_remove_item'], ['load_basket', 'update_basket'], 'ORDER'));
+        this.hooks.speak(reply, ctrl);
+        return;
+      }
+
+      if (wantsCheckout(text) && isPaymentLinkConfirmation(text)) {
+        text = 'bhej do';
+        frame.act = 'CHECKOUT';
+      } else {
+        const reply = `${displayNames(removal.removed)} hata diya.\n\n${basketSummaryReply(removal.basket)}\n\nAur kuch add ya change karna hai, ya payment link bhej doon?`;
+        emitTurn(reply, outcome('BASKET_UPDATED', ['explicit_remove_item'], ['load_basket', 'update_basket'], 'ORDER'));
+        this.hooks.speak(reply, ctrl);
+        return;
+      }
+    }
+
     const mayCheckout = frame.act === 'ORDER_ACCEPTED' || frame.act === 'CHECKOUT' || wantsCheckout(text);
     const canCreatePaymentLink = this.memory.pending?.type === 'CONFIRM_PAYMENT_LINK'
       && mayCheckout
@@ -743,6 +774,23 @@ async function currentCareCallBasket(call: PendingCareCall, channel: CareCallCha
   return convo.basket;
 }
 
+async function removeCareCallBasketItems(call: PendingCareCall, channel: CareCallChannel, heard: string) {
+  const convo = await loadConvo(channel, toE164(call.householdPhone), call.householdId, call.kiranaId);
+  const removeIndexes = findRemovalIndexes(convo.basket, call.dueItems, heard);
+  if (!removeIndexes.size) return { removed: [] as string[], basket: convo.basket };
+
+  const removed: string[] = [];
+  convo.basket = convo.basket.filter((line, index) => {
+    if (!removeIndexes.has(index)) return true;
+    removed.push(line.name);
+    return false;
+  });
+  convo.pending = null;
+  convo.lastNamed = convo.basket.slice(0, 4).map((line) => ({ skuId: line.skuId!, name: line.name }));
+  await save(convo, { householdId: call.householdId, kiranaId: call.kiranaId });
+  return { removed, basket: convo.basket };
+}
+
 async function clearPendingAddress(call: PendingCareCall, channel: CareCallChannel) {
   const convo = await loadConvo(channel, toE164(call.householdPhone), call.householdId, call.kiranaId);
   if (convo.pending?.kind !== 'ADDRESS') return;
@@ -778,6 +826,38 @@ function negatedDueItems(dueItems: string[], heard: string): string[] {
         || words.some((word) => heardWords.has(word) && ['atta', 'sugar', 'rice', 'oil'].includes(word));
     });
   });
+}
+
+function findRemovalIndexes(basket: PendingLine[], dueItems: string[], heard: string): Set<number> {
+  const out = new Set<number>();
+  if (!/\b(mat|nahi|nahin|hata|hatao|remove|without|except)\b/i.test(heard)) return out;
+
+  const namedDue = new Set(negatedDueItems(dueItems, heard).map((name) => normalizeKey(name)));
+  const negativeClauses = heard
+    .split(/\b(?:aur|and|lekin|but|par|plus)\b|[,.]/i)
+    .filter((part) => /\b(mat|nahi|nahin|hata|hatao|remove|without|except)\b/i.test(part))
+    .map((part) => new Set(normalizedWords(part)));
+
+  basket.forEach((line, index) => {
+    if (namedDue.has(normalizeKey(line.name))) {
+      out.add(index);
+      return;
+    }
+
+    const words = normalizedWords(line.name);
+    const shouldRemove = negativeClauses.some((heardWords) => {
+      const hits = words.filter((word) => heardWords.has(word)).length;
+      return hits >= Math.min(2, words.length)
+        || words.some((word) => heardWords.has(word) && ['atta', 'sugar', 'rice', 'oil', 'chai'].includes(word));
+    });
+    if (shouldRemove) out.add(index);
+  });
+
+  return out;
+}
+
+function normalizeKey(text: string): string {
+  return normalizedWords(text).join(' ');
 }
 
 function itemWithoutPack(item: string): string {
@@ -864,4 +944,9 @@ function asksForMoreItems(text: string): boolean {
 
 function basketSummaryReply(basket: PendingLine[]): string {
   return `Abhi order mein ye hai:\n\n${orderCard(basket)}`;
+}
+
+function displayNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? 'Item';
+  return `${names.slice(0, -1).join(', ')} aur ${names[names.length - 1]}`;
 }
