@@ -11,6 +11,9 @@ import { env } from '../config/env.js';
 import { toE164 } from '../lib/phone.js';
 import { handle } from '../services/conversation/core.js';
 import { speak } from '../services/voice/tts.js';
+import { openEar } from '../services/asr/realtime.js';
+import { openMouth } from '../services/voice/mouth.js';
+import { pcm16ToMuLaw, muLawToPcm16, resamplePcm16 } from '../services/voice/twilio-codec.js';
 
 const callSchema = z.object({
   householdId: z.string().optional(),
@@ -20,6 +23,18 @@ const callSchema = z.object({
 
 const client = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
 const CARE_CALL_AUDIO_DIR = join(process.cwd(), 'media', 'care-calls');
+const SARVAM_TTS_RATE = 24_000;
+const TWILIO_RATE = 8_000;
+const SARVAM_ASR_RATE = 16_000;
+
+interface PendingCareCall {
+  householdId: string;
+  householdPhone: string;
+  shopPhone: string;
+  openingScript: string;
+}
+
+const pendingCareCalls = new Map<string, PendingCareCall>();
 
 function voiceFrom(): string {
   const from = env.TWILIO_VOICE_FROM ?? env.TWILIO_SMS_NUMBER;
@@ -30,6 +45,10 @@ function voiceFrom(): string {
 function publicBase(): string {
   if (!env.PUBLIC_BASE_URL) throw new Error('PUBLIC_BASE_URL is required for outbound calls');
   return env.PUBLIC_BASE_URL.replace(/\/$/, '');
+}
+
+function publicWsBase(): string {
+  return publicBase().replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
 }
 
 function sayText(parent: { say: (attrs: Record<string, string>, text: string) => unknown }, text: string) {
@@ -64,20 +83,18 @@ async function callTwiML(opts: {
   shopPhone: string;
   openingScript: string;
 }) {
+  const sessionId = randomUUID();
+  pendingCareCalls.set(sessionId, opts);
+
   const response = new twilio.twiml.VoiceResponse();
-  const gather = response.gather({
-    input: ['speech'],
-    action: `${publicBase()}/care-calls/twilio/answer?${new URLSearchParams({
-      householdId: opts.householdId,
-      householdPhone: opts.householdPhone,
-      shopPhone: opts.shopPhone,
-    }).toString()}`,
-    method: 'POST',
-    language: 'hi-IN',
-    speechTimeout: 'auto',
+  const connect = response.connect();
+  const stream = connect.stream({
+    url: `${publicWsBase()}/care-calls/twilio/stream`,
   });
-  await playSarvamOrSay(gather, opts.openingScript);
-  await playSarvamOrSay(response, 'Theek hai ji. Main baad mein dobara pooch lungi. Dhanyavaad.');
+  stream.parameter({ name: 'sessionId', value: sessionId });
+  stream.parameter({ name: 'householdId', value: opts.householdId });
+  stream.parameter({ name: 'householdPhone', value: opts.householdPhone });
+  stream.parameter({ name: 'shopPhone', value: opts.shopPhone });
   return response.toString();
 }
 
@@ -98,6 +115,139 @@ async function replyTwiML(text: string, done = false, params: Record<string, str
 }
 
 export async function careCallRoutes(app: FastifyInstance) {
+  app.get('/care-calls/twilio/stream', { websocket: true }, (socket) => {
+    let streamSid: string | null = null;
+    let call: PendingCareCall | null = null;
+    let busy = false;
+    let inFlight: AbortController | null = null;
+
+    const send = (msg: unknown) => {
+      if (socket.readyState === 1) socket.send(JSON.stringify(msg));
+    };
+
+    const clearCallAudio = () => {
+      if (!streamSid) return;
+      send({ event: 'clear', streamSid });
+    };
+
+    const sendCallAudio = (b64: string) => {
+      if (!streamSid) return;
+      const sarvamPcm = Buffer.from(b64, 'base64');
+      const twilioPcm = resamplePcm16(sarvamPcm, SARVAM_TTS_RATE, TWILIO_RATE);
+      const payload = pcm16ToMuLaw(twilioPcm).toString('base64');
+      const mark = `sarvam_${randomUUID()}`;
+      send({ event: 'media', streamSid, media: { payload } });
+      send({ event: 'mark', streamSid, mark: { name: mark } });
+    };
+
+    function speakToCall(text: string, ctrl: AbortController) {
+      const mouth = openMouth({
+        onAudio: (b64) => {
+          if (!ctrl.signal.aborted) sendCallAudio(b64);
+        },
+        onDone: () => setTimeout(() => mouth.close(), 250),
+        onError: (message) => app.log.warn({ message }, 'twilio tts stream'),
+      });
+      mouth.say(text);
+      mouth.flush();
+    }
+
+    const ear = openEar({
+      onSpeechStart: () => {
+        inFlight?.abort();
+        clearCallAudio();
+      },
+      onFinal: (text) => startTurn(text),
+      onError: (message, fatal) => app.log.warn({ message, fatal }, 'twilio sarvam asr'),
+      onClose: () => app.log.info({ streamSid }, 'twilio sarvam ear closed'),
+    });
+
+    function startTurn(text: string) {
+      if (busy || !text.trim() || !call) return;
+      busy = true;
+
+      const ctrl = new AbortController();
+      inFlight?.abort();
+      inFlight = ctrl;
+
+      void runTurn(text, ctrl).finally(() => {
+        busy = false;
+        if (inFlight === ctrl) inFlight = null;
+      });
+    }
+
+    async function runTurn(text: string, ctrl: AbortController) {
+      if (!call) return;
+      const replies = await handle({
+        channel: 'twilio',
+        senderId: toE164(call.householdPhone),
+        recipientId: toE164(call.shopPhone),
+        text,
+        media: [],
+        externalId: `twilio_stream_${streamSid ?? randomUUID()}_${Date.now()}`,
+        receivedAt: new Date(),
+      });
+
+      if (ctrl.signal.aborted) return;
+
+      const said = replies.map((r) => r.text).filter(Boolean).join(' ') || 'Theek hai ji.';
+      app.log.info({ heard: text, said, streamSid }, 'twilio stream turn');
+      speakToCall(said, ctrl);
+    }
+
+    socket.on('message', (data: Buffer) => {
+      let msg: {
+        event?: string;
+        streamSid?: string;
+        start?: {
+          streamSid?: string;
+          customParameters?: Record<string, string>;
+        };
+        media?: { payload?: string };
+      };
+
+      try {
+        msg = JSON.parse(data.toString()) as typeof msg;
+      } catch {
+        return;
+      }
+
+      if (msg.event === 'start') {
+        streamSid = msg.start?.streamSid ?? msg.streamSid ?? null;
+        const params = msg.start?.customParameters ?? {};
+        call = pendingCareCalls.get(params.sessionId ?? '') ?? {
+          householdId: params.householdId ?? '',
+          householdPhone: params.householdPhone ?? '',
+          shopPhone: params.shopPhone ?? env.TWILIO_WHATSAPP_FROM.replace('whatsapp:', ''),
+          openingScript: 'Namaste ji, main Sunita Kirana Store se bol rahi hoon. Kya aapko koi samaan chahiye?',
+        };
+        pendingCareCalls.delete(params.sessionId ?? '');
+
+        const ctrl = new AbortController();
+        inFlight = ctrl;
+        speakToCall(call.openingScript, ctrl);
+        return;
+      }
+
+      if (msg.event === 'media' && msg.media?.payload) {
+        const muLaw = Buffer.from(msg.media.payload, 'base64');
+        const pcm8k = muLawToPcm16(muLaw);
+        ear.send(resamplePcm16(pcm8k, TWILIO_RATE, SARVAM_ASR_RATE));
+        return;
+      }
+
+      if (msg.event === 'stop') {
+        inFlight?.abort();
+        ear.close();
+      }
+    });
+
+    socket.on('close', () => {
+      inFlight?.abort();
+      ear.close();
+    });
+  });
+
   app.get('/care-calls/audio/:file', async (req, reply) => {
     const file = (req.params as { file?: string }).file ?? '';
     if (!/^[a-f0-9-]+\.wav$/i.test(file)) return reply.code(404).send({ error: 'not found' });
