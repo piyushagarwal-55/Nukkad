@@ -38,7 +38,7 @@
 html, body {
   background: var(--bg);
   color: var(--ink);
-  font-family: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-figtree, ui-sans-serif), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -47,7 +47,7 @@ html, body {
    doing as much work as the typeface.
    --------------------------------------------------------------------- */
 .display {
-  font-family: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-figtree, ui-sans-serif), system-ui, sans-serif;
   font-weight: 650;
   line-height: 1.05;
   letter-spacing: -0.025em;
@@ -178,7 +178,7 @@ html, body {
 /* the italic half of the display heading */
 .display-italic {
   font-style: italic;
-  font-family: var(--font-garamond), Georgia, serif;
+  font-family: var(--font-garamond, Georgia), serif;
   font-weight: 400;
 }
 
