@@ -1,4 +1,7 @@
 import type { FastifyInstance } from 'fastify';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import twilio from 'twilio';
 import { z } from 'zod';
 import { prisma } from '@nukkad/db';
@@ -7,6 +10,7 @@ import { buildCareCallPlans } from '../services/care-call/plan.js';
 import { env } from '../config/env.js';
 import { toE164 } from '../lib/phone.js';
 import { handle } from '../services/conversation/core.js';
+import { speak } from '../services/voice/tts.js';
 
 const callSchema = z.object({
   householdId: z.string().optional(),
@@ -15,6 +19,7 @@ const callSchema = z.object({
 });
 
 const client = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
+const CARE_CALL_AUDIO_DIR = join(process.cwd(), 'media', 'care-calls');
 
 function voiceFrom(): string {
   const from = env.TWILIO_VOICE_FROM ?? env.TWILIO_SMS_NUMBER;
@@ -31,7 +36,29 @@ function sayText(parent: { say: (attrs: Record<string, string>, text: string) =>
   parent.say({ language: 'hi-IN', voice: 'Polly.Aditi' }, text);
 }
 
-function callTwiML(opts: {
+async function sarvamAudioUrl(text: string): Promise<string | null> {
+  const spoken = await speak(text);
+  if (!spoken) return null;
+
+  await mkdir(CARE_CALL_AUDIO_DIR, { recursive: true });
+  const file = `${randomUUID()}.wav`;
+  await writeFile(join(CARE_CALL_AUDIO_DIR, file), spoken.audio);
+  return `${publicBase()}/care-calls/audio/${file}`;
+}
+
+async function playSarvamOrSay(
+  parent: {
+    play?: (url: string) => unknown;
+    say: (attrs: Record<string, string>, text: string) => unknown;
+  },
+  text: string,
+) {
+  const url = await sarvamAudioUrl(text);
+  if (url && parent.play) parent.play(url);
+  else sayText(parent, text);
+}
+
+async function callTwiML(opts: {
   householdId: string;
   householdPhone: string;
   shopPhone: string;
@@ -49,14 +76,14 @@ function callTwiML(opts: {
     language: 'hi-IN',
     speechTimeout: 'auto',
   });
-  sayText(gather, opts.openingScript);
-  sayText(response, 'Theek hai ji. Main baad mein dobara pooch lungi. Dhanyavaad.');
+  await playSarvamOrSay(gather, opts.openingScript);
+  await playSarvamOrSay(response, 'Theek hai ji. Main baad mein dobara pooch lungi. Dhanyavaad.');
   return response.toString();
 }
 
-function replyTwiML(text: string, done = false, params: Record<string, string> = {}) {
+async function replyTwiML(text: string, done = false, params: Record<string, string> = {}) {
   const response = new twilio.twiml.VoiceResponse();
-  sayText(response, text.slice(0, 1400));
+  await playSarvamOrSay(response, text.slice(0, 1400));
   if (!done) {
     const gather = response.gather({
       input: ['speech'],
@@ -65,12 +92,27 @@ function replyTwiML(text: string, done = false, params: Record<string, string> =
       language: 'hi-IN',
       speechTimeout: 'auto',
     });
-    sayText(gather, 'Aur kuch chahiye?');
+    await playSarvamOrSay(gather, 'Aur kuch chahiye?');
   }
   return response.toString();
 }
 
 export async function careCallRoutes(app: FastifyInstance) {
+  app.get('/care-calls/audio/:file', async (req, reply) => {
+    const file = (req.params as { file?: string }).file ?? '';
+    if (!/^[a-f0-9-]+\.wav$/i.test(file)) return reply.code(404).send({ error: 'not found' });
+
+    try {
+      const audio = await readFile(join(CARE_CALL_AUDIO_DIR, file));
+      return reply
+        .header('content-type', 'audio/wav')
+        .header('cache-control', 'public, max-age=3600')
+        .send(audio);
+    } catch {
+      return reply.code(404).send({ error: 'not found' });
+    }
+  });
+
   app.get('/care-calls/due', async (req, reply) => {
     const { kiranaId } = requireSession(req);
     const days = Number((req.query as { days?: string }).days ?? 5);
@@ -102,7 +144,7 @@ export async function careCallRoutes(app: FastifyInstance) {
     const call = await client.calls.create({
       from: voiceFrom(),
       to,
-      twiml: callTwiML({
+      twiml: await callTwiML({
         householdId: plan.household.id,
         householdPhone: plan.household.phone,
         shopPhone: env.TWILIO_WHATSAPP_FROM.replace('whatsapp:', ''),
@@ -137,13 +179,13 @@ export async function careCallRoutes(app: FastifyInstance) {
 
     reply.header('content-type', 'text/xml');
     if (!text) {
-      return reply.send(replyTwiML('Maaf kijiye, awaaz saaf nahi aayi. Kya samaan bhejna hai?', false, params));
+      return reply.send(await replyTwiML('Maaf kijiye, awaaz saaf nahi aayi. Kya samaan bhejna hai?', false, params));
     }
 
     const householdPhone = q.householdPhone ?? body.To;
     const shopPhone = q.shopPhone ?? env.TWILIO_WHATSAPP_FROM.replace('whatsapp:', '');
     if (!householdPhone) {
-      return reply.send(replyTwiML('Customer number nahi mila. Main order save nahi kar paayi.', true));
+      return reply.send(await replyTwiML('Customer number nahi mila. Main order save nahi kar paayi.', true));
     }
 
     const replies = await handle({
@@ -157,6 +199,6 @@ export async function careCallRoutes(app: FastifyInstance) {
     });
 
     const said = replies.map((r) => r.text).filter(Boolean).join(' ');
-    return reply.send(replyTwiML(said || 'Theek hai ji.', /payment|paise|confirm ho gaya/i.test(said), params));
+    return reply.send(await replyTwiML(said || 'Theek hai ji.', /payment|paise|confirm ho gaya/i.test(said), params));
   });
 }
