@@ -77,8 +77,6 @@ const NAV = [
   { href: '/dashboard/bills', label: 'Bill upload', icon: ICON.bill, fill: false },
   { href: '/dashboard/orders', label: 'Orders', icon: ICON.orders, fill: false },
   { href: '/dashboard/connect', label: 'WhatsApp', icon: ICON.whatsapp, fill: false },
-  { href: '/dashboard/voice', label: 'Voice', icon: ICON.voice, fill: false },
-  { href: '/dashboard/care-call-test', label: 'Care Call Test', icon: ICON.care, fill: false },
   { href: '/dashboard/insights', label: 'Insights', icon: ICON.insights, fill: false },
   { href: '/dashboard/customers', label: 'Customers', icon: ICON.customers, fill: false },
   { href: '/dashboard/inventory', label: 'Inventory', icon: ICON.inventory, fill: false },
