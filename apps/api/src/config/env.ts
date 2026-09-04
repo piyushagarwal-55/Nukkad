@@ -21,6 +21,8 @@ const schema = z.object({
   TWILIO_AUTH_TOKEN: z.string().min(10),
   TWILIO_WHATSAPP_FROM: z.string().min(5),
   TWILIO_SANDBOX_JOIN_CODE: z.string().optional(),
+  TWILIO_SMS_NUMBER: z.string().optional(),
+  TWILIO_VOICE_FROM: z.string().optional(),
 
   // Groq. One key does ASR and chat, because Groq is OpenAI-compatible.
   GROQ_API_KEY: z.string().startsWith('gsk_'),
