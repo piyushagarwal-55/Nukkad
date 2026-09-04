@@ -3,7 +3,7 @@ import { groq } from '../../lib/groq.js';
 import { env } from '../../config/env.js';
 import { span } from '../telemetry/span.js';
 
-export const careCallStageSchema = z.enum(['PERMISSION', 'ORDER']);
+export const careCallStageSchema = z.enum(['PERMISSION', 'ORDER', 'POST_CHECKOUT']);
 export type CareCallStage = z.infer<typeof careCallStageSchema>;
 
 export const careCallActSchema = z.enum([
@@ -58,6 +58,8 @@ const SYSTEM = [
   '  without naming products, classify ORDER_ACCEPTED.',
   '- At ORDER stage, "bas itna hi" and similar finish phrases are CHECKOUT,',
   '  not ADD_OR_CHANGE_ITEMS.',
+  '- At POST_CHECKOUT stage, yes/haan means the caller wants to continue shopping.',
+  '- At POST_CHECKOUT stage, no/nahi/bas means the caller is done and the call should end.',
   '- If the caller names products at any stage, use ADD_OR_CHANGE_ITEMS.',
   '- For ADD_OR_CHANGE_ITEMS, orderText must preserve the caller intent words,',
   '  especially removal or exclusion words such as "mat", "nahi", "hata",',

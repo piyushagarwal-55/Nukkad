@@ -50,7 +50,11 @@ export interface CareCallOutcome {
     | 'DUE_BASKET_SEEDED'
     | 'BASKET_REVIEWED'
     | 'ORDER_DECLINED'
-    | 'ORDER_ENGINE_HANDOFF';
+    | 'ORDER_ENGINE_HANDOFF'
+    | 'WHATSAPP_RECEIPT_SENT'
+    | 'POST_CHECKOUT_CONTINUE'
+    | 'POST_CHECKOUT_CLOSED'
+    | 'POST_CHECKOUT_REASK';
   preconditions: string[];
   tools: string[];
   nextStage: CareCallStage | 'ENDED';
@@ -229,6 +233,32 @@ export class CareCallSession {
       this.hooks.onTurn?.(turn);
     };
 
+    if (this.stage === 'POST_CHECKOUT') {
+      if (frame.act === 'PERMISSION_DENIED' || frame.act === 'ORDER_DECLINED' || isDoneAfterCheckout(text)) {
+        const reply = `Dhanyavaad ji. ${this.call.shopName} se shopping karne ke liye shukriya.`;
+        emitTurn(reply, outcome('POST_CHECKOUT_CLOSED', ['checkout_receipt_sent', 'customer_done'], [], 'ENDED'));
+        this.hooks.closeAfter(reply);
+        return;
+      }
+
+      if (frame.act === 'PERMISSION_GRANTED' || frame.act === 'ORDER_ACCEPTED') {
+        const reply = 'Haan ji, bataiye aur kya chahiye?';
+        emitTurn(reply, outcome('POST_CHECKOUT_CONTINUE', ['checkout_receipt_sent', 'customer_wants_more'], [], 'ORDER'));
+        this.stage = 'ORDER';
+        this.hooks.speak(reply, ctrl);
+        return;
+      }
+
+      if (frame.act !== 'ADD_OR_CHANGE_ITEMS') {
+        const reply = 'Aur kuch chahiye to bata dijiye, warna main call yahin close kar deti hoon.';
+        emitTurn(reply, outcome('POST_CHECKOUT_REASK', ['checkout_receipt_sent', 'unclear_reply'], [], 'POST_CHECKOUT'));
+        this.hooks.speak(reply, ctrl);
+        return;
+      }
+
+      this.stage = 'ORDER';
+    }
+
     if (this.stage === 'PERMISSION') {
       if (frame.act === 'PERMISSION_DENIED') {
         const reply = 'Theek hai ji, main baad mein pooch lungi. Dhanyavaad.';
@@ -326,6 +356,18 @@ export class CareCallSession {
         reply: 'whatsapp_receipt_sent',
         latencyMs: Date.now() - started,
       });
+      const postCheckoutReply = 'Aapke WhatsApp par bill aur payment link bhej diya hai. Agar aapko kuch aur chahiye to bataiye.';
+      this.lastPrompt = postCheckoutReply;
+      const postCheckoutOutcome = outcome(
+        'WHATSAPP_RECEIPT_SENT',
+        ['checkout_receipt_created'],
+        handoffTools,
+        'POST_CHECKOUT',
+      );
+      this.stage = 'POST_CHECKOUT';
+      emitTurn(postCheckoutReply, postCheckoutOutcome, { persist: false, agentText });
+      this.hooks.speak(postCheckoutReply, ctrl);
+      return;
     }
     const handoffOutcome = outcome(
       'ORDER_ENGINE_HANDOFF',
@@ -505,4 +547,8 @@ function isCheckoutReceipt(text: string): boolean {
   return /(^|\n)Total:\s*Rs\s*\d/i.test(text)
     && (/(^|\n)Pay:\s*https?:\/\//i.test(text) || /Saamaan aane par de dijiye/i.test(text))
     && /\(#[a-z0-9-]{4,}\)/i.test(text);
+}
+
+function isDoneAfterCheckout(text: string): boolean {
+  return /\b(nahi|nahin|no|bas|itna hi|aur kuch nahi|kuch nahi|done|thank|thanks|shukriya|dhanyavaad)\b/i.test(text);
 }
