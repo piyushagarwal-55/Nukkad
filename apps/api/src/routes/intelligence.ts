@@ -2,6 +2,22 @@ import type { FastifyInstance } from 'fastify';
 import { prisma } from '@nukkad/db';
 import { requireSession } from './auth.js';
 import { normalise } from '../services/resolver/normalise.js';
+import { buildCareCallPlans } from '../services/care-call/plan.js';
+
+const DAY = 86_400_000;
+
+function daysBetween(a: Date, b: Date): number {
+  return Math.max(0, Math.round((a.getTime() - b.getTime()) / DAY));
+}
+
+function daysFromNow(at: Date | null): number | null {
+  if (!at) return null;
+  return Math.round((at.getTime() - Date.now()) / DAY);
+}
+
+function lastDate(rows: Array<{ createdAt: Date }>): Date | null {
+  return rows.reduce<Date | null>((m, row) => (!m || row.createdAt > m ? row.createdAt : m), null);
+}
 
 /**
  * THE INTELLIGENCE LAYER OF THE DASHBOARD, and the rule every endpoint
@@ -135,36 +151,79 @@ export async function intelligenceRoutes(app: FastifyInstance) {
    */
   app.get('/intel/customers', async (req) => {
     const { kiranaId } = requireSession(req);
-    const households = await prisma.household.findMany({
-      where: { kiranaId },
-      select: {
-        id: true, name: true, phone: true, createdAt: true,
-        orders: {
-          where: { status: { not: 'CANCELLED' } },
-          select: { createdAt: true, totalPaise: true },
+    const [households, carePlans] = await Promise.all([
+      prisma.household.findMany({
+        where: { kiranaId },
+        select: {
+          id: true, name: true, phone: true, address: true, createdAt: true, autonomyTier: true,
+          orders: {
+            where: { status: { not: 'CANCELLED' } },
+            select: { createdAt: true, totalPaise: true },
+            orderBy: { createdAt: 'asc' },
+          },
+          burnRates: {
+            select: {
+              predictedDepletionAt: true,
+              observations: true,
+              seeded: true,
+              sku: { select: { name: true } },
+            },
+            orderBy: { predictedDepletionAt: 'asc' },
+            take: 12,
+          },
+          nudges: {
+            orderBy: { sentAt: 'desc' },
+            take: 1,
+            select: { sentAt: true, outcome: true, templateName: true },
+          },
         },
-      },
-    });
+      }),
+      buildCareCallPlans(kiranaId, 5),
+    ]);
+
+    const carePlanByHousehold = new Map(carePlans.map((p) => [p.household.id, p]));
 
     return {
       customers: households
         .map((h) => {
           const spend = h.orders.reduce((s, o) => s + o.totalPaise, 0);
-          const last = h.orders.reduce<Date | null>(
-            (m, o) => (!m || o.createdAt > m ? o.createdAt : m), null,
-          );
+          const last = lastDate(h.orders);
+          const gaps: number[] = [];
+          for (let i = 1; i < h.orders.length; i++) {
+            gaps.push(daysBetween(h.orders[i]!.createdAt, h.orders[i - 1]!.createdAt));
+          }
+          gaps.sort((a, b) => a - b);
+          const medianGapDays = gaps.length ? gaps[Math.floor(gaps.length / 2)]! : null;
+          const tracked = h.burnRates.filter((b) => b.predictedDepletionAt);
+          const dueTracked = tracked.filter((b) => {
+            const days = daysFromNow(b.predictedDepletionAt);
+            return days !== null && days <= 5;
+          });
+          const carePlan = carePlanByHousehold.get(h.id);
+          const strongest = dueTracked[0] ?? tracked[0] ?? null;
           return {
             id: h.id,
             name: h.name,
             phone: h.phone,
+            address: h.address,
             since: h.createdAt,
+            autonomyTier: h.autonomyTier,
             orders: h.orders.length,
             spendPaise: spend,
             avgBasketPaise: h.orders.length ? Math.round(spend / h.orders.length) : 0,
             lastOrder: last,
+            medianGapDays,
+            daysSinceLast: last ? daysBetween(new Date(), last) : null,
+            trackedItems: h.burnRates.length,
+            dueItems: carePlan?.lines.length ?? dueTracked.length,
+            nextItem: carePlan?.lines[0]?.name ?? strongest?.sku.name ?? null,
+            nextItemDays: carePlan?.lines[0]?.predictedDepletionAt
+              ? daysFromNow(carePlan.lines[0].predictedDepletionAt)
+              : (strongest ? daysFromNow(strongest.predictedDepletionAt) : null),
+            lastNudge: h.nudges[0] ?? null,
           };
         })
-        .sort((a, b) => b.spendPaise - a.spendPaise),
+        .sort((a, b) => (b.dueItems - a.dueItems) || (b.spendPaise - a.spendPaise)),
     };
   });
 
@@ -179,15 +238,47 @@ export async function intelligenceRoutes(app: FastifyInstance) {
     const householdId = (req.query as { householdId?: string }).householdId;
     if (!householdId) return reply.code(400).send({ error: 'householdId required' });
 
-    const [h, lines, events, catalogue] = await Promise.all([
+    const [h, lines, events, catalogue, carePlans, unmet, nudges] = await Promise.all([
       prisma.household.findFirst({
         where: { id: householdId, kiranaId },
         select: {
           id: true, name: true, phone: true, address: true, createdAt: true,
+          memberCount: true, autonomyTier: true, streak: true, vetoWindowMins: true, capPaise: true,
           orders: {
             where: { status: { not: 'CANCELLED' } },
-            select: { id: true, createdAt: true, totalPaise: true, status: true },
+            select: {
+              id: true, createdAt: true, totalPaise: true, status: true, source: true,
+              lines: {
+                select: {
+                  quantity: true,
+                  sourceText: true,
+                  linePaise: true,
+                  method: true,
+                  confidence: true,
+                  wasSubstituted: true,
+                  sku: { select: { id: true, name: true, category: true, unit: true } },
+                },
+              },
+            },
             orderBy: { createdAt: 'desc' },
+          },
+          burnRates: {
+            select: {
+              qtyPerDay: true,
+              lastPurchaseAt: true,
+              lastQty: true,
+              predictedDepletionAt: true,
+              observations: true,
+              seeded: true,
+              updatedAt: true,
+              sku: {
+                select: {
+                  id: true, name: true, category: true, unit: true,
+                  stock: { select: { quantity: true, updatedAt: true } },
+                },
+              },
+            },
+            orderBy: { predictedDepletionAt: 'asc' },
           },
         },
       }),
@@ -204,6 +295,17 @@ export async function intelligenceRoutes(app: FastifyInstance) {
         where: { kiranaId, active: true },
         select: { category: true },
         distinct: ['category'],
+      }),
+      buildCareCallPlans(kiranaId, 14),
+      prisma.unmetDemand.findMany({
+        where: { kiranaId, householdId },
+        orderBy: { createdAt: 'desc' },
+        take: 12,
+      }),
+      prisma.nudge.findMany({
+        where: { householdId },
+        orderBy: { sentAt: 'desc' },
+        take: 8,
       }),
     ]);
     if (!h) return reply.code(404).send({ error: 'no such customer' });
@@ -234,10 +336,64 @@ export async function intelligenceRoutes(app: FastifyInstance) {
       .find((c) => !boughtCategories.has(c));
 
     const spend = h.orders.reduce((s, o) => s + o.totalPaise, 0);
+    const carePlan = carePlans.find((p) => p.household.id === householdId) ?? null;
+    const tracked = h.burnRates.map((b) => {
+      const daysUntil = daysFromNow(b.predictedDepletionAt);
+      const daysSincePurchase = b.lastPurchaseAt ? daysBetween(new Date(), b.lastPurchaseAt) : null;
+      const cycleDays = b.lastQty && b.qtyPerDay > 0 ? Math.round(b.lastQty / b.qtyPerDay) : null;
+      const consumedPct = cycleDays && daysSincePurchase !== null
+        ? Math.max(0, Math.min(100, Math.round((daysSincePurchase / cycleDays) * 100)))
+        : null;
+      return {
+        skuId: b.sku.id,
+        name: b.sku.name,
+        category: b.sku.category,
+        unit: b.sku.unit,
+        qtyPerDay: b.qtyPerDay,
+        lastQty: b.lastQty,
+        lastPurchaseAt: b.lastPurchaseAt,
+        daysSincePurchase,
+        predictedDepletionAt: b.predictedDepletionAt,
+        daysUntilDepletion: daysUntil,
+        observations: b.observations,
+        seeded: b.seeded,
+        updatedAt: b.updatedAt,
+        stockInShop: b.sku.stock?.quantity ?? null,
+        consumedPct,
+        signal: daysUntil === null
+          ? 'learning'
+          : daysUntil <= 0
+            ? 'likely empty'
+            : daysUntil <= 5
+              ? 'call window'
+              : 'monitoring',
+      };
+    });
+    const dueTracked = tracked.filter((t) => t.daysUntilDepletion !== null && t.daysUntilDepletion <= 5);
+    const learnedTracked = tracked.filter((t) => !t.seeded || t.observations > 0).length;
+    const nextDue = carePlan?.lines[0]?.name ?? dueTracked[0]?.name ?? null;
+    const lastOrder = h.orders[0] ?? null;
+    const summaryParts = [
+      `${h.name} ke ${tracked.length} item depletion model mein track ho rahe hain.`,
+      learnedTracked
+        ? `${learnedTracked} item real purchases se calibrated hain; baaki seeded estimates hain.`
+        : 'Abhi model seeded estimates se start kar raha hai; orders badhenge to burn rate tighten hoga.',
+      nextDue
+        ? `${nextDue} abhi outreach ke liye strongest signal hai.`
+        : 'Aaj immediate call signal nahi mila.',
+      lastOrder
+        ? `Last order ${daysBetween(new Date(), lastOrder.createdAt)} din pehle tha.`
+        : 'Is customer ka order history abhi empty hai.',
+    ];
 
     return {
       customer: {
         id: h.id, name: h.name, phone: h.phone, address: h.address, since: h.createdAt,
+        memberCount: h.memberCount,
+        autonomyTier: h.autonomyTier,
+        streak: h.streak,
+        vetoWindowMins: h.vetoWindowMins,
+        capPaise: h.capPaise,
         orders: h.orders.length,
         spendPaise: spend,
         avgBasketPaise: h.orders.length ? Math.round(spend / h.orders.length) : 0,
@@ -246,9 +402,28 @@ export async function intelligenceRoutes(app: FastifyInstance) {
           ? Math.round((Date.now() - h.orders[0].createdAt.getTime()) / 86_400_000)
           : null,
       },
+      summary: summaryParts.join(' '),
+      tracked,
+      careCall: carePlan
+        ? {
+          lines: carePlan.lines,
+          offer: carePlan.offer,
+          openingScript: carePlan.openingScript,
+          guardrail: carePlan.guardrail,
+        }
+        : null,
       frequent: [...byProduct.values()].sort((a, b) => b.times - a.times).slice(0, 8),
-      recentOrders: h.orders.slice(0, 10),
+      recentOrders: h.orders.slice(0, 10).map((o) => ({
+        id: o.id,
+        createdAt: o.createdAt,
+        totalPaise: o.totalPaise,
+        status: o.status,
+        source: o.source,
+        lines: o.lines,
+      })),
       timeline: events,
+      unmetDemand: unmet,
+      nudges,
       opportunity: gap
         ? `${h.name} ne abhi tak ${gap} category se kuch nahi liya -- agle relevant order mein suggest karne layak.`
         : null,
