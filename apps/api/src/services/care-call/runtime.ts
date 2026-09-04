@@ -40,6 +40,7 @@ export interface CareCallTurn {
   totalMs: number;
   agentText?: string;
   outcome: CareCallOutcome;
+  memory: ConversationFrame;
 }
 
 export interface CareCallOutcome {
@@ -56,7 +57,9 @@ export interface CareCallOutcome {
     | 'POST_CHECKOUT_CLOSED'
     | 'POST_CHECKOUT_REASK'
     | 'END_CALL'
-    | 'NO_MORE_ITEMS_CHECKOUT';
+    | 'NO_MORE_ITEMS_CHECKOUT'
+    | 'CHECKOUT_REJECTED'
+    | 'CANCEL_ORDER';
   preconditions: string[];
   tools: string[];
   nextStage: CareCallStage | 'ENDED';
@@ -80,6 +83,30 @@ export interface CareCallSessionHooks {
 
 const CARE_CALL_FINAL_DEBOUNCE_MS = 900;
 
+type CareDesk = 'RECEPTION' | 'SELLER' | 'CHECKOUT' | 'ENQUIRY';
+type CareState = 'OPENING' | 'BUYING' | 'REVIEWING_BASKET' | 'CHECKOUT' | 'POST_CHECKOUT' | 'ENDED';
+
+interface MemoryPending {
+  type: 'CONFIRM_DUE_BASKET' | 'CONFIRM_CHECKOUT' | 'ASK_MORE_ITEMS' | 'POST_CHECKOUT_MORE';
+  product: string | null;
+  quantity: number | null;
+  expiresAfterTurns: number;
+}
+
+export interface ConversationFrame {
+  desk: CareDesk;
+  previousDesk: CareDesk | null;
+  state: CareState;
+  turn: number;
+  pending: MemoryPending | null;
+  referents: {
+    lastProduct: string | null;
+    lastOptions: string[];
+    lastOrderRef: string | null;
+  };
+  lastBotQuestion: string | null;
+}
+
 /**
  * One durable conversation runtime for every care-call transport.
  *
@@ -97,7 +124,15 @@ export class CareCallSession {
   private finalBuffer: string[] = [];
   private readonly queuedUtterances: string[] = [];
   private eventSeq = 0;
-  private pendingAction: 'CONFIRM_DUE_BASKET' | 'CONFIRM_CHECKOUT' | 'ASK_MORE_ITEMS' | 'POST_CHECKOUT_MORE' | null = null;
+  private memory: ConversationFrame = {
+    desk: 'RECEPTION',
+    previousDesk: null,
+    state: 'OPENING',
+    turn: 0,
+    pending: null,
+    referents: { lastProduct: null, lastOptions: [], lastOrderRef: null },
+    lastBotQuestion: null,
+  };
 
   constructor(
     private readonly call: PendingCareCall,
@@ -110,6 +145,9 @@ export class CareCallSession {
     const ctrl = new AbortController();
     this.inFlight = ctrl;
     this.stage = 'PERMISSION';
+    this.setDesk('RECEPTION');
+    this.memory.state = 'OPENING';
+    this.memory.lastBotQuestion = this.call.permissionScript;
     this.recordEvent('CALL_STARTED', {
       goal: this.fsm('IDLE'),
       reply: this.call.permissionScript,
@@ -191,6 +229,7 @@ export class CareCallSession {
 
   private async runTurn(text: string, ctrl: AbortController) {
     const started = Date.now();
+    this.beginUserTurn();
     const terminal = readTerminalAct(text);
     const frame = terminal ?? await readCareCallReply({
       stage: this.stage,
@@ -209,12 +248,22 @@ export class CareCallSession {
       latencyMs: Date.now() - started,
     });
     if (ctrl.signal.aborted) return;
+    const negative = readSemanticNegative(text, this.memory);
+    if (negative) {
+      this.recordEvent('DECISION_MADE', {
+        goal: this.fsm('SEMANTIC_RESOLVER'),
+        heard: text,
+        reply: negative.action,
+        latencyMs: Date.now() - started,
+      });
+    }
 
     const emitTurn = (
       reply: string,
       outcome: CareCallOutcome,
       opts: { persist?: boolean; agentText?: string } = {},
     ) => {
+      this.memory.lastBotQuestion = reply.includes('?') ? reply : this.memory.lastBotQuestion;
       const turn = {
         stage: this.stage,
         heard: text,
@@ -223,6 +272,7 @@ export class CareCallSession {
         totalMs: Date.now() - started,
         agentText: opts.agentText,
         outcome,
+        memory: this.memorySnapshot(),
       };
       this.recordOutcome(outcome, text, reply, turn.totalMs);
       if (opts.persist !== false) {
@@ -244,9 +294,20 @@ export class CareCallSession {
       return;
     }
 
+    if (negative?.action === 'CANCEL_ORDER') {
+      const reply = 'Theek hai ji, order cancel kar diya. Dhanyavaad.';
+      this.memory.state = 'ENDED';
+      this.memory.pending = null;
+      emitTurn(reply, outcome('CANCEL_ORDER', ['explicit_cancel_order'], [], 'ENDED'));
+      this.hooks.closeAfter(reply);
+      return;
+    }
+
     if (this.stage === 'POST_CHECKOUT') {
       if (frame.act === 'PERMISSION_DENIED' || frame.act === 'ORDER_DECLINED' || isDoneAfterCheckout(text)) {
         const reply = `Dhanyavaad ji. ${this.call.shopName} se shopping karne ke liye shukriya.`;
+        this.memory.state = 'ENDED';
+        this.memory.pending = null;
         emitTurn(reply, outcome('POST_CHECKOUT_CLOSED', ['checkout_receipt_sent', 'customer_done'], [], 'ENDED'));
         this.hooks.closeAfter(reply);
         return;
@@ -254,6 +315,9 @@ export class CareCallSession {
 
       if (frame.act === 'PERMISSION_GRANTED' || frame.act === 'ORDER_ACCEPTED') {
         const reply = 'Haan ji, bataiye aur kya chahiye?';
+        this.setDesk('SELLER');
+        this.memory.state = 'BUYING';
+        this.setPending('ASK_MORE_ITEMS');
         emitTurn(reply, outcome('POST_CHECKOUT_CONTINUE', ['checkout_receipt_sent', 'customer_wants_more'], [], 'ORDER'));
         this.stage = 'ORDER';
         this.hooks.speak(reply, ctrl);
@@ -262,6 +326,7 @@ export class CareCallSession {
 
       if (frame.act !== 'ADD_OR_CHANGE_ITEMS') {
         const reply = 'Aur kuch chahiye to bata dijiye, warna main call yahin close kar deti hoon.';
+        this.setPending('POST_CHECKOUT_MORE');
         emitTurn(reply, outcome('POST_CHECKOUT_REASK', ['checkout_receipt_sent', 'unclear_reply'], [], 'POST_CHECKOUT'));
         this.hooks.speak(reply, ctrl);
         return;
@@ -270,9 +335,25 @@ export class CareCallSession {
       this.stage = 'ORDER';
     }
 
+    if (this.stage === 'ORDER' && negative?.action === 'CHECKOUT_REJECTED') {
+      const reply = 'Theek hai ji, bill abhi nahi bhejti. Aur kuch badalna ho to bata dijiye.';
+      this.setDesk('SELLER');
+      this.memory.state = 'BUYING';
+      this.setPending('ASK_MORE_ITEMS');
+      emitTurn(reply, outcome('CHECKOUT_REJECTED', ['checkout_confirmation_rejected'], [], 'ORDER'));
+      this.hooks.speak(reply, ctrl);
+      return;
+    }
+
+    if (this.stage === 'ORDER' && negative?.action === 'REJECT_PRODUCT') {
+      frame.act = 'ADD_OR_CHANGE_ITEMS';
+    }
+
     if (this.stage === 'PERMISSION') {
       if (frame.act === 'PERMISSION_DENIED') {
         const reply = 'Theek hai ji, main baad mein pooch lungi. Dhanyavaad.';
+        this.memory.state = 'ENDED';
+        this.memory.pending = null;
         emitTurn(reply, outcome('PERMISSION_REFUSED', ['permission_reply'], [], 'ENDED'));
         this.hooks.closeAfter(reply);
         return;
@@ -280,7 +361,9 @@ export class CareCallSession {
 
       if (frame.act === 'PERMISSION_GRANTED') {
         await seedCareCallBasket(this.call, this.channel);
-        this.pendingAction = 'CONFIRM_DUE_BASKET';
+        this.setDesk('SELLER');
+        this.memory.state = 'BUYING';
+        this.setPending('CONFIRM_DUE_BASKET');
         emitTurn(
           this.call.contextScript,
           outcome('DUE_BASKET_SEEDED', ['permission_granted', 'due_items_available'], ['load_conversation', 'seed_basket'], 'ORDER'),
@@ -298,6 +381,8 @@ export class CareCallSession {
 
       if (frame.act === 'ADD_OR_CHANGE_ITEMS') {
         await seedCareCallBasket(this.call, this.channel);
+        this.setDesk('SELLER');
+        this.memory.state = 'BUYING';
         this.recordEvent('STATE_CHANGED', {
           goal: this.fsm('SELLER'),
           heard: text,
@@ -315,6 +400,8 @@ export class CareCallSession {
 
     if (this.stage === 'ORDER' && frame.act === 'ORDER_DECLINED') {
       const reply = 'Theek hai ji. Koi baat nahi. Dhanyavaad.';
+      this.memory.state = 'ENDED';
+      this.memory.pending = null;
       emitTurn(reply, outcome('ORDER_DECLINED', ['customer_declined_order'], [], 'ENDED'));
       this.hooks.closeAfter(reply);
       return;
@@ -325,20 +412,24 @@ export class CareCallSession {
       const reply = basket.length
         ? `Abhi order mein ye hai:\n\n${orderCard(basket)}\n\nBhej dun?`
         : 'Abhi order khali hai. Bataiye kya chahiye?';
-      this.pendingAction = basket.length ? 'CONFIRM_CHECKOUT' : 'ASK_MORE_ITEMS';
+      this.setDesk('CHECKOUT');
+      this.memory.state = basket.length ? 'REVIEWING_BASKET' : 'BUYING';
+      this.setPending(basket.length ? 'CONFIRM_CHECKOUT' : 'ASK_MORE_ITEMS');
       emitTurn(reply, outcome('BASKET_REVIEWED', ['basket_state_loaded'], ['load_basket'], 'ORDER'));
       this.hooks.speak(reply, ctrl);
       return;
     }
 
-    if (this.stage === 'ORDER' && this.pendingAction === 'ASK_MORE_ITEMS' && isDoneAfterMorePrompt(text)) {
+    if (this.stage === 'ORDER' && this.memory.pending?.type === 'ASK_MORE_ITEMS' && isDoneAfterMorePrompt(text)) {
       this.recordEvent('DECISION_MADE', {
         goal: this.fsm('CHECKOUT'),
         heard: text,
         reply: 'NO_MORE_ITEMS_CHECKOUT',
         latencyMs: Date.now() - started,
       });
-      this.pendingAction = 'CONFIRM_CHECKOUT';
+      this.setDesk('CHECKOUT');
+      this.memory.state = 'CHECKOUT';
+      this.setPending('CONFIRM_CHECKOUT');
       text = 'bhej do';
       frame.act = 'CHECKOUT';
     }
@@ -391,7 +482,9 @@ export class CareCallSession {
       }
       const postCheckoutReply = 'Aapke WhatsApp par bill aur payment link bhej diya hai. Agar aapko kuch aur chahiye to bataiye.';
       this.lastPrompt = postCheckoutReply;
-      this.pendingAction = 'POST_CHECKOUT_MORE';
+      this.setDesk('CHECKOUT');
+      this.memory.state = 'POST_CHECKOUT';
+      this.setPending('POST_CHECKOUT_MORE');
       const postCheckoutOutcome = outcome(
         'WHATSAPP_RECEIPT_SENT',
         ['checkout_receipt_created'],
@@ -410,7 +503,8 @@ export class CareCallSession {
       'ORDER',
     );
     this.hooks.onLog?.('care-call turn', { heard: text, agentText, said, channel: this.channel });
-    this.pendingAction = asksForMoreItems(said) ? 'ASK_MORE_ITEMS' : null;
+    if (asksForMoreItems(said)) this.setPending('ASK_MORE_ITEMS');
+    else this.memory.pending = null;
     emitTurn(said, handoffOutcome, { persist: false, agentText });
     if (!streamed) this.hooks.speak(said.split('\n\n')[0] || said, ctrl);
   }
@@ -443,11 +537,13 @@ export class CareCallSession {
           kiranaId: this.call.kiranaId,
           householdId: this.call.householdId,
           channel: this.channel,
-          desk: 'CARE_CALL',
+          desk: this.memory.desk,
           act: event.act ?? name,
           goal: event.goal ?? this.stage,
           heard: event.heard ? `[${++this.eventSeq}] ${event.heard}`.slice(0, 500) : `[${++this.eventSeq}]`,
-          reply: event.reply?.split('\n')[0]?.slice(0, 300) ?? null,
+          reply: `${this.memory.state}${this.memory.pending ? `/${this.memory.pending.type}` : ''}: ${event.reply ?? ''}`
+            .split('\n')[0]
+            .slice(0, 300),
           latencyMs: event.latencyMs ?? 0,
         },
       })
@@ -455,7 +551,40 @@ export class CareCallSession {
   }
 
   private fsm(node: string) {
-    return `ACTIVE_CALL.${this.stage}.${node}`;
+    return `ACTIVE_CALL.${this.memory.desk}.${this.memory.state}.${node}`;
+  }
+
+  private beginUserTurn() {
+    this.memory.turn += 1;
+    if (!this.memory.pending) return;
+    this.memory.pending.expiresAfterTurns -= 1;
+    if (this.memory.pending.expiresAfterTurns <= 0) this.memory.pending = null;
+  }
+
+  private setDesk(desk: CareDesk) {
+    if (this.memory.desk !== desk) this.memory.previousDesk = this.memory.desk;
+    this.memory.desk = desk;
+  }
+
+  private setPending(type: MemoryPending['type'], product: string | null = null, quantity: number | null = null) {
+    this.memory.pending = { type, product, quantity, expiresAfterTurns: 3 };
+    if (product) this.memory.referents.lastProduct = product;
+  }
+
+  private memorySnapshot(): ConversationFrame {
+    return {
+      desk: this.memory.desk,
+      previousDesk: this.memory.previousDesk,
+      state: this.memory.state,
+      turn: this.memory.turn,
+      pending: this.memory.pending ? { ...this.memory.pending } : null,
+      referents: {
+        lastProduct: this.memory.referents.lastProduct,
+        lastOptions: [...this.memory.referents.lastOptions],
+        lastOrderRef: this.memory.referents.lastOrderRef,
+      },
+      lastBotQuestion: this.memory.lastBotQuestion,
+    };
   }
 }
 
@@ -595,6 +724,27 @@ function readTerminalAct(text: string): CareCallFrame | null {
     orderText: null,
     question: null,
   };
+}
+
+function readSemanticNegative(
+  text: string,
+  memory: ConversationFrame,
+): { action: 'NO_MORE_ITEMS' | 'REJECT_PRODUCT' | 'CHECKOUT_REJECTED' | 'CANCEL_ORDER' | 'CORRECT_PREVIOUS_ACTION' } | null {
+  if (!/\b(nahi|nahin|no|mat|hata|remove|without|except|cancel|galat|wrong)\b/i.test(text)) return null;
+  if (/\b(cancel|radd|rad|order cancel|poora order|sara order|saara order)\b/i.test(text)) return { action: 'CANCEL_ORDER' };
+  if (/\b(nahi|nahin|no|bas|itna hi|aur kuch nahi|kuch nahi)\b/i.test(text) && memory.pending?.type === 'ASK_MORE_ITEMS') {
+    return { action: 'NO_MORE_ITEMS' };
+  }
+  if (/\b(nahi|nahin|no|mat)\b/i.test(text) && memory.pending?.type === 'CONFIRM_CHECKOUT') {
+    return { action: 'CHECKOUT_REJECTED' };
+  }
+  if (/\b(do|teen|char|paanch|ek|kilo|kg|packet|pack|litre|liter|ltr|quantity|qty)\b/i.test(text)) {
+    return { action: 'CORRECT_PREVIOUS_ACTION' };
+  }
+  if (/\b(atta|aata|sugar|chini|chinni|rice|chawal|oil|tel|tea|chai|dal|daal|namkeen|biscuit)\b/i.test(text)) {
+    return { action: 'REJECT_PRODUCT' };
+  }
+  return null;
 }
 
 function isCheckoutReceipt(text: string): boolean {

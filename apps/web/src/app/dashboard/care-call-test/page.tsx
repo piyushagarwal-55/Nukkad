@@ -34,6 +34,24 @@ interface Turn {
     nextStage: string;
     verified: boolean;
   };
+  memory?: {
+    desk: string;
+    previousDesk: string | null;
+    state: string;
+    turn: number;
+    pending: {
+      type: string;
+      product: string | null;
+      quantity: number | null;
+      expiresAfterTurns: number;
+    } | null;
+    referents: {
+      lastProduct: string | null;
+      lastOptions: string[];
+      lastOrderRef: string | null;
+    };
+    lastBotQuestion: string | null;
+  };
 }
 
 const SAMPLE_RATE = 24000;
@@ -234,6 +252,7 @@ export default function CareCallTestPage() {
         `ACT    ${turn.action}`,
         turn.outcome ? `OUTCOME ${turn.outcome.name} -> ${turn.outcome.nextStage}` : null,
         turn.outcome?.tools.length ? `TOOLS  ${turn.outcome.tools.join(', ')}` : null,
+        turn.memory ? `MEMORY desk=${turn.memory.desk} state=${turn.memory.state} pending=${turn.memory.pending?.type ?? 'none'}` : null,
         turn.agentText ? `AGENT  "${turn.agentText}"` : null,
         turn.heard ? `HEARD  "${turn.heard}"` : null,
         `BOT    ${turn.reply}`,
@@ -381,6 +400,26 @@ export default function CareCallTestPage() {
                 <p>
                   <span className="block font-semibold uppercase text-[#18181b]">Verified</span>
                   {turn.outcome.verified ? 'yes' : 'needs check'}
+                </p>
+              </div>
+            )}
+            {turn.memory && (
+              <div className="mt-3 grid gap-2 rounded-xl bg-[#ecfeff] px-3 py-3 text-xs text-[#155e75] sm:grid-cols-4">
+                <p>
+                  <span className="block font-semibold uppercase text-[#164e63]">Desk</span>
+                  {turn.memory.previousDesk ? `${turn.memory.previousDesk} -> ` : ''}{turn.memory.desk}
+                </p>
+                <p>
+                  <span className="block font-semibold uppercase text-[#164e63]">State</span>
+                  {turn.memory.state}
+                </p>
+                <p>
+                  <span className="block font-semibold uppercase text-[#164e63]">Pending</span>
+                  {turn.memory.pending ? `${turn.memory.pending.type} (${turn.memory.pending.expiresAfterTurns})` : 'none'}
+                </p>
+                <p>
+                  <span className="block font-semibold uppercase text-[#164e63]">Turn</span>
+                  {turn.memory.turn}
                 </p>
               </div>
             )}
