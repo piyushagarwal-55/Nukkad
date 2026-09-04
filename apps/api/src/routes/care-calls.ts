@@ -10,6 +10,7 @@ import { buildCareCallPlans } from '../services/care-call/plan.js';
 import { env } from '../config/env.js';
 import { toE164 } from '../lib/phone.js';
 import { handle } from '../services/conversation/core.js';
+import { loadConvo, save, type PendingLine } from '../services/conversation/state.js';
 import { speak } from '../services/voice/tts.js';
 import { openEar } from '../services/asr/realtime.js';
 import { openMouth } from '../services/voice/mouth.js';
@@ -47,6 +48,13 @@ interface PendingCareCall {
   shopName: string;
   shopPhone: string;
   dueItems: string[];
+  dueLines: Array<{
+    skuId: string;
+    name: string;
+    category: string | null;
+    sellPaise: number;
+    quantityHint: number | null;
+  }>;
   permissionScript: string;
   contextScript: string;
   openingScript: string;
@@ -59,8 +67,29 @@ const pendingCareCalls = new Map<string, PendingCareCall>();
  * turn to the shared conversation engine. The classifier decides routing;
  * it must never rewrite away commands such as "mat add karna".
  */
+function normalizedWords(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/aashirvaad/g, 'aashirwad')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .filter((word) => word.length >= 4);
+}
+
+function negatedDueItems(dueItems: string[], heard: string): string[] {
+  const heardWords = new Set(normalizedWords(heard));
+  if (!/\b(mat|nahi|nahin|hata|remove|without|except)\b/i.test(heard)) return [];
+  return dueItems.filter((item) => {
+    const words = normalizedWords(item);
+    const hits = words.filter((word) => heardWords.has(word)).length;
+    return hits >= Math.min(2, words.length);
+  });
+}
+
 function careCallTextForAgent(frame: CareCallFrame, dueItems: string[], heard: string): string {
   if (frame.act === 'ORDER_ACCEPTED') return `${dueItems.join(', ')} bhej do`;
+  const excluded = negatedDueItems(dueItems, heard);
+  if (frame.act === 'ADD_OR_CHANGE_ITEMS' && excluded.length) return `${excluded.join(', ')} mat daalna`;
   return heard;
 }
 
@@ -73,12 +102,43 @@ async function pendingFromPlan(kiranaId: string, plan: Awaited<ReturnType<typeof
     shopName: plan.shop.name,
     shopPhone: env.TWILIO_WHATSAPP_FROM.replace('whatsapp:', ''),
     dueItems: plan.lines.map((line) => line.name),
+    dueLines: plan.lines.map((line) => ({
+      skuId: line.skuId,
+      name: line.name,
+      category: line.category,
+      sellPaise: line.sellPaise,
+      quantityHint: line.quantityHint,
+    })),
     permissionScript: `Namaste ${plan.household.name} ji, main ${plan.shop.name} se bol rahi hoon. Kya main aapse order ke baare mein do minute baat kar sakti hoon?`,
     contextScript: plan.openingScript
       .replace(/^Namaste .*? se bol rahi hoon\. /, '')
       .replace(/^Agar aap free ho to kya main aapse 2 minute baat kar sakti hoon\? /, ''),
     openingScript: plan.openingScript,
   };
+}
+
+async function seedCareCallBasket(call: PendingCareCall, channel: 'care-call' | 'care-call-test') {
+  const peerPhone = toE164(call.householdPhone);
+  const lines: PendingLine[] = call.dueLines.map((line) => ({
+    sourceText: line.name,
+    quantity: Math.max(1, line.quantityHint ?? 1),
+    unitHint: null,
+    skuId: line.skuId,
+    category: line.category,
+    name: line.name,
+    unitPricePaise: line.sellPaise,
+    method: 'EXACT',
+    confidence: 1,
+    wasSubstituted: false,
+    alternates: [],
+    needsDisambiguation: false,
+  }));
+  const convo = await loadConvo(channel, peerPhone, call.householdId, call.kiranaId);
+  convo.desk = 'SELLER';
+  convo.pending = null;
+  convo.basket = lines;
+  convo.lastNamed = lines.slice(0, 4).map((line) => ({ skuId: line.skuId!, name: line.name }));
+  await save(convo, { householdId: call.householdId, kiranaId: call.kiranaId });
 }
 
 function voiceFrom(): string {
@@ -130,6 +190,7 @@ async function callTwiML(opts: {
   shopName: string;
   shopPhone: string;
   dueItems: string[];
+  dueLines: PendingCareCall['dueLines'];
   permissionScript: string;
   contextScript: string;
   openingScript: string;
@@ -319,6 +380,7 @@ export async function careCallRoutes(app: FastifyInstance) {
         }
 
         if (frame.act === 'PERMISSION_GRANTED') {
+          await seedCareCallBasket(call, 'care-call');
           saveStageTurn(call.contextScript);
           stage = 'ORDER';
           speakToCall(call.contextScript, ctrl);
@@ -326,6 +388,7 @@ export async function careCallRoutes(app: FastifyInstance) {
         }
 
         if (frame.act === 'ADD_OR_CHANGE_ITEMS') {
+          await seedCareCallBasket(call, 'care-call');
           stage = 'ORDER';
         } else {
           const reply = 'Maaf kijiye, kya main order ke baare mein do minute baat kar sakti hoon?';
@@ -421,6 +484,7 @@ export async function careCallRoutes(app: FastifyInstance) {
           shopName: 'Sunita Kirana Store',
           shopPhone: params.shopPhone ?? env.TWILIO_WHATSAPP_FROM.replace('whatsapp:', ''),
           dueItems: [],
+          dueLines: [],
           permissionScript: 'Namaste ji, main Sunita Kirana Store se bol rahi hoon. Kya main aapse order ke baare mein do minute baat kar sakti hoon?',
           contextScript: 'Aapke kuch regular items due lag rahe hain. Kya main order bana doon?',
           openingScript: 'Namaste ji, main Sunita Kirana Store se bol rahi hoon. Kya main aapse order ke baare mein do minute baat kar sakti hoon?',
@@ -600,6 +664,7 @@ export async function careCallRoutes(app: FastifyInstance) {
         }
 
         if (frame.act === 'PERMISSION_GRANTED') {
+          await seedCareCallBasket(call, 'care-call-test');
           sendTurn(call.contextScript);
           stage = 'ORDER';
           speakToBrowser(call.contextScript, ctrl);
@@ -607,6 +672,7 @@ export async function careCallRoutes(app: FastifyInstance) {
         }
 
         if (frame.act === 'ADD_OR_CHANGE_ITEMS') {
+          await seedCareCallBasket(call, 'care-call-test');
           stage = 'ORDER';
         } else {
           const reply = 'Maaf kijiye, kya main order ke baare mein do minute baat kar sakti hoon?';

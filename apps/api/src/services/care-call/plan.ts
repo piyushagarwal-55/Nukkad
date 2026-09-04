@@ -7,6 +7,8 @@ const DAY = 86_400_000;
 export interface CareCallLine {
   skuId: string;
   name: string;
+  category: string | null;
+  sellPaise: number;
   quantityHint: number | null;
   daysSincePurchase: number | null;
   predictedDepletionAt: Date | null;
@@ -86,7 +88,7 @@ export async function buildCareCallPlans(kiranaId: string, withinDays = 5): Prom
       autonomyTier: string;
     };
     skuId: string;
-    sku: { name: string };
+    sku: { name: string; category: string | null; sellPaise: number };
     lastQty: number | null;
     lastPurchaseAt: Date | null;
     predictedDepletionAt: Date | null;
@@ -114,7 +116,7 @@ export async function buildCareCallPlans(kiranaId: string, withinDays = 5): Prom
     select: {
       skuId: true,
       quantity: true,
-      sku: { select: { name: true } },
+      sku: { select: { name: true, category: true, sellPaise: true } },
       order: {
         select: {
           createdAt: true,
@@ -159,6 +161,8 @@ export async function buildCareCallPlans(kiranaId: string, withinDays = 5): Prom
     const lines = rows.slice(0, 5).map((row) => ({
       skuId: row.skuId,
       name: row.sku.name,
+      category: row.sku.category,
+      sellPaise: row.sku.sellPaise,
       quantityHint: row.lastQty,
       daysSincePurchase: daysSince(row.lastPurchaseAt),
       predictedDepletionAt: row.predictedDepletionAt,
