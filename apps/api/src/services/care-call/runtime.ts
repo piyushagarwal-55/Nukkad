@@ -54,7 +54,9 @@ export interface CareCallOutcome {
     | 'WHATSAPP_RECEIPT_SENT'
     | 'POST_CHECKOUT_CONTINUE'
     | 'POST_CHECKOUT_CLOSED'
-    | 'POST_CHECKOUT_REASK';
+    | 'POST_CHECKOUT_REASK'
+    | 'END_CALL'
+    | 'NO_MORE_ITEMS_CHECKOUT';
   preconditions: string[];
   tools: string[];
   nextStage: CareCallStage | 'ENDED';
@@ -95,6 +97,7 @@ export class CareCallSession {
   private finalBuffer: string[] = [];
   private readonly queuedUtterances: string[] = [];
   private eventSeq = 0;
+  private pendingAction: 'CONFIRM_DUE_BASKET' | 'CONFIRM_CHECKOUT' | 'ASK_MORE_ITEMS' | 'POST_CHECKOUT_MORE' | null = null;
 
   constructor(
     private readonly call: PendingCareCall,
@@ -188,7 +191,8 @@ export class CareCallSession {
 
   private async runTurn(text: string, ctrl: AbortController) {
     const started = Date.now();
-    const frame = await readCareCallReply({
+    const terminal = readTerminalAct(text);
+    const frame = terminal ?? await readCareCallReply({
       stage: this.stage,
       text,
       customerName: this.call.householdName,
@@ -233,6 +237,13 @@ export class CareCallSession {
       this.hooks.onTurn?.(turn);
     };
 
+    if (frame.act === 'PERMISSION_DENIED' && terminal) {
+      const reply = `Dhanyavaad ji. ${this.call.shopName} se shopping karne ke liye shukriya.`;
+      emitTurn(reply, outcome('END_CALL', ['explicit_terminal_command'], [], 'ENDED'));
+      this.hooks.closeAfter(reply);
+      return;
+    }
+
     if (this.stage === 'POST_CHECKOUT') {
       if (frame.act === 'PERMISSION_DENIED' || frame.act === 'ORDER_DECLINED' || isDoneAfterCheckout(text)) {
         const reply = `Dhanyavaad ji. ${this.call.shopName} se shopping karne ke liye shukriya.`;
@@ -269,6 +280,7 @@ export class CareCallSession {
 
       if (frame.act === 'PERMISSION_GRANTED') {
         await seedCareCallBasket(this.call, this.channel);
+        this.pendingAction = 'CONFIRM_DUE_BASKET';
         emitTurn(
           this.call.contextScript,
           outcome('DUE_BASKET_SEEDED', ['permission_granted', 'due_items_available'], ['load_conversation', 'seed_basket'], 'ORDER'),
@@ -313,15 +325,31 @@ export class CareCallSession {
       const reply = basket.length
         ? `Abhi order mein ye hai:\n\n${orderCard(basket)}\n\nBhej dun?`
         : 'Abhi order khali hai. Bataiye kya chahiye?';
+      this.pendingAction = basket.length ? 'CONFIRM_CHECKOUT' : 'ASK_MORE_ITEMS';
       emitTurn(reply, outcome('BASKET_REVIEWED', ['basket_state_loaded'], ['load_basket'], 'ORDER'));
       this.hooks.speak(reply, ctrl);
       return;
     }
 
+    if (this.stage === 'ORDER' && this.pendingAction === 'ASK_MORE_ITEMS' && isDoneAfterMorePrompt(text)) {
+      this.recordEvent('DECISION_MADE', {
+        goal: this.fsm('CHECKOUT'),
+        heard: text,
+        reply: 'NO_MORE_ITEMS_CHECKOUT',
+        latencyMs: Date.now() - started,
+      });
+      this.pendingAction = 'CONFIRM_CHECKOUT';
+      text = 'bhej do';
+      frame.act = 'CHECKOUT';
+    }
+
+    if (frame.act === 'ADD_OR_CHANGE_ITEMS') await clearPendingAddress(this.call, this.channel);
+
     const agentText = careCallTextForAgent(frame, this.call.dueItems, text);
     const handoffTools = ['conversation_handle', 'catalogue_resolver', 'payment_link_if_checkout'];
+    const mayCheckout = frame.act === 'ORDER_ACCEPTED' || frame.act === 'CHECKOUT' || wantsCheckout(text);
     let streamed = false;
-    const agentSpeech = this.hooks.agentSpeech?.(ctrl);
+    const agentSpeech = mayCheckout ? undefined : this.hooks.agentSpeech?.(ctrl);
     const replies = await handle(
       {
         channel: this.channel,
@@ -335,8 +363,10 @@ export class CareCallSession {
       {
         onDesk: this.hooks.onDesk,
         onSentence: (sentence) => {
-          streamed = true;
-          agentSpeech?.say(`${sentence} `);
+          if (agentSpeech) {
+            streamed = true;
+            agentSpeech.say(`${sentence} `);
+          }
         },
       },
     ).finally(() => {
@@ -347,21 +377,25 @@ export class CareCallSession {
 
     const said = replies.map((r) => r.text).filter(Boolean).join(' ') || 'Theek hai ji.';
     this.lastPrompt = said;
-    if (isCheckoutReceipt(said) && this.hooks.sendReceipt) {
-      await this.hooks.sendReceipt(said);
-      handoffTools.push('whatsapp_receipt');
-      this.recordEvent('TOOL_EXECUTED', {
-        goal: this.fsm('CHECKOUT'),
-        heard: text,
-        reply: 'whatsapp_receipt_sent',
-        latencyMs: Date.now() - started,
-      });
+    if (isCheckoutReceipt(said)) {
+      await clearPendingAddress(this.call, this.channel);
+      if (this.hooks.sendReceipt) {
+        await this.hooks.sendReceipt(said);
+        handoffTools.push('whatsapp_receipt');
+        this.recordEvent('TOOL_EXECUTED', {
+          goal: this.fsm('CHECKOUT'),
+          heard: text,
+          reply: 'whatsapp_receipt_sent',
+          latencyMs: Date.now() - started,
+        });
+      }
       const postCheckoutReply = 'Aapke WhatsApp par bill aur payment link bhej diya hai. Agar aapko kuch aur chahiye to bataiye.';
       this.lastPrompt = postCheckoutReply;
+      this.pendingAction = 'POST_CHECKOUT_MORE';
       const postCheckoutOutcome = outcome(
         'WHATSAPP_RECEIPT_SENT',
         ['checkout_receipt_created'],
-        handoffTools,
+        this.hooks.sendReceipt ? handoffTools : handoffTools.filter((tool) => tool !== 'whatsapp_receipt'),
         'POST_CHECKOUT',
       );
       this.stage = 'POST_CHECKOUT';
@@ -376,6 +410,7 @@ export class CareCallSession {
       'ORDER',
     );
     this.hooks.onLog?.('care-call turn', { heard: text, agentText, said, channel: this.channel });
+    this.pendingAction = asksForMoreItems(said) ? 'ASK_MORE_ITEMS' : null;
     emitTurn(said, handoffOutcome, { persist: false, agentText });
     if (!streamed) this.hooks.speak(said.split('\n\n')[0] || said, ctrl);
   }
@@ -489,6 +524,13 @@ async function currentCareCallBasket(call: PendingCareCall, channel: CareCallCha
   return convo.basket;
 }
 
+async function clearPendingAddress(call: PendingCareCall, channel: CareCallChannel) {
+  const convo = await loadConvo(channel, toE164(call.householdPhone), call.householdId, call.kiranaId);
+  if (convo.pending?.kind !== 'ADDRESS') return;
+  convo.pending = null;
+  await save(convo, { householdId: call.householdId, kiranaId: call.kiranaId });
+}
+
 function normalizedWords(text: string): string[] {
   return text
     .toLowerCase()
@@ -543,12 +585,32 @@ function careCallTextForAgent(frame: CareCallFrame, dueItems: string[], heard: s
   return heard;
 }
 
+function readTerminalAct(text: string): CareCallFrame | null {
+  if (!/\b(call\s*(cut|kat|kaat)|phone\s*(rakho|rakh|kaat|kat)|band\s*(kar|karo|kijiye)|bye|goodbye)\b/i.test(text)) {
+    return null;
+  }
+  return {
+    act: 'PERMISSION_DENIED',
+    confidence: 1,
+    orderText: null,
+    question: null,
+  };
+}
+
 function isCheckoutReceipt(text: string): boolean {
-  return /(^|\n)Total:\s*Rs\s*\d/i.test(text)
-    && (/(^|\n)Pay:\s*https?:\/\//i.test(text) || /Saamaan aane par de dijiye/i.test(text))
+  return /(^|\n|\s)Total:?\s*Rs\s*\d/i.test(text)
+    && (/(^|\n|\s)Pay:?\s*https?:\/\//i.test(text) || /Saamaan aane par de dijiye/i.test(text))
     && /\(#[a-z0-9-]{4,}\)/i.test(text);
 }
 
 function isDoneAfterCheckout(text: string): boolean {
   return /\b(nahi|nahin|no|bas|itna hi|aur kuch nahi|kuch nahi|done|thank|thanks|shukriya|dhanyavaad)\b/i.test(text);
+}
+
+function isDoneAfterMorePrompt(text: string): boolean {
+  return /\b(nahi|nahin|no|bas|itna hi|aur kuch nahi|kuch nahi|done)\b/i.test(text);
+}
+
+function asksForMoreItems(text: string): boolean {
+  return /\b(aur kuch|kuch aur|aur kya|anything else|what else|filhaal itna)\b/i.test(text);
 }
