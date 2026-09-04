@@ -39,6 +39,7 @@ const CARE_CALL_AUDIO_DIR = join(process.cwd(), 'media', 'care-calls');
 const SARVAM_TTS_RATE = 24_000;
 const TWILIO_RATE = 8_000;
 const SARVAM_ASR_RATE = 16_000;
+const CARE_CALL_FINAL_DEBOUNCE_MS = 900;
 
 interface PendingCareCall {
   kiranaId: string;
@@ -70,28 +71,45 @@ const pendingCareCalls = new Map<string, PendingCareCall>();
 function normalizedWords(text: string): string[] {
   return text
     .toLowerCase()
-    .replace(/aashirvaad/g, 'aashirwad')
+    .replace(/aashirvaad|aashirwaad|ashirvaad|ashirwaad/g, 'aashirwad')
     .replace(/\baata\b/g, 'atta')
     .replace(/\baate\b/g, 'atta')
+    .replace(/\b(chini|chinni|teeni)\b/g, 'sugar')
+    .replace(/\b(chawal|chaawal)\b/g, 'rice')
+    .replace(/\b(tel|tail)\b/g, 'oil')
     .replace(/[^a-z0-9]+/g, ' ')
     .split(/\s+/)
     .filter((word) => word.length >= 4);
 }
 
 function negatedDueItems(dueItems: string[], heard: string): string[] {
-  const heardWords = new Set(normalizedWords(heard));
-  if (!/\b(mat|nahi|nahin|hata|remove|without|except)\b/i.test(heard)) return [];
+  const negativeClauses = heard
+    .split(/\b(?:aur|and|lekin|but|par|plus)\b|[,.]/i)
+    .filter((part) => /\b(mat|nahi|nahin|hata|remove|without|except)\b/i.test(part))
+    .map((part) => new Set(normalizedWords(part)));
+  if (!negativeClauses.length) return [];
   return dueItems.filter((item) => {
     const words = normalizedWords(item);
-    const hits = words.filter((word) => heardWords.has(word)).length;
-    return hits >= Math.min(2, words.length);
+    return negativeClauses.some((heardWords) => {
+      const hits = words.filter((word) => heardWords.has(word)).length;
+      return hits >= Math.min(2, words.length) || words.some((word) => heardWords.has(word) && ['atta', 'sugar', 'rice', 'oil'].includes(word));
+    });
   });
+}
+
+function itemWithoutPack(item: string): string {
+  return item
+    .replace(/\b\d+(?:\.\d+)?\s*(?:kg|kgs|g|gm|gram|grams|l|lt|ltr|litre|liter|ml|pc|pcs|pack|packet|packets)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function careCallTextForAgent(frame: CareCallFrame, dueItems: string[], heard: string): string {
   if (frame.act === 'ORDER_ACCEPTED') return `${dueItems.join(', ')} bhej do`;
   const excluded = negatedDueItems(dueItems, heard);
-  if (frame.act === 'ADD_OR_CHANGE_ITEMS' && excluded.length) return `${excluded.join(', ')} mat daalna`;
+  if (frame.act === 'ADD_OR_CHANGE_ITEMS' && excluded.length) {
+    return `${excluded.map(itemWithoutPack).join(', ')} nahi chahiye`;
+  }
   return heard;
 }
 
@@ -239,6 +257,8 @@ export async function careCallRoutes(app: FastifyInstance) {
     let inFlight: AbortController | null = null;
     let speaking: AbortController | null = null;
     const queuedUtterances: string[] = [];
+    let finalBuffer: string[] = [];
+    let finalTimer: ReturnType<typeof setTimeout> | null = null;
 
     const send = (msg: unknown) => {
       if (socket.readyState === 1) socket.send(JSON.stringify(msg));
@@ -323,10 +343,26 @@ export async function careCallRoutes(app: FastifyInstance) {
         speaking = null;
         clearCallAudio();
       },
-      onFinal: (text) => startTurn(text),
+      onFinal: (text) => queueFinal(text),
       onError: (message, fatal) => app.log.warn({ message, fatal }, 'twilio sarvam asr'),
       onClose: () => app.log.info({ streamSid }, 'twilio sarvam ear closed'),
     });
+
+    function queueFinal(text: string) {
+      if (!text.trim()) return;
+      if (stage !== 'ORDER') {
+        startTurn(text);
+        return;
+      }
+      finalBuffer.push(text);
+      if (finalTimer) clearTimeout(finalTimer);
+      finalTimer = setTimeout(() => {
+        const merged = finalBuffer.join(' ').trim();
+        finalBuffer = [];
+        finalTimer = null;
+        startTurn(merged);
+      }, CARE_CALL_FINAL_DEBOUNCE_MS);
+    }
 
     function startTurn(text: string) {
       if (!text.trim() || !call) return;
@@ -509,6 +545,7 @@ export async function careCallRoutes(app: FastifyInstance) {
       }
 
       if (msg.event === 'stop') {
+        if (finalTimer) clearTimeout(finalTimer);
         inFlight?.abort();
         speaking?.abort();
         ear.close();
@@ -516,6 +553,7 @@ export async function careCallRoutes(app: FastifyInstance) {
     });
 
     socket.on('close', () => {
+      if (finalTimer) clearTimeout(finalTimer);
       inFlight?.abort();
       speaking?.abort();
       ear.close();
@@ -530,6 +568,8 @@ export async function careCallRoutes(app: FastifyInstance) {
     let inFlight: AbortController | null = null;
     let speaking: AbortController | null = null;
     const queuedUtterances: string[] = [];
+    let finalBuffer: string[] = [];
+    let finalTimer: ReturnType<typeof setTimeout> | null = null;
 
     const send = (msg: unknown) => {
       if (socket.readyState === 1) socket.send(JSON.stringify(msg));
@@ -597,10 +637,26 @@ export async function careCallRoutes(app: FastifyInstance) {
       },
       onPartial: (text) => send({ type: 'partial', text }),
       onSpeechEnd: () => send({ type: 'thinking' }),
-      onFinal: (text) => startTurn(text),
+      onFinal: (text) => queueFinal(text),
       onError: (message, fatal) => send({ type: 'error', message, fatal }),
       onClose: () => send({ type: 'ear-closed' }),
     });
+
+    function queueFinal(text: string) {
+      if (!text.trim()) return;
+      if (stage !== 'ORDER') {
+        startTurn(text);
+        return;
+      }
+      finalBuffer.push(text);
+      if (finalTimer) clearTimeout(finalTimer);
+      finalTimer = setTimeout(() => {
+        const merged = finalBuffer.join(' ').trim();
+        finalBuffer = [];
+        finalTimer = null;
+        startTurn(merged);
+      }, CARE_CALL_FINAL_DEBOUNCE_MS);
+    }
 
     function startTurn(text: string) {
       if (!text.trim() || !call) return;
@@ -772,6 +828,7 @@ export async function careCallRoutes(app: FastifyInstance) {
         }
         if (msg.type === 'text' && typeof msg.text === 'string') startTurn(msg.text);
         if (msg.type === 'stop') {
+          if (finalTimer) clearTimeout(finalTimer);
           inFlight?.abort();
           speaking?.abort();
         }
@@ -781,6 +838,7 @@ export async function careCallRoutes(app: FastifyInstance) {
     });
 
     socket.on('close', () => {
+      if (finalTimer) clearTimeout(finalTimer);
       inFlight?.abort();
       speaking?.abort();
       ear.close();
