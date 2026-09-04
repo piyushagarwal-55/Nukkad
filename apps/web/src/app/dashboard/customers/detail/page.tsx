@@ -165,6 +165,7 @@ function CustomerDetail() {
   const topUnmet = useMemo(() => data?.unmetDemand.slice(0, 5) ?? [], [data]);
   const topOrders = useMemo(() => data?.recentOrders.slice(0, 5) ?? [], [data]);
   const topNudges = useMemo(() => data?.nudges.slice(0, 5) ?? [], [data]);
+  const topTimeline = useMemo(() => data?.timeline.slice(0, 6) ?? [], [data]);
 
   async function startCall() {
     if (!data) return;
@@ -426,9 +427,26 @@ function CustomerDetail() {
         </Panel>
 
         <Panel
+          title="Agent timeline"
+          icon={MessageSquareText}
+          tone="pink"
+          count={data.timeline.length}
+          onMore={data.timeline.length > topTimeline.length
+            ? () => setModal({ title: 'Agent timeline', body: <TimelineList events={data.timeline} /> })
+            : undefined}
+        >
+          <div className="space-y-3">
+            <TimelineList events={topTimeline} compact />
+            {data.timeline.length === 0 && <p className="muted text-sm">No agent turns recorded yet.</p>}
+          </div>
+        </Panel>
+      </section>
+
+      <section className="mt-6">
+        <Panel
           title="Nudges"
           icon={Clock3}
-          tone="pink"
+          tone="violet"
           count={data.nudges.length}
           onMore={data.nudges.length > topNudges.length
             ? () => setModal({ title: 'Nudges', body: <NudgeList nudges={data.nudges} /> })
@@ -656,6 +674,51 @@ function NudgeList({ nudges }: { nudges: Detail['nudges'] }) {
           <p className="muted mt-1 text-xs">
             {when(nudge.sentAt)} · {nudge.outcome ?? 'waiting'}
           </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TimelineList({ events, compact = false }: { events: Detail['timeline']; compact?: boolean }) {
+  return (
+    <div className="space-y-3">
+      {events.map((event) => (
+        <div key={event.id} className="rounded-2xl bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full bg-[#eef2ff] px-2.5 py-1 text-xs font-semibold text-[var(--accent)]">
+                {event.channel}
+              </span>
+              {event.act && (
+                <span className="rounded-full bg-[#ecfdf5] px-2.5 py-1 text-xs font-semibold text-[#047857]">
+                  {event.act}
+                </span>
+              )}
+            </div>
+            <span className="text-xs text-[var(--muted)]">
+              {when(event.createdAt)} · {(event.latencyMs / 1000).toFixed(1)}s
+            </span>
+          </div>
+
+          <div className="mt-3 space-y-2 text-sm leading-6">
+            <p className="rounded-xl bg-[#f7f7ff] px-3 py-2">
+              <span className="font-semibold">Heard: </span>
+              {event.heard}
+            </p>
+            {event.reply && (
+              <p className={`rounded-xl bg-[#fffbeb] px-3 py-2 ${compact ? 'line-clamp-3' : ''}`}>
+                <span className="font-semibold">Bot: </span>
+                {event.reply}
+              </p>
+            )}
+          </div>
+
+          {!compact && (event.handoffFrom || event.handoffTo) && (
+            <p className="muted mt-2 text-xs">
+              Handoff {event.handoffFrom ?? 'auto'} to {event.handoffTo ?? 'auto'}
+            </p>
+          )}
         </div>
       ))}
     </div>
