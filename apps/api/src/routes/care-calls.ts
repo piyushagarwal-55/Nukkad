@@ -8,9 +8,8 @@ import { prisma } from '@nukkad/db';
 import { requireSession } from './auth.js';
 import { buildCareCallPlans } from '../services/care-call/plan.js';
 import { env } from '../config/env.js';
-import { toE164 } from '../lib/phone.js';
+import { toE164, toWhatsApp } from '../lib/phone.js';
 import { handle } from '../services/conversation/core.js';
-import { twilioAdapter } from '../channels/index.js';
 import { speak } from '../services/voice/tts.js';
 import { openEar } from '../services/asr/realtime.js';
 import { openMouth } from '../services/voice/mouth.js';
@@ -124,6 +123,22 @@ async function replyTwiML(text: string, done = false, params: Record<string, str
     await playSarvamOrSay(gather, 'Aur kuch chahiye?');
   }
   return response.toString();
+}
+
+async function sendWhatsAppReceipt(to: string, text: string) {
+  const created = await client.messages.create({
+    from: env.TWILIO_WHATSAPP_FROM,
+    to: toWhatsApp(to),
+    body: text,
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 1800));
+  const latest = await client.messages(created.sid).fetch();
+  if (latest.status === 'failed' || latest.status === 'undelivered') {
+    const suffix = latest.errorCode ? `Twilio ${latest.errorCode}` : latest.status;
+    throw new Error(`WhatsApp receipt failed: ${suffix}`);
+  }
+  return { sid: latest.sid, status: latest.status };
 }
 
 export async function careCallRoutes(app: FastifyInstance) {
@@ -268,7 +283,7 @@ export async function careCallRoutes(app: FastifyInstance) {
           agentSpeech,
           closeAfter,
           interruptSpeech: stopSpeech,
-          sendReceipt: (text) => twilioAdapter.send(call.householdPhone, { text }),
+          sendReceipt: (text) => sendWhatsAppReceipt(call.householdPhone, text),
           onDesk: (desk: Desk) => activeAgentMouth?.setSpeaker(voiceFor(desk)),
           onLog: (event, data) => app.log.info({ ...data, streamSid }, event),
           onError: (message) => app.log.warn({ message, streamSid }, 'twilio care-call session'),

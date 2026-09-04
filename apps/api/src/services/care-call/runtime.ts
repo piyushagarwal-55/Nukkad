@@ -59,7 +59,8 @@ export interface CareCallOutcome {
     | 'END_CALL'
     | 'NO_MORE_ITEMS_CHECKOUT'
     | 'CHECKOUT_REJECTED'
-    | 'CANCEL_ORDER';
+    | 'CANCEL_ORDER'
+    | 'WHATSAPP_RECEIPT_FAILED';
   preconditions: string[];
   tools: string[];
   nextStage: CareCallStage | 'ENDED';
@@ -74,7 +75,7 @@ export interface CareCallSessionHooks {
   };
   closeAfter(text: string): void;
   interruptSpeech(): void;
-  sendReceipt?: (text: string) => Promise<void>;
+  sendReceipt?: (text: string) => Promise<{ sid?: string; status?: string } | void>;
   onTurn?: (turn: CareCallTurn) => void;
   onDesk?: (desk: Desk) => void;
   onLog?: (event: string, data: Record<string, unknown>) => void;
@@ -470,25 +471,40 @@ export class CareCallSession {
     this.lastPrompt = said;
     if (isCheckoutReceipt(said)) {
       await clearPendingAddress(this.call, this.channel);
+      let receiptSent = false;
       if (this.hooks.sendReceipt) {
-        await this.hooks.sendReceipt(said);
-        handoffTools.push('whatsapp_receipt');
-        this.recordEvent('TOOL_EXECUTED', {
-          goal: this.fsm('CHECKOUT'),
-          heard: text,
-          reply: 'whatsapp_receipt_sent',
-          latencyMs: Date.now() - started,
-        });
+        try {
+          const receipt = await this.hooks.sendReceipt(said);
+          receiptSent = true;
+          handoffTools.push('whatsapp_receipt');
+          this.recordEvent('TOOL_EXECUTED', {
+            goal: this.fsm('CHECKOUT'),
+            heard: text,
+            reply: `whatsapp_receipt_sent${receipt?.sid ? ` sid=${receipt.sid}` : ''}${receipt?.status ? ` status=${receipt.status}` : ''}`,
+            latencyMs: Date.now() - started,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'unknown whatsapp receipt failure';
+          handoffTools.push('whatsapp_receipt_failed');
+          this.recordEvent('TOOL_FAILED', {
+            goal: this.fsm('CHECKOUT'),
+            heard: text,
+            reply: message,
+            latencyMs: Date.now() - started,
+          });
+        }
       }
-      const postCheckoutReply = 'Aapke WhatsApp par bill aur payment link bhej diya hai. Agar aapko kuch aur chahiye to bataiye.';
+      const postCheckoutReply = receiptSent
+        ? 'Aapke WhatsApp par bill aur payment link bhej diya hai. Agar aapko kuch aur chahiye to bataiye.'
+        : 'Order aur payment link ban gaya hai, lekin WhatsApp par bill bhejne mein issue aaya. Agar aapko kuch aur chahiye to bataiye.';
       this.lastPrompt = postCheckoutReply;
       this.setDesk('CHECKOUT');
       this.memory.state = 'POST_CHECKOUT';
       this.setPending('POST_CHECKOUT_MORE');
       const postCheckoutOutcome = outcome(
-        'WHATSAPP_RECEIPT_SENT',
+        receiptSent ? 'WHATSAPP_RECEIPT_SENT' : 'WHATSAPP_RECEIPT_FAILED',
         ['checkout_receipt_created'],
-        this.hooks.sendReceipt ? handoffTools : handoffTools.filter((tool) => tool !== 'whatsapp_receipt'),
+        handoffTools,
         'POST_CHECKOUT',
       );
       this.stage = 'POST_CHECKOUT';
