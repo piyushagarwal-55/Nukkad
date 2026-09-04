@@ -39,7 +39,6 @@ const client = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
 const CARE_CALL_AUDIO_DIR = join(process.cwd(), 'media', 'care-calls');
 const SARVAM_TTS_RATE = 24_000;
 const TWILIO_RATE = 8_000;
-const SARVAM_ASR_RATE = 16_000;
 const CARE_CALL_FINAL_DEBOUNCE_MS = 900;
 
 interface PendingCareCall {
@@ -350,17 +349,27 @@ export async function careCallRoutes(app: FastifyInstance) {
       }, 900));
     }
 
-    const ear = openEar({
-      onSpeechStart: () => {
-        inFlight?.abort();
-        speaking?.abort();
-        speaking = null;
-        clearCallAudio();
+    const ear = openEar(
+      {
+        onSpeechStart: () => {
+          inFlight?.abort();
+          speaking?.abort();
+          speaking = null;
+          clearCallAudio();
+        },
+        onFinal: (text) => queueFinal(text),
+        onError: (message, fatal) => app.log.warn({ message, fatal }, 'twilio sarvam asr'),
+        onClose: () => app.log.info({ streamSid }, 'twilio sarvam ear closed'),
       },
-      onFinal: (text) => queueFinal(text),
-      onError: (message, fatal) => app.log.warn({ message, fatal }, 'twilio sarvam asr'),
-      onClose: () => app.log.info({ streamSid }, 'twilio sarvam ear closed'),
-    });
+      {
+        language_code: 'hi-IN',
+        stream_type: 'fast',
+        sample_rate: String(TWILIO_RATE),
+        silence_duration_ms: '800',
+        min_speech_duration_ms: '200',
+        threshold: '0.7',
+      },
+    );
 
     function queueFinal(text: string) {
       if (!text.trim()) return;
@@ -563,8 +572,7 @@ export async function careCallRoutes(app: FastifyInstance) {
 
       if (msg.event === 'media' && msg.media?.payload) {
         const muLaw = Buffer.from(msg.media.payload, 'base64');
-        const pcm8k = muLawToPcm16(muLaw);
-        ear.send(resamplePcm16(pcm8k, TWILIO_RATE, SARVAM_ASR_RATE));
+        ear.send(muLawToPcm16(muLaw));
         return;
       }
 

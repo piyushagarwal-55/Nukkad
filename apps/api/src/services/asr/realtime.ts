@@ -83,9 +83,14 @@ const PARAMS = {
   min_speech_duration_ms: '250',
 };
 
-export function openEar(handlers: EarHandlers): RealtimeEar {
+type EarParamOverrides = Partial<Record<keyof typeof PARAMS | 'threshold', string>>;
+
+export function openEar(
+  handlers: EarHandlers,
+  opts: EarParamOverrides = {},
+): RealtimeEar {
   const url = `${env.SARVAM_BASE_URL.replace(/^http/, 'ws')}/speech-to-text-realtime/ws`
-    + `?${new URLSearchParams(PARAMS).toString()}`;
+    + `?${new URLSearchParams({ ...PARAMS, ...opts }).toString()}`;
 
   const ws = new WebSocket(url, {
     headers: { 'api-subscription-key': env.SARVAM_API_KEY ?? '' },
