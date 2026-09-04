@@ -13,8 +13,14 @@ import { handle } from '../services/conversation/core.js';
 import { speak } from '../services/voice/tts.js';
 import { openEar } from '../services/asr/realtime.js';
 import { openMouth } from '../services/voice/mouth.js';
+import { voiceFor } from '../services/voice/voices.js';
+import type { Desk } from '../services/policy/desks.js';
 import { pcm16ToMuLaw, muLawToPcm16, resamplePcm16 } from '../services/voice/twilio-codec.js';
-import { readCareCallReply, type CareCallStage } from '../services/care-call/intent.js';
+import {
+  readCareCallReply,
+  type CareCallFrame,
+  type CareCallStage,
+} from '../services/care-call/intent.js';
 
 const callSchema = z.object({
   householdId: z.string().optional(),
@@ -47,6 +53,16 @@ interface PendingCareCall {
 }
 
 const pendingCareCalls = new Map<string, PendingCareCall>();
+
+/**
+ * Keep the customer's complete correction intact when handing a care-call
+ * turn to the shared conversation engine. The classifier decides routing;
+ * it must never rewrite away commands such as "mat add karna".
+ */
+function careCallTextForAgent(frame: CareCallFrame, dueItems: string[], heard: string): string {
+  if (frame.act === 'ORDER_ACCEPTED') return `${dueItems.join(', ')} bhej do`;
+  return heard;
+}
 
 async function pendingFromPlan(kiranaId: string, plan: Awaited<ReturnType<typeof buildCareCallPlans>>[number]): Promise<PendingCareCall> {
   return {
@@ -193,7 +209,7 @@ export async function careCallRoutes(app: FastifyInstance) {
           data: {
             kiranaId: call.kiranaId,
             householdId: call.householdId,
-            channel: 'twilio',
+            channel: 'care-call',
             desk: 'CARE_CALL',
             act: event.act ?? null,
             goal: event.goal ?? stage,
@@ -210,15 +226,17 @@ export async function careCallRoutes(app: FastifyInstance) {
     };
 
     function speakToCall(text: string, ctrl: AbortController, onDone?: () => void) {
+      const speech = new AbortController();
       speaking?.abort();
-      speaking = ctrl;
+      speaking = speech;
       const mouth = openMouth({
         onAudio: (b64) => {
-          if (!ctrl.signal.aborted) sendCallAudio(b64);
+          if (!ctrl.signal.aborted && !speech.signal.aborted) sendCallAudio(b64);
         },
         onDone: () => {
           setTimeout(() => mouth.close(), 250);
-          if (speaking === ctrl) speaking = null;
+          if (speaking === speech) speaking = null;
+          if (ctrl.signal.aborted || speech.signal.aborted) return;
           onDone?.();
         },
         onError: (message) => app.log.warn({ message }, 'twilio tts stream'),
@@ -230,11 +248,14 @@ export async function careCallRoutes(app: FastifyInstance) {
 
     function closeAfter(text: string) {
       const ctrl = new AbortController();
-      speakToCall(text, ctrl, () => setTimeout(() => socket.close(), 900));
+      speakToCall(text, ctrl, () => setTimeout(() => {
+        if (!ctrl.signal.aborted) socket.close();
+      }, 900));
     }
 
     const ear = openEar({
       onSpeechStart: () => {
+        inFlight?.abort();
         speaking?.abort();
         speaking = null;
         clearCallAudio();
@@ -258,7 +279,7 @@ export async function careCallRoutes(app: FastifyInstance) {
       void runTurn(text, ctrl).finally(() => {
         busy = false;
         if (inFlight === ctrl) inFlight = null;
-        const next = queuedUtterances.splice(0).join(' ').trim();
+        const next = queuedUtterances.shift()?.trim();
         if (next) startTurn(next);
       });
     }
@@ -298,8 +319,8 @@ export async function careCallRoutes(app: FastifyInstance) {
         }
 
         if (frame.act === 'PERMISSION_GRANTED') {
-          stage = 'ORDER';
           saveStageTurn(call.contextScript);
+          stage = 'ORDER';
           speakToCall(call.contextScript, ctrl);
           return;
         }
@@ -321,26 +342,55 @@ export async function careCallRoutes(app: FastifyInstance) {
         return;
       }
 
-      const textForAgent = frame.act === 'ORDER_ACCEPTED'
-        ? `${call.dueItems.join(', ')} bhej do`
-        : (frame.orderText?.trim() || text);
+      const textForAgent = careCallTextForAgent(frame, call.dueItems, text);
 
-      const replies = await handle({
-        channel: 'twilio',
-        senderId: toE164(call.householdPhone),
-        recipientId: toE164(call.shopPhone),
-        text: textForAgent,
-        media: [],
-        externalId: `twilio_stream_${streamSid ?? randomUUID()}_${Date.now()}`,
-        receivedAt: new Date(),
+      const speech = new AbortController();
+      speaking?.abort();
+      speaking = speech;
+      let streamed = false;
+      const mouth = openMouth({
+        onAudio: (b64) => {
+          if (!ctrl.signal.aborted && !speech.signal.aborted) sendCallAudio(b64);
+        },
+        onDone: () => undefined,
+        onError: (message) => app.log.warn({ message }, 'twilio tts stream'),
       });
+
+      const replies = await (async () => {
+        try {
+          return await handle(
+            {
+              channel: 'care-call',
+              senderId: toE164(call.householdPhone),
+              recipientId: toE164(call.shopPhone),
+              text: textForAgent,
+              media: [],
+              externalId: `twilio_stream_${streamSid ?? randomUUID()}_${Date.now()}`,
+              receivedAt: new Date(),
+            },
+            {
+              onDesk: (desk: Desk) => mouth.setSpeaker(voiceFor(desk)),
+              onSentence: (sentence) => {
+                streamed = true;
+                mouth.say(`${sentence} `);
+                mouth.flush();
+              },
+            },
+          );
+        } finally {
+          setTimeout(() => {
+            mouth.close();
+            if (speaking === speech) speaking = null;
+          }, 4000);
+        }
+      })();
 
       if (ctrl.signal.aborted) return;
 
       const said = replies.map((r) => r.text).filter(Boolean).join(' ') || 'Theek hai ji.';
       app.log.info({ heard: text, agentText: textForAgent, said, streamSid }, 'twilio stream turn');
-      saveStageTurn(said);
-      speakToCall(said, ctrl);
+      lastPrompt = said;
+      if (!streamed) speakToCall(said.split('\n\n')[0] || said, ctrl);
     }
 
     socket.on('message', (data: Buffer) => {
@@ -394,12 +444,14 @@ export async function careCallRoutes(app: FastifyInstance) {
 
       if (msg.event === 'stop') {
         inFlight?.abort();
+        speaking?.abort();
         ear.close();
       }
     });
 
     socket.on('close', () => {
       inFlight?.abort();
+      speaking?.abort();
       ear.close();
     });
   });
@@ -430,7 +482,7 @@ export async function careCallRoutes(app: FastifyInstance) {
           data: {
             kiranaId: call.kiranaId,
             householdId: call.householdId,
-            channel: 'twilio-test',
+            channel: 'care-call-test',
             desk: 'CARE_CALL',
             act: event.act ?? null,
             goal: event.goal ?? stage,
@@ -443,16 +495,18 @@ export async function careCallRoutes(app: FastifyInstance) {
     };
 
     function speakToBrowser(text: string, ctrl: AbortController, onDone?: () => void) {
+      const speech = new AbortController();
       speaking?.abort();
-      speaking = ctrl;
+      speaking = speech;
       lastPrompt = text;
       const mouth = openMouth({
         onAudio: (b64) => {
-          if (!ctrl.signal.aborted) send({ type: 'audio', b64 });
+          if (!ctrl.signal.aborted && !speech.signal.aborted) send({ type: 'audio', b64 });
         },
         onDone: () => {
           setTimeout(() => mouth.close(), 250);
-          if (speaking === ctrl) speaking = null;
+          if (speaking === speech) speaking = null;
+          if (ctrl.signal.aborted || speech.signal.aborted) return;
           onDone?.();
         },
         onError: (message) => send({ type: 'error', message }),
@@ -463,11 +517,14 @@ export async function careCallRoutes(app: FastifyInstance) {
 
     function closeAfter(text: string) {
       const ctrl = new AbortController();
-      speakToBrowser(text, ctrl, () => send({ type: 'closed' }));
+      speakToBrowser(text, ctrl, () => {
+        if (!ctrl.signal.aborted) send({ type: 'closed' });
+      });
     }
 
     const ear = openEar({
       onSpeechStart: () => {
+        inFlight?.abort();
         speaking?.abort();
         speaking = null;
         send({ type: 'listening' });
@@ -493,7 +550,7 @@ export async function careCallRoutes(app: FastifyInstance) {
       void runTurn(text, ctrl).finally(() => {
         busy = false;
         if (inFlight === ctrl) inFlight = null;
-        const next = queuedUtterances.splice(0).join(' ').trim();
+        const next = queuedUtterances.shift()?.trim();
         if (next) startTurn(next);
       });
     }
@@ -513,7 +570,7 @@ export async function careCallRoutes(app: FastifyInstance) {
       app.log.info({ heard: text, frame, stage }, 'browser care-call intent');
       if (ctrl.signal.aborted) return;
 
-      const sendTurn = (reply: string) => {
+      const sendTurn = (reply: string, opts: { persist?: boolean } = {}) => {
         const turn = {
           type: 'turn',
           stage,
@@ -522,13 +579,15 @@ export async function careCallRoutes(app: FastifyInstance) {
           action: frame.act,
           totalMs: Date.now() - started,
         };
-        saveCallEvent({
-          heard: text,
-          reply,
-          act: frame.act,
-          goal: stage,
-          latencyMs: Date.now() - started,
-        });
+        if (opts.persist !== false) {
+          saveCallEvent({
+            heard: text,
+            reply,
+            act: frame.act,
+            goal: stage,
+            latencyMs: Date.now() - started,
+          });
+        }
         send(turn);
       };
 
@@ -541,8 +600,8 @@ export async function careCallRoutes(app: FastifyInstance) {
         }
 
         if (frame.act === 'PERMISSION_GRANTED') {
-          stage = 'ORDER';
           sendTurn(call.contextScript);
+          stage = 'ORDER';
           speakToBrowser(call.contextScript, ctrl);
           return;
         }
@@ -564,26 +623,59 @@ export async function careCallRoutes(app: FastifyInstance) {
         return;
       }
 
-      const textForAgent = frame.act === 'ORDER_ACCEPTED'
-        ? `${call.dueItems.join(', ')} bhej do`
-        : (frame.orderText?.trim() || text);
+      const textForAgent = careCallTextForAgent(frame, call.dueItems, text);
 
-      const replies = await handle({
-        channel: 'twilio',
-        senderId: toE164(call.householdPhone),
-        recipientId: toE164(call.shopPhone),
-        text: textForAgent,
-        media: [],
-        externalId: `care_test_${randomUUID()}`,
-        receivedAt: new Date(),
+      const speech = new AbortController();
+      speaking?.abort();
+      speaking = speech;
+      let streamed = false;
+      const mouth = openMouth({
+        onAudio: (b64) => {
+          if (!ctrl.signal.aborted && !speech.signal.aborted) send({ type: 'audio', b64 });
+        },
+        onDone: () => undefined,
+        onError: (message) => send({ type: 'error', message }),
       });
+
+      const replies = await (async () => {
+        try {
+          return await handle(
+            {
+              channel: 'care-call-test',
+              senderId: toE164(call.householdPhone),
+              recipientId: toE164(call.shopPhone),
+              text: textForAgent,
+              media: [],
+              externalId: `care_test_${randomUUID()}`,
+              receivedAt: new Date(),
+            },
+            {
+              onDesk: (desk: Desk) => {
+                mouth.setSpeaker(voiceFor(desk));
+                send({ type: 'desk', desk });
+              },
+              onSentence: (sentence) => {
+                streamed = true;
+                mouth.say(`${sentence} `);
+                mouth.flush();
+              },
+            },
+          );
+        } finally {
+          setTimeout(() => {
+            mouth.close();
+            if (speaking === speech) speaking = null;
+          }, 4000);
+        }
+      })();
 
       if (ctrl.signal.aborted) return;
 
       const said = replies.map((r) => r.text).filter(Boolean).join(' ') || 'Theek hai ji.';
       app.log.info({ heard: text, agentText: textForAgent, said }, 'browser care-call turn');
-      sendTurn(said);
-      speakToBrowser(said, ctrl);
+      lastPrompt = said;
+      sendTurn(said, { persist: false });
+      if (!streamed) speakToBrowser(said.split('\n\n')[0] || said, ctrl);
     }
 
     socket.on('message', (data: Buffer, isBinary: boolean) => {
@@ -611,7 +703,10 @@ export async function careCallRoutes(app: FastifyInstance) {
           return;
         }
         if (msg.type === 'text' && typeof msg.text === 'string') startTurn(msg.text);
-        if (msg.type === 'stop') inFlight?.abort();
+        if (msg.type === 'stop') {
+          inFlight?.abort();
+          speaking?.abort();
+        }
       } catch {
         // malformed control frames are ignored
       }
@@ -619,6 +714,7 @@ export async function careCallRoutes(app: FastifyInstance) {
 
     socket.on('close', () => {
       inFlight?.abort();
+      speaking?.abort();
       ear.close();
     });
   });
@@ -737,7 +833,7 @@ export async function careCallRoutes(app: FastifyInstance) {
     }
 
     const replies = await handle({
-      channel: 'twilio',
+      channel: 'care-call',
       senderId: toE164(householdPhone),
       recipientId: toE164(shopPhone),
       text,

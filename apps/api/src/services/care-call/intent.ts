@@ -58,8 +58,11 @@ const SYSTEM = [
   '  without naming products, classify ORDER_ACCEPTED.',
   '- At ORDER stage, "bas itna hi" and similar finish phrases are CHECKOUT,',
   '  not ADD_OR_CHANGE_ITEMS.',
-  '- If the caller names products at any stage, use ADD_OR_CHANGE_ITEMS and put',
-  '  their product words in orderText.',
+  '- If the caller names products at any stage, use ADD_OR_CHANGE_ITEMS.',
+  '- For ADD_OR_CHANGE_ITEMS, orderText must preserve the caller intent words,',
+  '  especially removal or exclusion words such as "mat", "nahi", "hata",',
+  '  "remove", "without", "except". Do not reduce a negative sentence to',
+  '  only the product name.',
   '',
   'Never infer payment. Never invent products not present in the dueItems or user reply.',
 ].join('\n');
