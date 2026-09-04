@@ -1,4 +1,5 @@
 import { env } from '../../config/env.js';
+import { twilioAdapter } from '../../channels/index.js';
 
 /**
  * SENDING A WHATSAPP MESSAGE, from anywhere in the system.
@@ -15,7 +16,9 @@ import { env } from '../../config/env.js';
  */
 
 export const evolutionReady = (): boolean =>
-  Boolean(env.EVOLUTION_URL && env.EVOLUTION_APIKEY);
+  env.NODE_ENV === 'production'
+    ? Boolean(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_WHATSAPP_FROM)
+    : Boolean(env.EVOLUTION_URL && env.EVOLUTION_APIKEY);
 
 export interface SendResult {
   ok: boolean;
@@ -29,6 +32,17 @@ export interface SendResult {
  * caller records, not an exception that unwinds a dashboard click.
  */
 export async function sendText(to: string, text: string): Promise<SendResult> {
+  if (env.NODE_ENV === 'production') {
+    try {
+      await twilioAdapter.send(to, { text });
+      return { ok: true };
+    } catch (err) {
+      const e = err as Error & { code?: number | string; status?: number };
+      const prefix = e.code || e.status ? `${e.code ?? e.status} ` : '';
+      return { ok: false, error: `${prefix}${e.message}`.trim() };
+    }
+  }
+
   if (!evolutionReady()) return { ok: false, error: 'evolution not configured' };
 
   try {
