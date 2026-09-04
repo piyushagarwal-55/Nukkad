@@ -8,7 +8,6 @@ import {
   BadgeIndianRupee,
   Brain,
   CalendarClock,
-  CheckCircle2,
   Clock3,
   MessageSquareText,
   PhoneCall,
@@ -17,6 +16,7 @@ import {
   ShieldCheck,
   Sparkles,
   TrendingUp,
+  X,
 } from 'lucide-react';
 import { get, post, rupees } from '@/lib/api';
 import { IntelSkeleton } from '@/components/Loading';
@@ -151,6 +151,7 @@ function CustomerDetail() {
   const [err, setErr] = useState<string | null>(null);
   const [calling, setCalling] = useState(false);
   const [callResult, setCallResult] = useState<string | null>(null);
+  const [modal, setModal] = useState<{ title: string; body: React.ReactNode } | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -160,6 +161,10 @@ function CustomerDetail() {
   }, [id]);
 
   const topTracked = useMemo(() => data?.tracked.slice(0, 6) ?? [], [data]);
+  const topFrequent = useMemo(() => data?.frequent.slice(0, 6) ?? [], [data]);
+  const topUnmet = useMemo(() => data?.unmetDemand.slice(0, 5) ?? [], [data]);
+  const topOrders = useMemo(() => data?.recentOrders.slice(0, 5) ?? [], [data]);
+  const topNudges = useMemo(() => data?.nudges.slice(0, 5) ?? [], [data]);
 
   async function startCall() {
     if (!data) return;
@@ -192,8 +197,8 @@ function CustomerDetail() {
       </Link>
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_320px]">
-        <section className="pane overflow-hidden">
-          <div className="border-b border-[var(--line)] bg-[#f7f7ff] px-6 py-5">
+        <section className="overflow-hidden rounded-[22px] border border-[#c7d2fe] bg-white shadow-[0_18px_50px_-28px_rgba(79,70,229,0.65)]">
+          <div className="border-b border-[#c7d2fe] bg-[#eef2ff] px-6 py-5">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -220,10 +225,11 @@ function CustomerDetail() {
           </div>
 
           <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4">
-            <Metric icon={ReceiptText} label="Orders" value={c.orders.toLocaleString('en-IN')} />
-            <Metric icon={BadgeIndianRupee} label="Total spend" value={rupees(c.spendPaise)} />
-            <Metric icon={TrendingUp} label="Avg basket" value={rupees(c.avgBasketPaise)} />
+            <Metric tone="violet" icon={ReceiptText} label="Orders" value={c.orders.toLocaleString('en-IN')} />
+            <Metric tone="green" icon={BadgeIndianRupee} label="Total spend" value={rupees(c.spendPaise)} />
+            <Metric tone="amber" icon={TrendingUp} label="Avg basket" value={rupees(c.avgBasketPaise)} />
             <Metric
+              tone="pink"
               icon={CalendarClock}
               label="Order rhythm"
               value={c.medianGapDays ? `${c.medianGapDays}d` : 'learning'}
@@ -232,7 +238,7 @@ function CustomerDetail() {
           </div>
         </section>
 
-        <section className="pane p-5">
+        <section className="rounded-[22px] border border-[#bbf7d0] bg-[#ecfdf5] p-5 shadow-[0_18px_46px_-30px_rgba(4,120,87,0.55)]">
           <div className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 text-[var(--accent)]" />
             <h2 className="text-sm font-semibold uppercase text-[var(--muted)]">Autonomy</h2>
@@ -246,7 +252,7 @@ function CustomerDetail() {
         </section>
       </div>
 
-      <section className="pane mt-6 p-6">
+      <section className="mt-6 rounded-[22px] border border-[#fde68a] bg-[#fffbeb] p-6 shadow-[0_18px_46px_-32px_rgba(245,158,11,0.55)]">
         <div className="flex items-center gap-2">
           <Sparkles className="h-4 w-4 text-[var(--accent)]" />
           <h2 className="text-sm font-semibold uppercase text-[var(--muted)]">AI summary</h2>
@@ -268,7 +274,14 @@ function CustomerDetail() {
                 Item depletion tracking
               </h2>
             </div>
-            <span className="text-xs font-semibold text-[var(--muted)]">{data.tracked.length} rows</span>
+            {data.tracked.length > topTracked.length && (
+              <button
+                onClick={() => setModal({ title: 'Item depletion tracking', body: <TrackedList items={data.tracked} /> })}
+                className="rounded-full border border-[var(--line)] bg-white px-3 py-1 text-xs font-semibold text-[var(--accent)]"
+              >
+                More
+              </button>
+            )}
           </div>
 
           <div className="mt-5 space-y-3">
@@ -309,7 +322,7 @@ function CustomerDetail() {
           </div>
         </div>
 
-        <aside className="pane p-6">
+        <aside className="rounded-[22px] border border-[#fecaca] bg-[#fef2f2] p-6 shadow-[0_18px_46px_-32px_rgba(220,38,38,0.45)]">
           <div className="flex items-center gap-2">
             <PhoneCall className="h-4 w-4 text-[var(--accent)]" />
             <h2 className="text-sm font-semibold uppercase text-[var(--muted)]">Care-call plan</h2>
@@ -318,7 +331,7 @@ function CustomerDetail() {
           {data.careCall ? (
             <>
               <div className="mt-4 space-y-2">
-                {data.careCall.lines.map((line) => (
+                {data.careCall.lines.slice(0, 5).map((line) => (
                   <div key={line.skuId} className="rounded-xl border border-[var(--line)] bg-white px-3 py-2">
                     <p className="text-sm font-semibold">{line.name}</p>
                     <p className="muted mt-0.5 text-xs">
@@ -344,9 +357,16 @@ function CustomerDetail() {
       </section>
 
       <section className="mt-6 grid gap-6 lg:grid-cols-2">
-        <Panel title="Frequent basket" icon={ShoppingIcon}>
+        <Panel
+          title="Frequent basket"
+          icon={ShoppingIcon}
+          count={data.frequent.length}
+          onMore={data.frequent.length > topFrequent.length
+            ? () => setModal({ title: 'Frequent basket', body: <FrequentList items={data.frequent} /> })
+            : undefined}
+        >
           <div className="flex flex-wrap gap-2">
-            {data.frequent.map((f) => (
+            {topFrequent.map((f) => (
               <span key={f.name} className="rounded-full border border-[var(--line)] bg-white px-3 py-1.5 text-sm">
                 {f.name} · <b>{f.times}x</b>
               </span>
@@ -355,9 +375,17 @@ function CustomerDetail() {
           </div>
         </Panel>
 
-        <Panel title="Unmet demand" icon={MessageSquareText}>
+        <Panel
+          title="Unmet demand"
+          icon={MessageSquareText}
+          tone="amber"
+          count={data.unmetDemand.length}
+          onMore={data.unmetDemand.length > topUnmet.length
+            ? () => setModal({ title: 'Unmet demand', body: <UnmetList items={data.unmetDemand} /> })
+            : undefined}
+        >
           <div className="space-y-3">
-            {data.unmetDemand.map((u) => (
+            {topUnmet.map((u) => (
               <div key={u.id} className="rounded-xl border border-[var(--line)] bg-white px-3 py-2">
                 <p className="text-sm font-semibold">"{u.query}"</p>
                 <p className="muted mt-1 text-xs">
@@ -371,73 +399,54 @@ function CustomerDetail() {
       </section>
 
       <section className="mt-6 grid gap-6 lg:grid-cols-[1fr_420px]">
-        <Panel title="Recent orders" icon={ReceiptText}>
+        <Panel
+          title="Recent orders"
+          icon={ReceiptText}
+          tone="green"
+          count={data.recentOrders.length}
+          onMore={data.recentOrders.length > topOrders.length
+            ? () => setModal({ title: 'Recent orders', body: <OrderList orders={data.recentOrders} /> })
+            : undefined}
+        >
           <div className="space-y-4">
-            {data.recentOrders.map((order) => (
-              <div key={order.id} className="rounded-2xl border border-[var(--line)] bg-white p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold">{when(order.createdAt)}</p>
-                    <p className="muted text-xs">{order.status} · {order.source}</p>
-                  </div>
-                  <p className="font-semibold tabular-nums">{rupees(order.totalPaise)}</p>
-                </div>
-                <div className="mt-3 space-y-2">
-                  {order.lines.slice(0, 5).map((line, idx) => (
-                    <div key={`${order.id}-${idx}`} className="flex items-start justify-between gap-3 text-sm">
-                      <span className="min-w-0">
-                        <b>{line.sku?.name ?? line.sourceText}</b>
-                        <span className="muted"> · {line.quantity} {line.sku?.unit ?? ''}</span>
-                      </span>
-                      <span className="muted shrink-0 text-xs">{line.method}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
+            <OrderList orders={topOrders} compact />
             {data.recentOrders.length === 0 && <p className="muted text-sm">No orders yet.</p>}
           </div>
         </Panel>
 
-        <Panel title="Nudges" icon={Clock3}>
+        <Panel
+          title="Nudges"
+          icon={Clock3}
+          tone="pink"
+          count={data.nudges.length}
+          onMore={data.nudges.length > topNudges.length
+            ? () => setModal({ title: 'Nudges', body: <NudgeList nudges={data.nudges} /> })
+            : undefined}
+        >
           <div className="space-y-3">
-            {data.nudges.map((nudge) => (
-              <div key={nudge.id} className="rounded-xl border border-[var(--line)] bg-white px-3 py-2">
-                <p className="text-sm font-semibold">{nudge.templateName.replace(/_/g, ' ')}</p>
-                <p className="muted mt-1 text-xs">
-                  {when(nudge.sentAt)} · {nudge.outcome ?? 'waiting'}
-                </p>
-              </div>
-            ))}
+            <NudgeList nudges={topNudges} />
             {data.nudges.length === 0 && <p className="muted text-sm">No proactive nudge sent yet.</p>}
           </div>
         </Panel>
       </section>
 
-      <Panel title="Agent timeline" icon={Brain} className="mt-6">
-        <div className="space-y-3">
-          {data.timeline.map((e) => (
-            <div key={e.id} className="rounded-2xl border border-[var(--line)] bg-white p-4">
-              <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
-                <span>{when(e.createdAt)}</span>
-                <span className="rounded-full bg-[#f4f4f5] px-2 py-0.5 font-semibold">{e.desk}</span>
-                <span>{e.act ?? 'act unknown'}</span>
-                <span>{e.latencyMs}ms</span>
-                <span>{e.channel}</span>
-              </div>
-              <p className="mt-2 text-sm">"{e.heard}"</p>
-              {e.reply && <p className="muted mt-1 text-sm">↳ {e.reply}</p>}
-              {e.handoffFrom && e.handoffTo && (
-                <p className="mt-2 inline-flex items-center gap-1 rounded-full bg-[#eef2ff] px-2 py-1 text-xs font-semibold text-[var(--accent)]">
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  handoff {e.handoffFrom} to {e.handoffTo}
-                </p>
-              )}
+      {modal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4 backdrop-blur-sm">
+          <section className="max-h-[82vh] w-full max-w-3xl overflow-hidden rounded-[22px] border border-[var(--line)] bg-white shadow-2xl">
+            <div className="flex items-center justify-between gap-4 border-b border-[var(--line)] bg-[#f7f7ff] px-5 py-4">
+              <h2 className="text-base font-semibold">{modal.title}</h2>
+              <button
+                onClick={() => setModal(null)}
+                className="grid h-9 w-9 place-items-center rounded-full border border-[var(--line)] bg-white text-[var(--muted)] hover:text-[var(--ink)]"
+                aria-label="Close"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
-          ))}
-          {data.timeline.length === 0 && <p className="muted text-sm">No agent events recorded yet.</p>}
+            <div className="max-h-[70vh] overflow-y-auto p-5">{modal.body}</div>
+          </section>
         </div>
-      </Panel>
+      )}
     </>
   );
 }
@@ -447,14 +456,23 @@ function Metric({
   label,
   value,
   note,
+  tone = 'violet',
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   value: string;
   note?: string;
+  tone?: 'violet' | 'green' | 'amber' | 'pink';
 }) {
+  const tones = {
+    violet: 'border-[#c7d2fe] bg-[#eef2ff]',
+    green: 'border-[#bbf7d0] bg-[#ecfdf5]',
+    amber: 'border-[#fde68a] bg-[#fffbeb]',
+    pink: 'border-[#fbcfe8] bg-[#fdf2f8]',
+  };
+
   return (
-    <div className="rounded-2xl border border-[var(--line)] bg-white p-4">
+    <div className={`rounded-2xl border p-4 ${tones[tone]}`}>
       <div className="flex items-center justify-between">
         <p className="text-xs font-semibold uppercase text-[var(--muted)]">{label}</p>
         <Icon className="h-4 w-4 text-[var(--accent)]" />
@@ -479,20 +497,157 @@ function Panel({
   icon: Icon,
   children,
   className = '',
+  count,
+  onMore,
+  tone = 'violet',
 }: {
   title: string;
   icon: React.ComponentType<{ className?: string }>;
   children: React.ReactNode;
   className?: string;
+  count?: number;
+  onMore?: () => void;
+  tone?: 'violet' | 'green' | 'amber' | 'pink';
 }) {
+  const tones = {
+    violet: 'bg-[#f7f7ff] border-[#c7d2fe]',
+    green: 'bg-[#f0fdf4] border-[#bbf7d0]',
+    amber: 'bg-[#fffbeb] border-[#fde68a]',
+    pink: 'bg-[#fdf2f8] border-[#fbcfe8]',
+  };
+
   return (
-    <section className={`pane p-6 ${className}`}>
-      <div className="mb-4 flex items-center gap-2">
-        <Icon className="h-4 w-4 text-[var(--accent)]" />
-        <h2 className="text-sm font-semibold uppercase text-[var(--muted)]">{title}</h2>
+    <section className={`overflow-hidden rounded-[22px] border shadow-[0_16px_42px_-30px_rgba(24,24,27,0.45)] ${tones[tone]} ${className}`}>
+      <div className="flex items-center justify-between gap-3 border-b border-black/5 px-6 py-4">
+        <div className="flex items-center gap-2">
+          <Icon className="h-4 w-4 text-[var(--accent)]" />
+          <h2 className="text-sm font-semibold uppercase text-[var(--muted)]">{title}</h2>
+          {count !== undefined && (
+            <span className="rounded-full bg-white/70 px-2 py-0.5 text-xs font-semibold text-[var(--muted)]">
+              {count}
+            </span>
+          )}
+        </div>
+        {onMore && (
+          <button
+            onClick={onMore}
+            className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-[var(--accent)] shadow-sm"
+          >
+            More
+          </button>
+        )}
       </div>
-      {children}
+      <div className="p-6">{children}</div>
     </section>
+  );
+}
+
+function TrackedList({ items }: { items: Detail['tracked'] }) {
+  return (
+    <div className="space-y-3">
+      {items.map((item) => (
+        <div key={item.skuId} className="rounded-2xl border border-[var(--line)] bg-white p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-semibold">{item.name}</p>
+                <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${signalTone(item.signal)}`}>
+                  {item.signal}
+                </span>
+              </div>
+              <p className="muted mt-1 text-xs">
+                last bought {dateOnly(item.lastPurchaseAt)} · {item.observations} observation
+                {item.observations === 1 ? '' : 's'}{item.seeded ? ' · seeded baseline' : ''}
+              </p>
+            </div>
+            <p className="text-sm font-semibold tabular-nums">{daysLabel(item.daysUntilDepletion)}</p>
+          </div>
+          <div className="mt-4 h-2 overflow-hidden rounded-full bg-[#e4e4e7]">
+            <div
+              className="h-full rounded-full bg-[var(--accent)]"
+              style={{ width: `${item.consumedPct ?? 18}%` }}
+            />
+          </div>
+          <div className="mt-3 grid gap-2 text-xs text-[var(--muted)] sm:grid-cols-4">
+            <span>Rate {item.qtyPerDay.toFixed(2)} {item.unit}/day</span>
+            <span>Last qty {item.lastQty ?? 'n/a'}</span>
+            <span>Shop stock {item.stockInShop ?? 'n/a'}</span>
+            <span>Updated {dateOnly(item.updatedAt)}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FrequentList({ items }: { items: Detail['frequent'] }) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {items.map((f) => (
+        <span key={f.name} className="rounded-full border border-[var(--line)] bg-white px-3 py-1.5 text-sm">
+          {f.name} · <b>{f.times}x</b> · {f.units} units
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function UnmetList({ items }: { items: Detail['unmetDemand'] }) {
+  return (
+    <div className="space-y-3">
+      {items.map((u) => (
+        <div key={u.id} className="rounded-xl border border-[var(--line)] bg-white px-3 py-2">
+          <p className="text-sm font-semibold">"{u.query}"</p>
+          <p className="muted mt-1 text-xs">
+            {when(u.createdAt)}{u.offered ? ` · offered ${u.offered}` : ''} · score {u.confidence.toFixed(2)}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function OrderList({ orders, compact = false }: { orders: Detail['recentOrders']; compact?: boolean }) {
+  return (
+    <div className="space-y-4">
+      {orders.map((order) => (
+        <div key={order.id} className="rounded-2xl border border-[var(--line)] bg-white p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold">{when(order.createdAt)}</p>
+              <p className="muted text-xs">{order.status} · {order.source}</p>
+            </div>
+            <p className="font-semibold tabular-nums">{rupees(order.totalPaise)}</p>
+          </div>
+          <div className="mt-3 space-y-2">
+            {order.lines.slice(0, compact ? 4 : undefined).map((line, idx) => (
+              <div key={`${order.id}-${idx}`} className="flex items-start justify-between gap-3 text-sm">
+                <span className="min-w-0">
+                  <b>{line.sku?.name ?? line.sourceText}</b>
+                  <span className="muted"> · {line.quantity} {line.sku?.unit ?? ''}</span>
+                </span>
+                <span className="muted shrink-0 text-xs">{line.method}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function NudgeList({ nudges }: { nudges: Detail['nudges'] }) {
+  return (
+    <div className="space-y-3">
+      {nudges.map((nudge) => (
+        <div key={nudge.id} className="rounded-xl border border-[var(--line)] bg-white px-3 py-2">
+          <p className="text-sm font-semibold">{nudge.templateName.replace(/_/g, ' ')}</p>
+          <p className="muted mt-1 text-xs">
+            {when(nudge.sentAt)} · {nudge.outcome ?? 'waiting'}
+          </p>
+        </div>
+      ))}
+    </div>
   );
 }
 
