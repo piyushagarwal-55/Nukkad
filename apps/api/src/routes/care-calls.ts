@@ -71,6 +71,8 @@ function normalizedWords(text: string): string[] {
   return text
     .toLowerCase()
     .replace(/aashirvaad/g, 'aashirwad')
+    .replace(/\baata\b/g, 'atta')
+    .replace(/\baate\b/g, 'atta')
     .replace(/[^a-z0-9]+/g, ' ')
     .split(/\s+/)
     .filter((word) => word.length >= 4);
