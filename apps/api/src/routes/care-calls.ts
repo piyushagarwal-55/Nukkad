@@ -22,6 +22,11 @@ const callSchema = z.object({
   days: z.coerce.number().int().min(1).max(30).default(5),
 });
 
+const testSessionSchema = z.object({
+  householdId: z.string().optional(),
+  days: z.coerce.number().int().min(1).max(30).default(14),
+});
+
 const client = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
 const CARE_CALL_AUDIO_DIR = join(process.cwd(), 'media', 'care-calls');
 const SARVAM_TTS_RATE = 24_000;
@@ -42,6 +47,23 @@ interface PendingCareCall {
 }
 
 const pendingCareCalls = new Map<string, PendingCareCall>();
+
+async function pendingFromPlan(kiranaId: string, plan: Awaited<ReturnType<typeof buildCareCallPlans>>[number]): Promise<PendingCareCall> {
+  return {
+    householdId: plan.household.id,
+    kiranaId,
+    householdName: plan.household.name,
+    householdPhone: plan.household.phone,
+    shopName: plan.shop.name,
+    shopPhone: env.TWILIO_WHATSAPP_FROM.replace('whatsapp:', ''),
+    dueItems: plan.lines.map((line) => line.name),
+    permissionScript: `Namaste ${plan.household.name} ji, main ${plan.shop.name} se bol rahi hoon. Kya main aapse order ke baare mein do minute baat kar sakti hoon?`,
+    contextScript: plan.openingScript
+      .replace(/^Namaste .*? se bol rahi hoon\. /, '')
+      .replace(/^Agar aap free ho to kya main aapse 2 minute baat kar sakti hoon\? /, ''),
+    openingScript: plan.openingScript,
+  };
+}
 
 function voiceFrom(): string {
   const from = env.TWILIO_VOICE_FROM ?? env.TWILIO_SMS_NUMBER;
@@ -382,6 +404,225 @@ export async function careCallRoutes(app: FastifyInstance) {
     });
   });
 
+  app.get('/care-calls/test/stream', { websocket: true }, (socket) => {
+    let call: PendingCareCall | null = null;
+    let stage: CareCallStage = 'PERMISSION';
+    let lastPrompt = '';
+    let busy = false;
+    let inFlight: AbortController | null = null;
+    let speaking: AbortController | null = null;
+    const queuedUtterances: string[] = [];
+
+    const send = (msg: unknown) => {
+      if (socket.readyState === 1) socket.send(JSON.stringify(msg));
+    };
+
+    const saveCallEvent = (event: {
+      heard: string;
+      reply: string | null;
+      act?: string | null;
+      goal?: string | null;
+      latencyMs?: number;
+    }) => {
+      if (!call?.kiranaId || !call.householdId) return;
+      void prisma.agentEvent
+        .create({
+          data: {
+            kiranaId: call.kiranaId,
+            householdId: call.householdId,
+            channel: 'twilio-test',
+            desk: 'CARE_CALL',
+            act: event.act ?? null,
+            goal: event.goal ?? stage,
+            heard: event.heard.slice(0, 500),
+            reply: event.reply?.split('\n')[0]?.slice(0, 300) ?? null,
+            latencyMs: event.latencyMs ?? 0,
+          },
+        })
+        .catch((err) => app.log.warn({ err }, 'care-call test event write failed'));
+    };
+
+    function speakToBrowser(text: string, ctrl: AbortController, onDone?: () => void) {
+      speaking?.abort();
+      speaking = ctrl;
+      lastPrompt = text;
+      const mouth = openMouth({
+        onAudio: (b64) => {
+          if (!ctrl.signal.aborted) send({ type: 'audio', b64 });
+        },
+        onDone: () => {
+          setTimeout(() => mouth.close(), 250);
+          if (speaking === ctrl) speaking = null;
+          onDone?.();
+        },
+        onError: (message) => send({ type: 'error', message }),
+      });
+      mouth.say(text);
+      mouth.flush();
+    }
+
+    function closeAfter(text: string) {
+      const ctrl = new AbortController();
+      speakToBrowser(text, ctrl, () => send({ type: 'closed' }));
+    }
+
+    const ear = openEar({
+      onSpeechStart: () => {
+        speaking?.abort();
+        speaking = null;
+        send({ type: 'listening' });
+      },
+      onPartial: (text) => send({ type: 'partial', text }),
+      onSpeechEnd: () => send({ type: 'thinking' }),
+      onFinal: (text) => startTurn(text),
+      onError: (message, fatal) => send({ type: 'error', message, fatal }),
+      onClose: () => send({ type: 'ear-closed' }),
+    });
+
+    function startTurn(text: string) {
+      if (!text.trim() || !call) return;
+      if (busy) {
+        queuedUtterances.push(text);
+        return;
+      }
+      busy = true;
+
+      const ctrl = new AbortController();
+      inFlight = ctrl;
+
+      void runTurn(text, ctrl).finally(() => {
+        busy = false;
+        if (inFlight === ctrl) inFlight = null;
+        const next = queuedUtterances.splice(0).join(' ').trim();
+        if (next) startTurn(next);
+      });
+    }
+
+    async function runTurn(text: string, ctrl: AbortController) {
+      if (!call) return;
+      const started = Date.now();
+      const frame = await readCareCallReply({
+        stage,
+        text,
+        customerName: call.householdName,
+        shopName: call.shopName,
+        dueItems: call.dueItems,
+        lastPrompt,
+      });
+
+      app.log.info({ heard: text, frame, stage }, 'browser care-call intent');
+      if (ctrl.signal.aborted) return;
+
+      const sendTurn = (reply: string) => {
+        const turn = {
+          type: 'turn',
+          stage,
+          heard: text,
+          reply,
+          action: frame.act,
+          totalMs: Date.now() - started,
+        };
+        saveCallEvent({
+          heard: text,
+          reply,
+          act: frame.act,
+          goal: stage,
+          latencyMs: Date.now() - started,
+        });
+        send(turn);
+      };
+
+      if (stage === 'PERMISSION') {
+        if (frame.act === 'PERMISSION_DENIED') {
+          const reply = 'Theek hai ji, main baad mein pooch lungi. Dhanyavaad.';
+          sendTurn(reply);
+          closeAfter(reply);
+          return;
+        }
+
+        if (frame.act === 'PERMISSION_GRANTED') {
+          stage = 'ORDER';
+          sendTurn(call.contextScript);
+          speakToBrowser(call.contextScript, ctrl);
+          return;
+        }
+
+        if (frame.act === 'ADD_OR_CHANGE_ITEMS') {
+          stage = 'ORDER';
+        } else {
+          const reply = 'Maaf kijiye, kya main order ke baare mein do minute baat kar sakti hoon?';
+          sendTurn(reply);
+          speakToBrowser(reply, ctrl);
+          return;
+        }
+      }
+
+      if (stage === 'ORDER' && frame.act === 'ORDER_DECLINED') {
+        const reply = 'Theek hai ji. Koi baat nahi. Dhanyavaad.';
+        sendTurn(reply);
+        closeAfter(reply);
+        return;
+      }
+
+      const textForAgent = frame.act === 'ORDER_ACCEPTED'
+        ? `${call.dueItems.join(', ')} bhej do`
+        : (frame.orderText?.trim() || text);
+
+      const replies = await handle({
+        channel: 'twilio',
+        senderId: toE164(call.householdPhone),
+        recipientId: toE164(call.shopPhone),
+        text: textForAgent,
+        media: [],
+        externalId: `care_test_${randomUUID()}`,
+        receivedAt: new Date(),
+      });
+
+      if (ctrl.signal.aborted) return;
+
+      const said = replies.map((r) => r.text).filter(Boolean).join(' ') || 'Theek hai ji.';
+      app.log.info({ heard: text, agentText: textForAgent, said }, 'browser care-call turn');
+      sendTurn(said);
+      speakToBrowser(said, ctrl);
+    }
+
+    socket.on('message', (data: Buffer, isBinary: boolean) => {
+      if (isBinary) {
+        ear.send(data);
+        return;
+      }
+
+      try {
+        const msg = JSON.parse(data.toString()) as { type?: string; text?: string; sessionId?: string };
+        if (msg.type === 'start' && msg.sessionId) {
+          call = pendingCareCalls.get(msg.sessionId) ?? null;
+          pendingCareCalls.delete(msg.sessionId);
+          if (!call) {
+            send({ type: 'error', message: 'Care-call test session expired. Start again.' });
+            return;
+          }
+
+          const ctrl = new AbortController();
+          inFlight = ctrl;
+          stage = 'PERMISSION';
+          saveCallEvent({ heard: '', reply: call.permissionScript, act: 'CALL_OPENED', goal: stage });
+          send({ type: 'opened', household: call.householdName, prompt: call.permissionScript });
+          speakToBrowser(call.permissionScript, ctrl);
+          return;
+        }
+        if (msg.type === 'text' && typeof msg.text === 'string') startTurn(msg.text);
+        if (msg.type === 'stop') inFlight?.abort();
+      } catch {
+        // malformed control frames are ignored
+      }
+    });
+
+    socket.on('close', () => {
+      inFlight?.abort();
+      ear.close();
+    });
+  });
+
   app.get('/care-calls/audio/:file', async (req, reply) => {
     const file = (req.params as { file?: string }).file ?? '';
     if (!/^[a-f0-9-]+\.wav$/i.test(file)) return reply.code(404).send({ error: 'not found' });
@@ -413,6 +654,32 @@ export async function careCallRoutes(app: FastifyInstance) {
     };
   });
 
+  app.post('/care-calls/test/session', async (req, reply) => {
+    const { kiranaId } = requireSession(req);
+    const parsed = testSessionSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message });
+
+    const plans = await buildCareCallPlans(kiranaId, parsed.data.days);
+    const plan = parsed.data.householdId
+      ? plans.find((p) => p.household.id === parsed.data.householdId)
+      : plans[0];
+    if (!plan) return reply.code(404).send({ error: 'no care-call plan due for this customer' });
+
+    const sessionId = randomUUID();
+    const pending = await pendingFromPlan(kiranaId, plan);
+    pendingCareCalls.set(sessionId, pending);
+
+    return {
+      ok: true,
+      sessionId,
+      household: plan.household,
+      shop: plan.shop,
+      lines: plan.lines,
+      openingScript: pending.permissionScript,
+      contextScript: pending.contextScript,
+    };
+  });
+
   app.post('/care-calls/call', async (req, reply) => {
     const { kiranaId } = requireSession(req);
     const parsed = callSchema.safeParse(req.body ?? {});
@@ -429,18 +696,7 @@ export async function careCallRoutes(app: FastifyInstance) {
       from: voiceFrom(),
       to,
       twiml: await callTwiML({
-        householdId: plan.household.id,
-        kiranaId,
-        householdName: plan.household.name,
-        householdPhone: plan.household.phone,
-        shopName: plan.shop.name,
-        shopPhone: env.TWILIO_WHATSAPP_FROM.replace('whatsapp:', ''),
-        dueItems: plan.lines.map((line) => line.name),
-        permissionScript: `Namaste ${plan.household.name} ji, main ${plan.shop.name} se bol rahi hoon. Kya main aapse order ke baare mein do minute baat kar sakti hoon?`,
-        contextScript: plan.openingScript
-          .replace(/^Namaste .*? se bol rahi hoon\. /, '')
-          .replace(/^Agar aap free ho to kya main aapse 2 minute baat kar sakti hoon\? /, ''),
-        openingScript: plan.openingScript,
+        ...(await pendingFromPlan(kiranaId, plan)),
       }),
     });
 
