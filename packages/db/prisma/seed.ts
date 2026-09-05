@@ -137,12 +137,12 @@ const CATALOG: SeedSku[] = [
 ];
 
 const HOUSEHOLDS = [
-  { name: 'Ramesh Sharma', phone: '+918979560165', members: 4, tier: 'SUGGESTED' as const },
+  { name: 'Piyush Sharma', phone: '+918979560165', members: 4, tier: 'SUGGESTED' as const },
   { name: 'Gupta Ji',      phone: '+919000000002', members: 6, tier: 'SUGGESTED' as const },
   { name: 'Anjali Verma',  phone: '+919000000003', members: 3, tier: 'MANUAL' as const },
 ];
 
-/** Ramesh's steady basket. Repetition is what gives the prior its teeth. */
+/** Piyush's steady basket. Repetition is what gives the prior its teeth. */
 const REGULARS = [
   'Aashirvaad Whole Wheat Atta 5kg',
   'Fortune Sunflower Oil 1L',
