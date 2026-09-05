@@ -623,13 +623,13 @@ export function ComicScroll() {
     target: ref,
     offset: ['start start', 'end end'],
   });
-  // Stiffer than the other sections on purpose: a soft spring lags behind
-  // a fast flick and the panels blur past mid-dissolve.
-  const p = useSpring(scrollYProgress, { stiffness: 160, damping: 34, mass: 0.22 });
+  // Keep enough damping for trackpads, but avoid compressing panel changes
+  // into one fast flick.
+  const p = useSpring(scrollYProgress, { stiffness: 74, damping: 38, mass: 0.5 });
   const railScale = useTransform(p, [0, 1], [0.02, 1]);
 
   return (
-    <section ref={ref} className="relative h-[640vh]">
+    <section ref={ref} className="relative h-[820vh]">
       <div className="sticky top-0 flex h-screen flex-col justify-center overflow-hidden pt-20 pb-10">
         <div className="relative mx-auto h-[76vh] w-full max-w-5xl px-6">
           {PANELS.map((d, i) => (

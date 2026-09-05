@@ -108,9 +108,9 @@ export function DepletionScroll() {
   });
 
   const p = useSpring(scrollYProgress, {
-    stiffness: 80,
-    damping: 30,
-    mass: 0.4,
+    stiffness: 54,
+    damping: 34,
+    mass: 0.6,
   });
 
   // --- things reading the same progress at different rates ---
@@ -122,7 +122,7 @@ export function DepletionScroll() {
   useMotionValueEvent(dayText, 'change', setDay);
 
   return (
-    <section ref={ref} className="relative h-[380vh]">
+    <section ref={ref} className="relative h-[520vh]">
       <div className="sticky top-0 flex h-screen items-center overflow-hidden pt-20">
         <div className="mx-auto w-full max-w-6xl px-6">
           <div className="grid items-center gap-16 lg:grid-cols-2">

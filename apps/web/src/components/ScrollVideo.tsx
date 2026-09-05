@@ -108,7 +108,7 @@ export function ScrollVideo() {
 
   // Smooth once at the source. Raw scroll is jittery on a trackpad and every
   // derived value inherits that jitter.
-  const p = useSpring(scrollYProgress, { stiffness: 90, damping: 30, mass: 0.35 });
+  const p = useSpring(scrollYProgress, { stiffness: 58, damping: 34, mass: 0.55 });
 
   /* ---------------- the video: centre -> left -> down-right -------------- */
   const x = useTransform(
@@ -139,7 +139,7 @@ export function ScrollVideo() {
   const solutionX = useTransform(p, [SOLUTION_IN, DIAG_END], [-40, 0]);
 
   return (
-    <section ref={ref} className="relative h-[520vh]">
+    <section ref={ref} className="relative h-[700vh]">
       <div className="sticky top-0 flex h-screen items-center overflow-hidden">
         <div className="relative mx-auto w-full max-w-6xl px-6">
           {/* ---------- the one video ---------- */}
