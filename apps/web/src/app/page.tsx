@@ -5,6 +5,7 @@ import { HeroFlow, VoicePill } from '@/components/HeroFlow';
 import { DepletionScroll } from '@/components/DepletionScroll';
 import { ComicScroll } from '@/components/ComicScroll';
 import { ScrollVideo } from '@/components/ScrollVideo';
+import { ScrollPacer } from '@/components/ScrollPacer';
 
 /* ---------------------------------------------------------------------
    Image placeholders. Deliberately visible and labelled so nobody ships
@@ -274,6 +275,7 @@ function ShopField() {
 export default function Landing() {
   return (
     <main className="overflow-x-clip">
+      <ScrollPacer />
       {/* ------------------------------------------------ nav */}
       <div className="sticky top-4 z-50 px-4">
         <nav className="nav-pill mx-auto flex max-w-5xl items-center justify-between gap-4 px-4 py-3">
