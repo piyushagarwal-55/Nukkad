@@ -15,13 +15,11 @@ customer are already there.
 
 ## Technical architecture
 
-![Nukkad technical architecture](docs/nukkad-technical-architecture.svg)
+![Nukkad technical architecture](docs/nukkad-technical-architecture.png)
 
 Presentation slide:
 
 ![Nukkad proposed solution](docs/nukkad-proposed-solution-4k.png)
-
-[Editable SVG source](docs/nukkad-proposed-solution.svg)
 
 Nukkad is built as an agentic retail operating system, not a single chatbot.
 The landing page and OTP login create the shop context; the dashboard then
