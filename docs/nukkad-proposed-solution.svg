@@ -48,15 +48,12 @@
   <text x="142" y="146" class="brand">Nukkad</text>
   <text x="1510" y="118" class="title">Proposed Solution</text>
 
-  <g transform="translate(3130 48)">
-    <path d="M72 84 C28 84 8 58 8 28 M72 84 C116 84 136 58 136 28" fill="none" stroke="#0a0a0a" stroke-width="7" stroke-linecap="round"/>
-    <path d="M72 10 V160" stroke="#0a0a0a" stroke-width="7" stroke-linecap="round"/>
-    <rect x="34" y="32" width="32" height="96" rx="13" fill="#ff5b20"/>
-    <rect x="78" y="32" width="32" height="96" rx="13" fill="#16a34a"/>
-    <path d="M36 52 h28 M36 74 h28 M36 96 h28 M80 52 h28 M80 74 h28 M80 96 h28" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
-    <text x="164" y="52" font-family="Poppins, Arial, sans-serif" font-size="32" font-weight="800" fill="#0f172a">SMART INDIA</text>
-    <text x="164" y="90" font-family="Poppins, Arial, sans-serif" font-size="32" font-weight="800" fill="#0f172a">HACKATHON</text>
-    <text x="164" y="128" font-family="Poppins, Arial, sans-serif" font-size="32" font-weight="800" fill="#0f172a">2026</text>
+  <g transform="translate(3090 48)">
+    <rect x="0" y="12" width="118" height="118" rx="28" fill="#2563eb"/>
+    <path d="M38 92 L60 34 H84 L65 75 H92 L42 136 L58 92 Z" fill="#ffffff"/>
+    <text x="154" y="52" font-family="Poppins, Arial, sans-serif" font-size="32" font-weight="800" fill="#0f172a">RAZORPAY AI</text>
+    <text x="154" y="90" font-family="Poppins, Arial, sans-serif" font-size="32" font-weight="800" fill="#0f172a">BUILDATHON</text>
+    <text x="154" y="128" font-family="Poppins, Arial, sans-serif" font-size="32" font-weight="800" fill="#0f172a">2026</text>
   </g>
 
   <!-- Problem block -->
@@ -302,6 +299,6 @@
 
   <!-- Footer -->
   <rect x="0" y="2058" width="3840" height="102" fill="url(#blueFooter)"/>
-  <text x="1600" y="2120" font-family="Poppins, Arial, sans-serif" font-size="22" font-weight="500" fill="#ffffff">@SIH Idea submission - Template</text>
+  <text x="1548" y="2120" font-family="Poppins, Arial, sans-serif" font-size="24" font-weight="600" fill="#ffffff">Razorpay AI Buildathon 2026 · Nukkad</text>
   <text x="3702" y="2120" font-family="Poppins, Arial, sans-serif" font-size="30" font-weight="600" fill="#ffffff">2</text>
 </svg>
