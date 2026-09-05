@@ -22,8 +22,8 @@
       .section { font:900 28px Arial, sans-serif; fill:#101e60; text-decoration:underline; }
       .lane { font:900 22px Arial, sans-serif; fill:#101e60; }
       .boxTitle { font:900 17px Arial, sans-serif; fill:#0f172a; }
-      .boxText { font:500 13.5px Arial, sans-serif; fill:#334155; }
-      .micro { font:700 11.5px Consolas, monospace; fill:#475569; }
+      .boxText { font:500 13px Arial, sans-serif; fill:#334155; }
+      .micro { font:700 9.8px Consolas, monospace; fill:#475569; }
       .badgeText { font:900 18px Arial, sans-serif; fill:#ffffff; }
       .badgeDark { fill:#0f172a; }
       .card { fill:#ffffff; stroke:#1f2937; stroke-width:1.5; filter:url(#softShadow); }
@@ -156,30 +156,30 @@
 
   <rect x="858" y="386" width="160" height="74" rx="8" class="blue"/>
   <text x="884" y="414" class="boxTitle">Webhook</text>
-  <text x="879" y="438" class="boxText">drop echoes, LID to phone</text>
-  <text x="879" y="454" class="micro">/evolution/webhook</text>
+  <text x="879" y="438" class="boxText">echo drop, phone map</text>
+  <text x="879" y="454" class="micro">webhook</text>
   <path d="M1018 423 H1045" class="lineBlue"/>
   <rect x="1050" y="386" width="160" height="74" rx="8" class="blue"/>
   <text x="1088" y="414" class="boxTitle">Media Decode</text>
-  <text x="1070" y="438" class="boxText">fetch base64, decrypt bytes</text>
-  <text x="1070" y="454" class="micro">Baileys media envelope</text>
+  <text x="1070" y="438" class="boxText">fetch and decrypt</text>
+  <text x="1070" y="454" class="micro">media envelope</text>
   <path d="M1210 423 H1237" class="lineBlue"/>
   <rect x="1242" y="386" width="160" height="74" rx="8" class="violet"/>
   <text x="1273" y="414" class="boxTitle">Vision / OCR</text>
-  <text x="1261" y="438" class="boxText">Groq Qwen JSON</text>
-  <text x="1261" y="454" class="micro">photo list / supplier bill</text>
+  <text x="1261" y="438" class="boxText">Qwen JSON read</text>
+  <text x="1261" y="454" class="micro">list / bill OCR</text>
 
   <rect x="858" y="482" width="160" height="58" rx="8" class="green"/>
   <text x="882" y="511" class="boxTitle">Catalogue Match</text>
-  <text x="878" y="532" class="micro">aliases + fuzzy + prior</text>
+  <text x="878" y="532" class="micro">alias + prior</text>
   <path d="M1018 511 H1045" class="lineGreen"/>
   <rect x="1050" y="482" width="160" height="58" rx="8" class="green"/>
   <text x="1076" y="511" class="boxTitle">Basket Merge</text>
-  <text x="1072" y="532" class="micro">pack fitting + substitutes</text>
+  <text x="1072" y="532" class="micro">pack + swaps</text>
   <path d="M1210 511 H1237" class="lineGreen"/>
   <rect x="1242" y="482" width="160" height="58" rx="8" class="amber"/>
   <text x="1266" y="511" class="boxTitle">Order Intent</text>
-  <text x="1262" y="532" class="micro">ask, modify, checkout</text>
+  <text x="1262" y="532" class="micro">ask / edit / pay</text>
 
   <!-- Voice pipeline -->
   <rect x="1490" y="238" width="622" height="330" rx="18" class="card"/>
@@ -195,30 +195,30 @@
 
   <rect x="1522" y="386" width="160" height="74" rx="8" class="blue"/>
   <text x="1546" y="414" class="boxTitle">Call Connect</text>
-  <text x="1544" y="438" class="boxText">Twilio Media Stream</text>
-  <text x="1544" y="454" class="micro">8k μ-law frames</text>
+  <text x="1544" y="438" class="boxText">Twilio stream</text>
+  <text x="1544" y="454" class="micro">8k audio</text>
   <path d="M1682 423 H1709" class="lineBlue"/>
   <rect x="1714" y="386" width="160" height="74" rx="8" class="blue"/>
   <text x="1734" y="414" class="boxTitle">PCM Bridge</text>
-  <text x="1735" y="438" class="boxText">decode μ-law to PCM16</text>
-  <text x="1735" y="454" class="micro">8k telephony path</text>
+  <text x="1735" y="438" class="boxText">μ-law to PCM16</text>
+  <text x="1735" y="454" class="micro">phone bridge</text>
   <path d="M1874 423 H1901" class="lineBlue"/>
   <rect x="1906" y="386" width="160" height="74" rx="8" class="violet"/>
   <text x="1938" y="414" class="boxTitle">Sarvam Ear</text>
-  <text x="1927" y="438" class="boxText">streaming STT + VAD</text>
-  <text x="1927" y="454" class="micro">partials warm, finals commit</text>
+  <text x="1927" y="438" class="boxText">STT with VAD</text>
+  <text x="1927" y="454" class="micro">finals commit</text>
 
   <rect x="1522" y="482" width="160" height="58" rx="8" class="green"/>
   <text x="1547" y="511" class="boxTitle">Care Runtime</text>
-  <text x="1543" y="532" class="micro">ConversationFrame + TTL</text>
+  <text x="1543" y="532" class="micro">memory + TTL</text>
   <path d="M1682 511 H1709" class="lineGreen"/>
   <rect x="1714" y="482" width="160" height="58" rx="8" class="green"/>
   <text x="1735" y="511" class="boxTitle">Desk Agents</text>
-  <text x="1735" y="532" class="micro">4 desks + state router</text>
+  <text x="1735" y="532" class="micro">desk router</text>
   <path d="M1874 511 H1901" class="lineGreen"/>
   <rect x="1906" y="482" width="160" height="58" rx="8" class="amber"/>
   <text x="1930" y="511" class="boxTitle">Sarvam Mouth</text>
-  <text x="1928" y="532" class="micro">flush + barge-in</text>
+  <text x="1928" y="532" class="micro">low latency</text>
 
   <!-- Core orchestration -->
   <rect x="826" y="610" width="1286" height="300" rx="18" class="card"/>
@@ -226,54 +226,54 @@
 
   <rect x="860" y="688" width="170" height="78" rx="8" class="violet"/>
   <text x="890" y="717" class="boxTitle">Understand</text>
-  <text x="884" y="740" class="boxText">LLM returns JSON speech act</text>
-  <text x="884" y="758" class="micro">zod validated frame</text>
+  <text x="884" y="740" class="boxText">JSON speech act</text>
+  <text x="884" y="758" class="micro">zod frame</text>
   <path d="M1030 727 H1064" class="lineBlue"/>
 
   <rect x="1070" y="688" width="170" height="78" rx="8" class="green"/>
   <text x="1110" y="717" class="boxTitle">Policy Table</text>
-  <text x="1090" y="740" class="boxText">desk × act transition</text>
-  <text x="1090" y="758" class="micro">no model decides policy</text>
+  <text x="1090" y="740" class="boxText">desk × act</text>
+  <text x="1090" y="758" class="micro">policy table</text>
   <path d="M1240 727 H1274" class="lineBlue"/>
 
   <rect x="1280" y="688" width="170" height="78" rx="8" class="green"/>
   <text x="1308" y="717" class="boxTitle">Execute Tools</text>
-  <text x="1304" y="740" class="boxText">resolver, basket, payment</text>
-  <text x="1304" y="758" class="micro">deterministic commands</text>
+  <text x="1304" y="740" class="boxText">basket, pay, stock</text>
+  <text x="1304" y="758" class="micro">tool calls</text>
   <path d="M1450 727 H1484" class="lineBlue"/>
 
   <rect x="1490" y="688" width="170" height="78" rx="8" class="amber"/>
   <text x="1520" y="717" class="boxTitle">Verify Outcome</text>
-  <text x="1510" y="740" class="boxText">facts with evidence</text>
-  <text x="1510" y="758" class="micro">digits/URLs code-owned</text>
+  <text x="1510" y="740" class="boxText">evidence facts</text>
+  <text x="1510" y="758" class="micro">code-owned</text>
   <path d="M1660 727 H1694" class="lineBlue"/>
 
   <rect x="1700" y="688" width="170" height="78" rx="8" class="blue"/>
   <text x="1728" y="717" class="boxTitle">Respond</text>
-  <text x="1722" y="740" class="boxText">natural Hinglish reply</text>
-  <text x="1722" y="758" class="micro">text or streaming TTS</text>
+  <text x="1722" y="740" class="boxText">Hinglish reply</text>
+  <text x="1722" y="758" class="micro">text / TTS</text>
   <path d="M1870 727 H1904" class="lineBlue"/>
 
   <rect x="1910" y="688" width="170" height="78" rx="8" class="slate"/>
   <text x="1942" y="717" class="boxTitle">Journal</text>
-  <text x="1932" y="740" class="boxText">AgentEvent trace</text>
-  <text x="1932" y="758" class="micro">timeline + eval replay</text>
+  <text x="1932" y="740" class="boxText">AgentEvent</text>
+  <text x="1932" y="758" class="micro">replay log</text>
 
   <rect x="860" y="804" width="250" height="70" rx="8" class="box"/>
   <text x="884" y="832" class="boxTitle">Conversation Memory Stack</text>
-  <text x="884" y="854" class="boxText">desk, pending, basket, referents, TTL</text>
+  <text x="884" y="854" class="boxText">desk, basket, pending, TTL</text>
 
   <rect x="1140" y="804" width="250" height="70" rx="8" class="box"/>
   <text x="1164" y="832" class="boxTitle">Grounded RAG Context</text>
-  <text x="1164" y="854" class="boxText">catalogue rows, KB aliases, prior, stock</text>
+  <text x="1164" y="854" class="boxText">catalogue, KB, prior, stock</text>
 
   <rect x="1420" y="804" width="250" height="70" rx="8" class="box"/>
   <text x="1444" y="832" class="boxTitle">Outcome Verification</text>
-  <text x="1444" y="854" class="boxText">payment is verified, never inferred</text>
+  <text x="1444" y="854" class="boxText">payment never inferred</text>
 
   <rect x="1700" y="804" width="250" height="70" rx="8" class="box"/>
   <text x="1724" y="832" class="boxTitle">Owner Visibility</text>
-  <text x="1724" y="854" class="boxText">timeline shows heard, tool, result</text>
+  <text x="1724" y="854" class="boxText">heard, tool, result</text>
 
   <!-- Payment safety flow -->
   <rect x="826" y="952" width="618" height="304" rx="18" class="card"/>
@@ -281,23 +281,23 @@
 
   <rect x="858" y="1028" width="170" height="64" rx="8" class="green"/>
   <text x="884" y="1056" class="boxTitle">Basket Final</text>
-  <text x="884" y="1078" class="boxText">customer says bhej do</text>
+  <text x="884" y="1078" class="boxText">final bhej do</text>
   <path d="M1028 1060 H1056" class="lineGreen"/>
 
   <rect x="1062" y="1028" width="170" height="64" rx="8" class="amber"/>
   <text x="1082" y="1056" class="boxTitle">Create Link</text>
-  <text x="1082" y="1078" class="boxText">Razorpay payment link</text>
+  <text x="1082" y="1078" class="boxText">Razorpay link</text>
   <path d="M1232 1060 H1260" class="lineGreen"/>
 
   <rect x="1266" y="1028" width="144" height="64" rx="8" class="blue"/>
   <text x="1292" y="1056" class="boxTitle">WhatsApp</text>
-  <text x="1288" y="1078" class="boxText">bill + pay URL</text>
+  <text x="1288" y="1078" class="boxText">bill + URL</text>
 
   <path d="M1138 1092 V1120" class="lineBlue"/>
   <rect x="958" y="1120" width="364" height="86" rx="8" class="rose"/>
   <text x="996" y="1150" class="boxTitle">Customer says: payment ho gaya?</text>
-  <text x="988" y="1174" class="boxText">Detect PAYMENT_CLAIM, call Razorpay API/webhook state</text>
-  <text x="988" y="1194" class="micro">if not paid: ask customer to complete link</text>
+  <text x="988" y="1174" class="boxText">Detect PAYMENT_CLAIM, verify with Razorpay</text>
+  <text x="988" y="1194" class="micro">if unpaid: ask to complete link</text>
 
   <path d="M1322 1163 H1352" class="lineGreen"/>
   <rect x="1358" y="1120" width="52" height="86" rx="8" class="green"/>
@@ -329,7 +329,7 @@
   <text x="1880" y="1170" class="micro">ear/mouth/voice</text>
 
   <rect x="1522" y="1210" width="486" height="24" rx="12" fill="#0f172a"/>
-  <text x="1544" y="1227" font-family="Arial, sans-serif" font-size="13" font-weight="800" fill="#ffffff">Harnesses import production modules, not demo reimplementations</text>
+  <text x="1544" y="1227" font-family="Arial, sans-serif" font-size="12" font-weight="800" fill="#ffffff">Harnesses import production modules</text>
 
   <!-- Bottom technology stack badges -->
   <line x1="826" y1="1298" x2="2112" y2="1298" class="sep"/>
