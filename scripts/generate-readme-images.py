@@ -80,6 +80,11 @@ def icon_circle(draw: ImageDraw.ImageDraw, center: tuple[int, int], label: str, 
 
 
 def proposed_solution() -> None:
+    supplied = ROOT / "media" / "Proposed Solution.png"
+    if supplied.exists():
+        shutil.copyfile(supplied, DOCS / "nukkad-proposed-solution.png")
+        return
+
     w, h = 3840, 2160
     img = Image.new("RGB", (w, h), "white")
     d = ImageDraw.Draw(img)
