@@ -1,225 +1,368 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1100" viewBox="0 0 1800 1100" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="2200" height="1500" viewBox="0 0 2200 1500" role="img" aria-labelledby="title desc">
   <title id="title">Nukkad Technical Approach</title>
-  <desc id="desc">A slide-style architecture diagram with system architecture on the left and technology stack on the right.</desc>
+  <desc id="desc">Detailed technical architecture for Nukkad covering WhatsApp, OCR, voice calls, multi-agent orchestration, payments, event logs, eval harnesses, and deployment stack.</desc>
   <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-      <path d="M1,1 L9,5 L1,9 Z" fill="#111827"/>
+    <marker id="arrowDark" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#0f172a"/>
     </marker>
-    <marker id="blueArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-      <path d="M1,1 L9,5 L1,9 Z" fill="#1d4ed8"/>
+    <marker id="arrowBlue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#2563eb"/>
     </marker>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#059669"/>
+    </marker>
+    <filter id="softShadow" x="-10%" y="-12%" width="120%" height="132%">
+      <feDropShadow dx="0" dy="9" stdDeviation="10" flood-color="#0f172a" flood-opacity="0.13"/>
+    </filter>
     <style>
-      .page { fill: #ffffff; }
-      .title { font: 900 64px Arial, sans-serif; fill: #0b1533; letter-spacing: 1px; }
-      .brand { font: 800 24px Arial, sans-serif; fill: #1e3a8a; }
-      .h2 { font: 800 24px Arial, sans-serif; fill: #14236b; text-decoration: underline; }
-      .h3 { font: 800 23px Arial, sans-serif; fill: #14236b; }
-      .label { font: 800 15px Arial, sans-serif; fill: #111827; }
-      .small { font: 500 12.5px Arial, sans-serif; fill: #374151; }
-      .micro { font: 700 11px Consolas, monospace; fill: #334155; }
-      .stack { font: 500 18px Arial, sans-serif; fill: #111827; }
-      .stack-small { font: 500 15px Arial, sans-serif; fill: #374151; }
-      .iconText { font: 900 34px Arial, sans-serif; fill: #111827; }
-      .chipText { font: 900 18px Arial, sans-serif; fill: #ffffff; }
-      .box { fill: #ffffff; stroke: #1f2937; stroke-width: 1.8; }
-      .box2 { fill: #f8fafc; stroke: #1f2937; stroke-width: 1.6; }
-      .blue { fill: #eff6ff; stroke: #2563eb; stroke-width: 1.8; }
-      .green { fill: #ecfdf5; stroke: #059669; stroke-width: 1.8; }
-      .amber { fill: #fff7ed; stroke: #d97706; stroke-width: 1.8; }
-      .rose { fill: #fff1f2; stroke: #e11d48; stroke-width: 1.8; }
-      .violet { fill: #f5f3ff; stroke: #7c3aed; stroke-width: 1.8; }
-      .line { stroke: #111827; stroke-width: 2.1; fill: none; marker-end: url(#arrow); }
-      .lineBlue { stroke: #1d4ed8; stroke-width: 2.4; fill: none; marker-end: url(#blueArrow); }
-      .dash { stroke: #64748b; stroke-width: 1.6; stroke-dasharray: 8 8; }
-      .sep { stroke: #94a3b8; stroke-width: 1.6; stroke-dasharray: 8 8; }
+      .page { fill:#ffffff; }
+      .title { font:900 66px Arial, sans-serif; fill:#07112f; letter-spacing:1px; }
+      .brand { font:800 24px Arial, sans-serif; fill:#172554; }
+      .sub { font:500 20px Arial, sans-serif; fill:#475569; }
+      .section { font:900 28px Arial, sans-serif; fill:#101e60; text-decoration:underline; }
+      .lane { font:900 22px Arial, sans-serif; fill:#101e60; }
+      .boxTitle { font:900 17px Arial, sans-serif; fill:#0f172a; }
+      .boxText { font:500 13.5px Arial, sans-serif; fill:#334155; }
+      .micro { font:700 11.5px Consolas, monospace; fill:#475569; }
+      .badgeText { font:900 18px Arial, sans-serif; fill:#ffffff; }
+      .badgeDark { fill:#0f172a; }
+      .card { fill:#ffffff; stroke:#1f2937; stroke-width:1.5; filter:url(#softShadow); }
+      .box { fill:#ffffff; stroke:#334155; stroke-width:1.35; }
+      .blue { fill:#eff6ff; stroke:#2563eb; stroke-width:1.45; }
+      .green { fill:#ecfdf5; stroke:#059669; stroke-width:1.45; }
+      .amber { fill:#fff7ed; stroke:#d97706; stroke-width:1.45; }
+      .violet { fill:#f5f3ff; stroke:#7c3aed; stroke-width:1.45; }
+      .rose { fill:#fff1f2; stroke:#e11d48; stroke-width:1.45; }
+      .slate { fill:#f8fafc; stroke:#94a3b8; stroke-width:1.25; }
+      .line { stroke:#0f172a; stroke-width:2; fill:none; marker-end:url(#arrowDark); }
+      .lineBlue { stroke:#2563eb; stroke-width:2.2; fill:none; marker-end:url(#arrowBlue); }
+      .lineGreen { stroke:#059669; stroke-width:2.2; fill:none; marker-end:url(#arrowGreen); }
+      .dash { stroke:#94a3b8; stroke-width:1.5; stroke-dasharray:8 8; fill:none; }
+      .sep { stroke:#cbd5e1; stroke-width:1.8; stroke-dasharray:9 9; }
     </style>
   </defs>
 
-  <rect class="page" width="1800" height="1100"/>
+  <rect class="page" width="2200" height="1500"/>
 
-  <ellipse cx="118" cy="56" rx="84" ry="32" fill="none" stroke="#1e3a8a" stroke-width="3"/>
-  <text x="62" y="65" class="brand">Nukkad</text>
-  <text x="560" y="72" class="title">TECHNICAL APPROACH</text>
-  <text x="1525" y="48" class="brand">RAZORPAY</text>
-  <text x="1525" y="77" class="brand">AI BUILDATHON</text>
-  <text x="1525" y="106" class="brand">2026</text>
+  <!-- Header -->
+  <ellipse cx="132" cy="66" rx="96" ry="38" fill="none" stroke="#172554" stroke-width="3"/>
+  <text x="69" y="76" class="brand">Nukkad</text>
+  <text x="665" y="82" class="title">TECHNICAL APPROACH</text>
+  <text x="676" y="118" class="sub">Agentic kirana commerce: WhatsApp, OCR, proactive voice calls, payment safety, and evaluation harnesses.</text>
+  <text x="1910" y="58" class="brand">RAZORPAY</text>
+  <text x="1910" y="88" class="brand">AI BUILDATHON</text>
+  <text x="1910" y="118" class="brand">2026</text>
 
-  <line x1="760" y1="130" x2="760" y2="1045" stroke="#9ca3af" stroke-width="2"/>
+  <line x1="780" y1="150" x2="780" y2="1418" stroke="#94a3b8" stroke-width="2"/>
 
-  <!-- Left: System Architecture -->
-  <text x="48" y="158" class="h2">◆ System Architecture</text>
+  <!-- Left System Architecture -->
+  <text x="54" y="178" class="section">◆ System Architecture</text>
 
-  <rect x="226" y="185" width="300" height="52" rx="6" class="box"/>
-  <text x="286" y="216" class="label">Shop Owner / Operator</text>
+  <rect x="228" y="218" width="330" height="54" rx="7" class="box"/>
+  <text x="295" y="251" class="boxTitle">Shop Owner / Operator</text>
 
-  <path d="M376 237 V263" class="line"/>
-  <rect x="226" y="263" width="300" height="52" rx="6" class="box2"/>
-  <text x="291" y="294" class="label">Landing Page + OTP Login</text>
+  <path d="M393 272 V300" class="line"/>
+  <rect x="228" y="300" width="330" height="58" rx="7" class="blue"/>
+  <text x="300" y="326" class="boxTitle">Landing Page</text>
+  <text x="276" y="348" class="boxText">story, demo proof, CTA to owner login</text>
 
-  <path d="M376 315 V342" class="line"/>
-  <rect x="226" y="342" width="300" height="60" rx="6" class="blue"/>
-  <text x="279" y="369" class="label">Next.js Owner Dashboard</text>
-  <text x="259" y="391" class="small">orders · customers · inventory · procurement</text>
+  <path d="M393 358 V386" class="line"/>
+  <rect x="228" y="386" width="330" height="58" rx="7" class="blue"/>
+  <text x="306" y="412" class="boxTitle">OTP Login</text>
+  <text x="259" y="434" class="boxText">phone OTP, signed session cookie, owner scope</text>
 
-  <path d="M376 402 V430" class="line"/>
-  <rect x="226" y="430" width="300" height="60" rx="6" class="green"/>
-  <text x="294" y="457" class="label">Fastify API Backend</text>
-  <text x="264" y="479" class="small">auth · agents · payments · channel webhooks</text>
+  <path d="M393 444 V472" class="line"/>
+  <rect x="200" y="472" width="386" height="74" rx="8" class="green"/>
+  <text x="272" y="501" class="boxTitle">Kirana Workspace Created</text>
+  <text x="235" y="524" class="boxText">shop profile, owner phone, supplier, customers, offers</text>
 
-  <path d="M376 490 V520" class="line"/>
-  <rect x="188" y="520" width="376" height="56" rx="5" class="box"/>
-  <text x="304" y="554" class="label">Channel Input Processing</text>
+  <path d="M393 546 V574" class="line"/>
+  <rect x="200" y="574" width="386" height="74" rx="8" class="amber"/>
+  <text x="297" y="603" class="boxTitle">Owner Dashboard</text>
+  <text x="225" y="626" class="boxText">orders, stock, customers, insights, procurement approval</text>
 
-  <rect x="96" y="576" width="168" height="88" rx="6" class="box2"/>
-  <text x="154" y="607" class="iconText">WA</text>
-  <text x="130" y="636" class="label">WhatsApp</text>
-  <text x="118" y="655" class="small">text · photo · voice-note</text>
+  <path d="M393 648 V676" class="line"/>
+  <rect x="120" y="676" width="548" height="52" rx="7" class="box"/>
+  <text x="296" y="708" class="boxTitle">Input and Automation Channels</text>
 
-  <rect x="292" y="576" width="168" height="88" rx="6" class="box2"/>
-  <text x="350" y="607" class="iconText">OCR</text>
-  <text x="319" y="636" class="label">Bill / Catalogue</text>
-  <text x="314" y="655" class="small">photo extraction + repair</text>
+  <rect x="74" y="762" width="154" height="78" rx="7" class="blue"/>
+  <text x="122" y="793" class="boxTitle">WhatsApp</text>
+  <text x="96" y="816" class="boxText">text, post, photo</text>
 
-  <rect x="488" y="576" width="168" height="88" rx="6" class="box2"/>
-  <text x="548" y="607" class="iconText">☎</text>
-  <text x="525" y="636" class="label">Voice Call</text>
-  <text x="512" y="655" class="small">Twilio + WebSocket audio</text>
+  <rect x="256" y="762" width="154" height="78" rx="7" class="blue"/>
+  <text x="305" y="793" class="boxTitle">Voice</text>
+  <text x="278" y="816" class="boxText">Twilio outbound call</text>
 
-  <path d="M180 664 V706 H376" class="line"/>
-  <path d="M376 664 V706" class="line"/>
-  <path d="M572 664 V706 H376" class="line"/>
+  <rect x="438" y="762" width="154" height="78" rx="7" class="blue"/>
+  <text x="480" y="793" class="boxTitle">Bill OCR</text>
+  <text x="456" y="816" class="boxText">supplier bill upload</text>
 
-  <rect x="204" y="706" width="344" height="62" rx="6" class="violet"/>
-  <text x="265" y="733" class="label">Content Understanding Layer</text>
-  <text x="236" y="755" class="small">STT · vision OCR · intent JSON · zod validation</text>
+  <rect x="620" y="762" width="154" height="78" rx="7" class="blue"/>
+  <text x="659" y="793" class="boxTitle">Workers</text>
+  <text x="642" y="816" class="boxText">care-call scheduler</text>
 
-  <path d="M376 768 V794" class="line"/>
-  <rect x="204" y="794" width="344" height="70" rx="6" class="box"/>
-  <text x="250" y="820" class="label">Structured Agent State Model</text>
-  <text x="232" y="842" class="small">basket · pending action · desk · referents · events</text>
-  <text x="276" y="858" class="micro">ConversationFrame + AgentEvent</text>
+  <path d="M151 840 V878 H393" class="line"/>
+  <path d="M333 840 V878 H393" class="line"/>
+  <path d="M515 840 V878 H393" class="line"/>
+  <path d="M697 840 V878 H393" class="line"/>
 
-  <path d="M376 864 V890" class="line"/>
-  <rect x="204" y="890" width="344" height="62" rx="6" class="green"/>
-  <text x="255" y="917" class="label">Agentic Desk Orchestrator</text>
-  <text x="232" y="939" class="small">Reception → Seller → Checkout → Enquiry</text>
+  <rect x="200" y="878" width="386" height="74" rx="8" class="violet"/>
+  <text x="267" y="907" class="boxTitle">Unified Agent Runtime</text>
+  <text x="233" y="930" class="boxText">same InboundMessage contract for every channel</text>
 
-  <path d="M376 952 V978" class="line"/>
-  <rect x="74" y="978" width="604" height="56" rx="6" class="box"/>
-  <text x="249" y="1012" class="label">Verified Business Outcomes</text>
+  <path d="M393 952 V980" class="line"/>
+  <rect x="200" y="980" width="386" height="86" rx="8" class="green"/>
+  <text x="246" y="1009" class="boxTitle">Desk Orchestrator + Memory</text>
+  <text x="232" y="1032" class="boxText">Reception, Seller, Checkout, Enquiry</text>
+  <text x="232" y="1052" class="micro">basket + pending action + referents + event journal</text>
 
-  <rect x="82" y="1034" width="112" height="44" rx="5" class="blue"/>
-  <text x="111" y="1061" class="label">Order</text>
-  <rect x="210" y="1034" width="112" height="44" rx="5" class="green"/>
-  <text x="239" y="1061" class="label">Payment</text>
-  <rect x="338" y="1034" width="112" height="44" rx="5" class="amber"/>
-  <text x="359" y="1061" class="label">Inventory</text>
-  <rect x="466" y="1034" width="112" height="44" rx="5" class="violet"/>
-  <text x="492" y="1061" class="label">Demand</text>
-  <rect x="594" y="1034" width="112" height="44" rx="5" class="rose"/>
-  <text x="613" y="1061" class="label">Supplier</text>
+  <path d="M393 1066 V1094" class="line"/>
+  <rect x="120" y="1094" width="548" height="56" rx="7" class="box"/>
+  <text x="286" y="1128" class="boxTitle">Verified Business Commands</text>
 
-  <!-- Right: Technology Stack -->
-  <text x="812" y="158" class="h2">◆ Technology Stack</text>
-  <line x1="800" y1="178" x2="1726" y2="178" stroke="#14236b" stroke-width="3"/>
+  <rect x="74" y="1184" width="128" height="54" rx="7" class="green"/>
+  <text x="105" y="1217" class="boxTitle">Order</text>
+  <rect x="222" y="1184" width="128" height="54" rx="7" class="green"/>
+  <text x="250" y="1217" class="boxTitle">Payment</text>
+  <rect x="370" y="1184" width="128" height="54" rx="7" class="green"/>
+  <text x="393" y="1217" class="boxTitle">Stock</text>
+  <rect x="518" y="1184" width="128" height="54" rx="7" class="green"/>
+  <text x="541" y="1217" class="boxTitle">Demand</text>
+  <rect x="666" y="1184" width="128" height="54" rx="7" class="green"/>
+  <text x="692" y="1217" class="boxTitle">Supplier</text>
 
-  <!-- Row 1 -->
-  <text x="850" y="245" class="h3">Frontend</text>
-  <text x="825" y="285" class="stack">Next.js, React</text>
-  <text x="815" y="311" class="stack">TypeScript, Tailwind CSS</text>
-  <rect x="815" y="355" width="66" height="54" rx="8" fill="#111827"/>
-  <text x="828" y="391" class="chipText">NEXT</text>
-  <rect x="900" y="355" width="54" height="54" rx="27" fill="#61dafb"/>
-  <text x="916" y="390" class="iconText" fill="#0f172a">R</text>
-  <rect x="974" y="355" width="54" height="54" rx="8" fill="#3178c6"/>
-  <text x="987" y="391" class="chipText">TS</text>
+  <path d="M393 1150 V1184" class="line"/>
+  <path d="M393 1150 C393 1170 138 1165 138 1184" class="line"/>
+  <path d="M393 1150 C393 1170 286 1165 286 1184" class="line"/>
+  <path d="M393 1150 C393 1170 434 1165 434 1184" class="line"/>
+  <path d="M393 1150 C393 1170 582 1165 582 1184" class="line"/>
+  <path d="M393 1150 C393 1170 730 1165 730 1184" class="line"/>
 
-  <text x="1110" y="245" class="h3">Backend</text>
-  <text x="1075" y="285" class="stack">Fastify, Node.js</text>
-  <text x="1070" y="311" class="stack">Prisma, LangGraph</text>
-  <rect x="1090" y="355" width="58" height="54" rx="8" fill="#111827"/>
-  <text x="1102" y="390" class="chipText">API</text>
-  <rect x="1168" y="355" width="58" height="54" rx="8" fill="#2f855a"/>
-  <text x="1178" y="390" class="chipText">LG</text>
+  <!-- Right Detailed Technical Stack and Flows -->
+  <text x="836" y="178" class="section">◆ Detailed Technical Stack and Agent Flow</text>
+  <line x1="826" y1="202" x2="2112" y2="202" stroke="#172554" stroke-width="3"/>
 
-  <text x="1342" y="245" class="h3">Generative AI</text>
-  <text x="1320" y="285" class="stack">Groq OSS LLM</text>
-  <text x="1302" y="311" class="stack">Qwen Vision, JSON mode</text>
-  <rect x="1344" y="355" width="66" height="54" rx="8" fill="#f97316"/>
-  <text x="1358" y="390" class="chipText">GROQ</text>
-  <rect x="1430" y="355" width="58" height="54" rx="8" fill="#7c3aed"/>
-  <text x="1442" y="390" class="chipText">AI</text>
+  <!-- WhatsApp pipeline -->
+  <rect x="826" y="238" width="618" height="330" rx="18" class="card"/>
+  <text x="858" y="276" class="lane">WhatsApp Commerce Pipeline</text>
+  <rect x="858" y="306" width="126" height="50" rx="8" fill="#25d366"/>
+  <text x="886" y="338" class="badgeText">WA</text>
+  <rect x="1002" y="306" width="126" height="50" rx="8" fill="#111827"/>
+  <text x="1025" y="338" class="badgeText">EVO</text>
+  <rect x="1146" y="306" width="126" height="50" rx="8" fill="#f43f5e"/>
+  <text x="1176" y="338" class="badgeText">TWILIO</text>
+  <rect x="1290" y="306" width="126" height="50" rx="8" fill="#2563eb"/>
+  <text x="1328" y="338" class="badgeText">API</text>
 
-  <text x="1558" y="245" class="h3">Document Intelligence</text>
-  <text x="1560" y="285" class="stack">Bill OCR, repair</text>
-  <text x="1555" y="311" class="stack">critic + catalogue merge</text>
-  <rect x="1580" y="355" width="70" height="54" rx="8" fill="#0f172a"/>
-  <text x="1591" y="390" class="chipText">OCR</text>
-  <rect x="1670" y="355" width="58" height="54" rx="8" fill="#dc2626"/>
-  <text x="1684" y="390" class="chipText">KB</text>
+  <rect x="858" y="386" width="160" height="74" rx="8" class="blue"/>
+  <text x="884" y="414" class="boxTitle">Webhook</text>
+  <text x="879" y="438" class="boxText">drop echoes, LID to phone</text>
+  <text x="879" y="454" class="micro">/evolution/webhook</text>
+  <path d="M1018 423 H1045" class="lineBlue"/>
+  <rect x="1050" y="386" width="160" height="74" rx="8" class="blue"/>
+  <text x="1088" y="414" class="boxTitle">Media Decode</text>
+  <text x="1070" y="438" class="boxText">fetch base64, decrypt bytes</text>
+  <text x="1070" y="454" class="micro">Baileys media envelope</text>
+  <path d="M1210 423 H1237" class="lineBlue"/>
+  <rect x="1242" y="386" width="160" height="74" rx="8" class="violet"/>
+  <text x="1273" y="414" class="boxTitle">Vision / OCR</text>
+  <text x="1261" y="438" class="boxText">Groq Qwen JSON</text>
+  <text x="1261" y="454" class="micro">photo list / supplier bill</text>
 
-  <line x1="800" y1="458" x2="1726" y2="458" class="sep"/>
+  <rect x="858" y="482" width="160" height="58" rx="8" class="green"/>
+  <text x="882" y="511" class="boxTitle">Catalogue Match</text>
+  <text x="878" y="532" class="micro">aliases + fuzzy + prior</text>
+  <path d="M1018 511 H1045" class="lineGreen"/>
+  <rect x="1050" y="482" width="160" height="58" rx="8" class="green"/>
+  <text x="1076" y="511" class="boxTitle">Basket Merge</text>
+  <text x="1072" y="532" class="micro">pack fitting + substitutes</text>
+  <path d="M1210 511 H1237" class="lineGreen"/>
+  <rect x="1242" y="482" width="160" height="58" rx="8" class="amber"/>
+  <text x="1266" y="511" class="boxTitle">Order Intent</text>
+  <text x="1262" y="532" class="micro">ask, modify, checkout</text>
 
-  <!-- Row 2 -->
-  <text x="842" y="520" class="h3">WhatsApp + Messaging</text>
-  <text x="818" y="560" class="stack">Twilio Sandbox, Evolution API</text>
-  <text x="820" y="586" class="stack-small">OCR photos, order chat, payment logging, supplier alerts</text>
-  <rect x="850" y="628" width="76" height="54" rx="8" fill="#25d366"/>
-  <text x="864" y="663" class="chipText">WA</text>
-  <rect x="946" y="628" width="76" height="54" rx="8" fill="#f22f46"/>
-  <text x="961" y="663" class="chipText">TW</text>
+  <!-- Voice pipeline -->
+  <rect x="1490" y="238" width="622" height="330" rx="18" class="card"/>
+  <text x="1522" y="276" class="lane">Realtime Voice-Call Pipeline</text>
+  <rect x="1522" y="306" width="110" height="50" rx="8" fill="#f22f46"/>
+  <text x="1547" y="338" class="badgeText">TW</text>
+  <rect x="1650" y="306" width="110" height="50" rx="8" fill="#0f766e"/>
+  <text x="1675" y="338" class="badgeText">STT</text>
+  <rect x="1778" y="306" width="110" height="50" rx="8" fill="#14b8a6"/>
+  <text x="1803" y="338" class="badgeText">TTS</text>
+  <rect x="1906" y="306" width="110" height="50" rx="8" fill="#111827"/>
+  <text x="1934" y="338" class="badgeText">WS</text>
 
-  <text x="1160" y="520" class="h3">Voice + Audio</text>
-  <text x="1138" y="560" class="stack">Sarvam STT/TTS</text>
-  <text x="1116" y="586" class="stack-small">8k μ-law bridge, 16k browser PCM, barge-in</text>
-  <rect x="1144" y="628" width="76" height="54" rx="8" fill="#0f766e"/>
-  <text x="1159" y="663" class="chipText">STT</text>
-  <rect x="1240" y="628" width="76" height="54" rx="8" fill="#14b8a6"/>
-  <text x="1256" y="663" class="chipText">TTS</text>
+  <rect x="1522" y="386" width="160" height="74" rx="8" class="blue"/>
+  <text x="1546" y="414" class="boxTitle">Call Connect</text>
+  <text x="1544" y="438" class="boxText">Twilio Media Stream</text>
+  <text x="1544" y="454" class="micro">8k μ-law frames</text>
+  <path d="M1682 423 H1709" class="lineBlue"/>
+  <rect x="1714" y="386" width="160" height="74" rx="8" class="blue"/>
+  <text x="1734" y="414" class="boxTitle">PCM Bridge</text>
+  <text x="1735" y="438" class="boxText">decode μ-law to PCM16</text>
+  <text x="1735" y="454" class="micro">8k telephony path</text>
+  <path d="M1874 423 H1901" class="lineBlue"/>
+  <rect x="1906" y="386" width="160" height="74" rx="8" class="violet"/>
+  <text x="1938" y="414" class="boxTitle">Sarvam Ear</text>
+  <text x="1927" y="438" class="boxText">streaming STT + VAD</text>
+  <text x="1927" y="454" class="micro">partials warm, finals commit</text>
 
-  <text x="1432" y="520" class="h3">Payments</text>
-  <text x="1405" y="560" class="stack">Razorpay Links</text>
-  <text x="1376" y="586" class="stack-small">HMAC webhook, partial payment, settlement</text>
-  <rect x="1424" y="628" width="90" height="54" rx="8" fill="#1d4ed8"/>
-  <text x="1435" y="663" class="chipText">RZP</text>
-  <rect x="1534" y="628" width="84" height="54" rx="8" fill="#059669"/>
-  <text x="1546" y="663" class="chipText">₹</text>
+  <rect x="1522" y="482" width="160" height="58" rx="8" class="green"/>
+  <text x="1547" y="511" class="boxTitle">Care Runtime</text>
+  <text x="1543" y="532" class="micro">ConversationFrame + TTL</text>
+  <path d="M1682 511 H1709" class="lineGreen"/>
+  <rect x="1714" y="482" width="160" height="58" rx="8" class="green"/>
+  <text x="1735" y="511" class="boxTitle">Desk Agents</text>
+  <text x="1735" y="532" class="micro">4 desks + state router</text>
+  <path d="M1874 511 H1901" class="lineGreen"/>
+  <rect x="1906" y="482" width="160" height="58" rx="8" class="amber"/>
+  <text x="1930" y="511" class="boxTitle">Sarvam Mouth</text>
+  <text x="1928" y="532" class="micro">flush + barge-in</text>
 
-  <line x1="800" y1="728" x2="1726" y2="728" class="sep"/>
+  <!-- Core orchestration -->
+  <rect x="826" y="610" width="1286" height="300" rx="18" class="card"/>
+  <text x="858" y="648" class="lane">Shared Agentic Runtime: One Final Utterance to One Verified Outcome</text>
 
-  <!-- Row 3 -->
-  <text x="850" y="790" class="h3">Database</text>
-  <text x="828" y="830" class="stack">Supabase PostgreSQL</text>
-  <text x="823" y="856" class="stack-small">conversation state, orders, invoices, events</text>
-  <rect x="862" y="900" width="82" height="54" rx="8" fill="#336791"/>
-  <text x="876" y="935" class="chipText">PG</text>
+  <rect x="860" y="688" width="170" height="78" rx="8" class="violet"/>
+  <text x="890" y="717" class="boxTitle">Understand</text>
+  <text x="884" y="740" class="boxText">LLM returns JSON speech act</text>
+  <text x="884" y="758" class="micro">zod validated frame</text>
+  <path d="M1030 727 H1064" class="lineBlue"/>
 
-  <text x="1108" y="790" class="h3">Security &amp; Verification</text>
-  <text x="1088" y="830" class="stack">OTP, cookies, HMAC</text>
-  <text x="1060" y="856" class="stack-small">zod schemas, timing-safe compare, event audit</text>
-  <rect x="1106" y="900" width="84" height="54" rx="8" fill="#111827"/>
-  <text x="1120" y="935" class="chipText">JWT</text>
-  <rect x="1210" y="900" width="84" height="54" rx="8" fill="#16a34a"/>
-  <text x="1222" y="935" class="chipText">SIG</text>
+  <rect x="1070" y="688" width="170" height="78" rx="8" class="green"/>
+  <text x="1110" y="717" class="boxTitle">Policy Table</text>
+  <text x="1090" y="740" class="boxText">desk × act transition</text>
+  <text x="1090" y="758" class="micro">no model decides policy</text>
+  <path d="M1240 727 H1274" class="lineBlue"/>
 
-  <text x="1395" y="790" class="h3">Evals &amp; Measurement</text>
-  <text x="1378" y="830" class="stack">dialogue, fold, photo, bill</text>
-  <text x="1360" y="856" class="stack-small">latency, ASR, TTS, adversarial payments</text>
-  <rect x="1410" y="900" width="88" height="54" rx="8" fill="#7c3aed"/>
-  <text x="1424" y="935" class="chipText">EVAL</text>
-  <rect x="1518" y="900" width="88" height="54" rx="8" fill="#ea580c"/>
-  <text x="1534" y="935" class="chipText">P95</text>
+  <rect x="1280" y="688" width="170" height="78" rx="8" class="green"/>
+  <text x="1308" y="717" class="boxTitle">Execute Tools</text>
+  <text x="1304" y="740" class="boxText">resolver, basket, payment</text>
+  <text x="1304" y="758" class="micro">deterministic commands</text>
+  <path d="M1450 727 H1484" class="lineBlue"/>
 
-  <text x="1602" y="790" class="h3">Deployment</text>
-  <text x="1580" y="830" class="stack">Render, Vercel</text>
-  <text x="1553" y="856" class="stack-small">ngrok local webhooks, Supabase pooler</text>
-  <rect x="1586" y="900" width="72" height="54" rx="8" fill="#000000"/>
-  <text x="1600" y="935" class="chipText">VC</text>
-  <rect x="1678" y="900" width="72" height="54" rx="8" fill="#46e3b7"/>
-  <text x="1692" y="935" class="chipText">RN</text>
+  <rect x="1490" y="688" width="170" height="78" rx="8" class="amber"/>
+  <text x="1520" y="717" class="boxTitle">Verify Outcome</text>
+  <text x="1510" y="740" class="boxText">facts with evidence</text>
+  <text x="1510" y="758" class="micro">digits/URLs code-owned</text>
+  <path d="M1660 727 H1694" class="lineBlue"/>
 
-  <!-- Bottom strip -->
-  <rect x="800" y="1004" width="926" height="54" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
-  <text x="822" y="1028" class="label">High-level agentic guarantees</text>
-  <text x="822" y="1050" class="small">One final utterance → one semantic frame → one desk policy outcome → one verified business command → one audited response. Payment links are created by code only after final basket confirmation.</text>
+  <rect x="1700" y="688" width="170" height="78" rx="8" class="blue"/>
+  <text x="1728" y="717" class="boxTitle">Respond</text>
+  <text x="1722" y="740" class="boxText">natural Hinglish reply</text>
+  <text x="1722" y="758" class="micro">text or streaming TTS</text>
+  <path d="M1870 727 H1904" class="lineBlue"/>
+
+  <rect x="1910" y="688" width="170" height="78" rx="8" class="slate"/>
+  <text x="1942" y="717" class="boxTitle">Journal</text>
+  <text x="1932" y="740" class="boxText">AgentEvent trace</text>
+  <text x="1932" y="758" class="micro">timeline + eval replay</text>
+
+  <rect x="860" y="804" width="250" height="70" rx="8" class="box"/>
+  <text x="884" y="832" class="boxTitle">Conversation Memory Stack</text>
+  <text x="884" y="854" class="boxText">desk, pending, basket, referents, TTL</text>
+
+  <rect x="1140" y="804" width="250" height="70" rx="8" class="box"/>
+  <text x="1164" y="832" class="boxTitle">Grounded RAG Context</text>
+  <text x="1164" y="854" class="boxText">catalogue rows, KB aliases, prior, stock</text>
+
+  <rect x="1420" y="804" width="250" height="70" rx="8" class="box"/>
+  <text x="1444" y="832" class="boxTitle">Outcome Verification</text>
+  <text x="1444" y="854" class="boxText">payment is verified, never inferred</text>
+
+  <rect x="1700" y="804" width="250" height="70" rx="8" class="box"/>
+  <text x="1724" y="832" class="boxTitle">Owner Visibility</text>
+  <text x="1724" y="854" class="boxText">timeline shows heard, tool, result</text>
+
+  <!-- Payment safety flow -->
+  <rect x="826" y="952" width="618" height="304" rx="18" class="card"/>
+  <text x="858" y="990" class="lane">Payment Safety and Recovery Loop</text>
+
+  <rect x="858" y="1028" width="170" height="64" rx="8" class="green"/>
+  <text x="884" y="1056" class="boxTitle">Basket Final</text>
+  <text x="884" y="1078" class="boxText">customer says bhej do</text>
+  <path d="M1028 1060 H1056" class="lineGreen"/>
+
+  <rect x="1062" y="1028" width="170" height="64" rx="8" class="amber"/>
+  <text x="1082" y="1056" class="boxTitle">Create Link</text>
+  <text x="1082" y="1078" class="boxText">Razorpay payment link</text>
+  <path d="M1232 1060 H1260" class="lineGreen"/>
+
+  <rect x="1266" y="1028" width="144" height="64" rx="8" class="blue"/>
+  <text x="1292" y="1056" class="boxTitle">WhatsApp</text>
+  <text x="1288" y="1078" class="boxText">bill + pay URL</text>
+
+  <path d="M1138 1092 V1120" class="lineBlue"/>
+  <rect x="958" y="1120" width="364" height="86" rx="8" class="rose"/>
+  <text x="996" y="1150" class="boxTitle">Customer says: payment ho gaya?</text>
+  <text x="988" y="1174" class="boxText">Detect PAYMENT_CLAIM, call Razorpay API/webhook state</text>
+  <text x="988" y="1194" class="micro">if not paid: ask customer to complete link</text>
+
+  <path d="M1322 1163 H1352" class="lineGreen"/>
+  <rect x="1358" y="1120" width="52" height="86" rx="8" class="green"/>
+  <text x="1374" y="1158" class="badgeText">₹</text>
+  <text x="1369" y="1182" class="micro">settle</text>
+
+  <!-- Evals -->
+  <rect x="1490" y="952" width="622" height="304" rx="18" class="card"/>
+  <text x="1522" y="990" class="lane">Evaluation Harnesses and Latency Ledger</text>
+
+  <rect x="1522" y="1028" width="150" height="64" rx="8" class="violet"/>
+  <text x="1550" y="1056" class="boxTitle">Dialogue</text>
+  <text x="1546" y="1078" class="micro">19 scenario gate</text>
+  <rect x="1690" y="1028" width="150" height="64" rx="8" class="violet"/>
+  <text x="1733" y="1056" class="boxTitle">Fold</text>
+  <text x="1710" y="1078" class="micro">resolver checks</text>
+  <rect x="1858" y="1028" width="150" height="64" rx="8" class="violet"/>
+  <text x="1898" y="1056" class="boxTitle">Photo</text>
+  <text x="1876" y="1078" class="micro">image to order</text>
+
+  <rect x="1522" y="1120" width="150" height="64" rx="8" class="amber"/>
+  <text x="1547" y="1148" class="boxTitle">Bill OCR</text>
+  <text x="1542" y="1170" class="micro">ablation ladder</text>
+  <rect x="1690" y="1120" width="150" height="64" rx="8" class="amber"/>
+  <text x="1718" y="1148" class="boxTitle">Payment</text>
+  <text x="1710" y="1170" class="micro">adversarial safety</text>
+  <rect x="1858" y="1120" width="150" height="64" rx="8" class="amber"/>
+  <text x="1893" y="1148" class="boxTitle">Latency</text>
+  <text x="1880" y="1170" class="micro">ear/mouth/voice</text>
+
+  <rect x="1522" y="1210" width="486" height="24" rx="12" fill="#0f172a"/>
+  <text x="1544" y="1227" font-family="Arial, sans-serif" font-size="13" font-weight="800" fill="#ffffff">Harnesses import production modules, not demo reimplementations</text>
+
+  <!-- Bottom technology stack badges -->
+  <line x1="826" y1="1298" x2="2112" y2="1298" class="sep"/>
+  <text x="836" y="1342" class="section">◆ Technology Stack</text>
+
+  <rect x="835" y="1376" width="86" height="52" rx="8" class="badgeDark"/>
+  <text x="849" y="1409" class="badgeText">NEXT</text>
+  <circle cx="970" cy="1402" r="27" fill="#61dafb"/>
+  <ellipse cx="970" cy="1402" rx="34" ry="11" fill="none" stroke="#0f172a" stroke-width="3"/>
+  <ellipse cx="970" cy="1402" rx="34" ry="11" fill="none" stroke="#0f172a" stroke-width="3" transform="rotate(60 970 1402)"/>
+  <ellipse cx="970" cy="1402" rx="34" ry="11" fill="none" stroke="#0f172a" stroke-width="3" transform="rotate(120 970 1402)"/>
+  <circle cx="970" cy="1402" r="4" fill="#0f172a"/>
+  <rect x="1035" y="1376" width="64" height="52" rx="8" fill="#3178c6"/>
+  <text x="1051" y="1409" class="badgeText">TS</text>
+  <rect x="1118" y="1376" width="92" height="52" rx="8" fill="#38bdf8"/>
+  <path d="M1132 1404 C1148 1388 1162 1388 1178 1404 C1192 1418 1200 1417 1208 1405" stroke="#ffffff" stroke-width="8" fill="none" stroke-linecap="round"/>
+  <rect x="1229" y="1376" width="84" height="52" rx="8" fill="#3c873a"/>
+  <text x="1245" y="1409" class="badgeText">Node</text>
+  <rect x="1332" y="1376" width="94" height="52" rx="8" fill="#111827"/>
+  <text x="1345" y="1409" class="badgeText">Fastify</text>
+  <rect x="1445" y="1376" width="88" height="52" rx="8" fill="#336791"/>
+  <text x="1466" y="1409" class="badgeText">PG</text>
+  <rect x="1552" y="1376" width="90" height="52" rx="8" fill="#2f855a"/>
+  <text x="1570" y="1409" class="badgeText">Prisma</text>
+  <rect x="1661" y="1376" width="86" height="52" rx="8" fill="#f97316"/>
+  <text x="1674" y="1409" class="badgeText">Groq</text>
+  <rect x="1766" y="1376" width="96" height="52" rx="8" fill="#0f766e"/>
+  <text x="1780" y="1409" class="badgeText">Sarvam</text>
+  <rect x="1881" y="1376" width="88" height="52" rx="8" fill="#f22f46"/>
+  <text x="1896" y="1409" class="badgeText">Twilio</text>
+  <rect x="1988" y="1376" width="92" height="52" rx="8" fill="#2563eb"/>
+  <text x="2003" y="1409" class="badgeText">RZP</text>
+
+  <!-- The left side is the product journey; the right side expands each
+       channel/runtime step into implementation detail for judges. -->
 </svg>
