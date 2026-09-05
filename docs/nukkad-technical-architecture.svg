@@ -1,0 +1,211 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1120" viewBox="0 0 1600 1120" role="img" aria-labelledby="title desc">
+  <title id="title">Nukkad technical architecture</title>
+  <desc id="desc">End to end system architecture for Nukkad, covering shop onboarding, WhatsApp ordering, OCR catalog updates, voice calls, payment verification, event journal, dashboards, and evaluation harnesses.</desc>
+  <defs>
+    <linearGradient id="hero" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f46e5"/>
+      <stop offset="0.45" stop-color="#7c3aed"/>
+      <stop offset="1" stop-color="#0f766e"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f8fafc"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="135%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#0f172a" flood-opacity="0.14"/>
+    </filter>
+    <marker id="arrowBlue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#4f46e5"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#0f766e"/>
+    </marker>
+    <marker id="arrowAmber" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#b45309"/>
+    </marker>
+    <style>
+      .bg { fill: #f4f7fb; }
+      .title { font: 800 54px Arial, sans-serif; fill: #0f172a; letter-spacing: 0; }
+      .subtitle { font: 400 18px Arial, sans-serif; fill: #475569; }
+      .section { font: 800 18px Arial, sans-serif; fill: #0f172a; letter-spacing: 0.8px; }
+      .card-title { font: 800 18px Arial, sans-serif; fill: #111827; }
+      .card-sub { font: 400 13px Arial, sans-serif; fill: #475569; }
+      .tiny { font: 700 12px Arial, sans-serif; fill: #64748b; letter-spacing: 0.6px; }
+      .pill { font: 800 12px Arial, sans-serif; fill: #312e81; }
+      .panel { fill: url(#panel); stroke: #dbe4f0; stroke-width: 1.2; filter: url(#shadow); }
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.1; }
+      .box-soft { fill: #f8fafc; stroke: #dbe4f0; stroke-width: 1; }
+      .box-blue { fill: #eef2ff; stroke: #818cf8; stroke-width: 1.1; }
+      .box-green { fill: #ecfdf5; stroke: #34d399; stroke-width: 1.1; }
+      .box-amber { fill: #fff7ed; stroke: #f59e0b; stroke-width: 1.1; }
+      .box-red { fill: #fff1f2; stroke: #fb7185; stroke-width: 1.1; }
+      .box-slate { fill: #f1f5f9; stroke: #94a3b8; stroke-width: 1.1; }
+      .line-blue { stroke: #4f46e5; stroke-width: 2.2; fill: none; marker-end: url(#arrowBlue); }
+      .line-green { stroke: #0f766e; stroke-width: 2.2; fill: none; marker-end: url(#arrowGreen); }
+      .line-amber { stroke: #b45309; stroke-width: 2.2; fill: none; marker-end: url(#arrowAmber); }
+      .line-soft { stroke: #94a3b8; stroke-width: 1.8; fill: none; stroke-dasharray: 7 7; }
+      .lane-label { font: 800 13px Arial, sans-serif; fill: #334155; letter-spacing: 0.9px; }
+      .mono { font: 700 12px Consolas, monospace; fill: #334155; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1600" height="1120"/>
+  <rect x="0" y="0" width="1600" height="152" fill="url(#hero)"/>
+  <text x="64" y="74" class="title" fill="#ffffff">Nukkad Technical Architecture</text>
+  <text x="66" y="112" class="subtitle" fill="#e0e7ff">Kirana AI commerce stack: onboarding, catalogue OCR, WhatsApp orders, proactive voice calls, Razorpay settlement, and measurement harnesses.</text>
+  <text x="1300" y="66" font-family="Arial, sans-serif" font-size="18" font-weight="800" fill="#ffffff">Razorpay AI Buildathon</text>
+  <text x="1300" y="96" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#ccfbf1">Agentic Retail OS</text>
+
+  <!-- Left journey panel -->
+  <rect x="42" y="185" width="475" height="860" rx="28" class="panel"/>
+  <text x="76" y="228" class="section">01. PRODUCT JOURNEY</text>
+
+  <rect x="78" y="258" width="180" height="64" rx="14" class="box-blue"/>
+  <text x="100" y="283" class="card-title">Landing Page</text>
+  <text x="100" y="305" class="card-sub">value prop, demo story</text>
+  <rect x="316" y="258" width="164" height="64" rx="14" class="box-blue"/>
+  <text x="338" y="283" class="card-title">OTP Login</text>
+  <text x="338" y="305" class="card-sub">shop-owner session</text>
+  <path d="M258 290 H306" class="line-blue"/>
+
+  <path d="M398 322 V360" class="line-blue"/>
+  <rect x="78" y="360" width="402" height="88" rx="16" class="box-green"/>
+  <text x="100" y="389" class="card-title">Shop Brain Created</text>
+  <text x="100" y="413" class="card-sub">Kirana profile, owner number, supplier, catalogue, households, offers</text>
+  <text x="100" y="435" class="mono">Prisma + Supabase + session cookie</text>
+
+  <path d="M278 448 V486" class="line-green"/>
+  <rect x="78" y="486" width="402" height="116" rx="16" class="box-amber"/>
+  <text x="100" y="517" class="card-title">Owner Dashboard</text>
+  <text x="100" y="541" class="card-sub">Orders, inventory, customers, procurement, insights</text>
+  <text x="100" y="565" class="card-sub">Hidden internal test routes remain direct-access only</text>
+  <text x="100" y="587" class="mono">Next.js 16 + typed API client</text>
+
+  <path d="M278 602 V640" class="line-amber"/>
+  <rect x="78" y="640" width="402" height="132" rx="16" class="box"/>
+  <text x="100" y="671" class="card-title">Three Customer Doors</text>
+  <text x="100" y="699" class="card-sub">WhatsApp text / photo / voice-note</text>
+  <text x="100" y="723" class="card-sub">Outbound Twilio care call</text>
+  <text x="100" y="747" class="card-sub">Browser simulator and voice console for no-cost testing</text>
+
+  <path d="M278 772 V810" class="line-blue"/>
+  <rect x="78" y="810" width="402" height="158" rx="16" class="box-slate"/>
+  <text x="100" y="840" class="card-title">Business Outcomes</text>
+  <text x="100" y="868" class="card-sub">Razorpay link issued only after final basket confirmation</text>
+  <text x="100" y="892" class="card-sub">Webhook settles payment and moves stock</text>
+  <text x="100" y="916" class="card-sub">Unmet demand feeds night procurement</text>
+  <text x="100" y="940" class="card-sub">Agent events power customer intelligence timeline</text>
+
+  <!-- Center architecture panel -->
+  <rect x="552" y="185" width="602" height="860" rx="28" class="panel"/>
+  <text x="588" y="228" class="section">02. AGENTIC COMMERCE CORE</text>
+
+  <rect x="588" y="258" width="238" height="86" rx="16" class="box-blue"/>
+  <text x="612" y="287" class="card-title">Transport Adapters</text>
+  <text x="612" y="312" class="card-sub">Evolution / Twilio / browser</text>
+  <text x="612" y="333" class="mono">normalise to InboundMessage</text>
+
+  <rect x="880" y="258" width="238" height="86" rx="16" class="box-blue"/>
+  <text x="904" y="287" class="card-title">Realtime Pipes</text>
+  <text x="904" y="312" class="card-sub">WebSocket STT and TTS</text>
+  <text x="904" y="333" class="mono">8k Twilio / 16k browser PCM</text>
+  <path d="M826 301 H870" class="line-blue"/>
+
+  <path d="M854 344 V384" class="line-blue"/>
+  <rect x="650" y="384" width="406" height="92" rx="18" class="box-green"/>
+  <text x="682" y="414" class="card-title">Single Turn Door</text>
+  <text x="682" y="439" class="card-sub">Every final utterance enters one runtime</text>
+  <text x="682" y="461" class="mono">one final -> one decision -> one outcome</text>
+
+  <path d="M854 476 V516" class="line-green"/>
+  <rect x="588" y="516" width="530" height="132" rx="18" class="box"/>
+  <text x="612" y="547" class="card-title">Multi-Agent Desk Workforce</text>
+  <text x="612" y="575" class="card-sub">Reception: permission and routing</text>
+  <text x="612" y="599" class="card-sub">Seller: catalogue, substitutions, basket edits</text>
+  <text x="612" y="623" class="card-sub">Checkout: payment link and payment verification</text>
+
+  <path d="M854 648 V690" class="line-blue"/>
+  <rect x="588" y="690" width="252" height="138" rx="18" class="box-amber"/>
+  <text x="612" y="721" class="card-title">Conversation Memory</text>
+  <text x="612" y="749" class="card-sub">desk, state, pending action</text>
+  <text x="612" y="773" class="card-sub">basket, referents, TTL</text>
+  <text x="612" y="797" class="mono">ConversationFrame stack</text>
+
+  <rect x="866" y="690" width="252" height="138" rx="18" class="box-amber"/>
+  <text x="890" y="721" class="card-title">Grounded Actions</text>
+  <text x="890" y="749" class="card-sub">catalogue resolver + prior</text>
+  <text x="890" y="773" class="card-sub">code-owned totals and URLs</text>
+  <text x="890" y="797" class="mono">LLM phrases facts only</text>
+  <path d="M840 759 H856" class="line-amber"/>
+
+  <path d="M854 828 V870" class="line-amber"/>
+  <rect x="588" y="870" width="530" height="116" rx="18" class="box-green"/>
+  <text x="612" y="901" class="card-title">Payment and Inventory Safety</text>
+  <text x="612" y="929" class="card-sub">Payment link created after basket finalization, not before</text>
+  <text x="612" y="953" class="card-sub">Razorpay webhook or API verification is the only paid signal</text>
+  <text x="612" y="977" class="card-sub">Stock moves only inside settlement, never on a customer claim</text>
+
+  <!-- Right intelligence panel -->
+  <rect x="1190" y="185" width="368" height="860" rx="28" class="panel"/>
+  <text x="1224" y="228" class="section">03. INTELLIGENCE + MEASUREMENT</text>
+
+  <rect x="1224" y="258" width="300" height="108" rx="16" class="box"/>
+  <text x="1248" y="288" class="card-title">Bill and Catalogue OCR</text>
+  <text x="1248" y="316" class="card-sub">supplier bill photo -> vision extract</text>
+  <text x="1248" y="340" class="card-sub">normalise, reconcile, price, alias, critic</text>
+  <text x="1248" y="362" class="mono">LangGraph bill agent</text>
+
+  <path d="M1374 366 V404" class="line-blue"/>
+  <rect x="1224" y="404" width="300" height="108" rx="16" class="box-green"/>
+  <text x="1248" y="434" class="card-title">Demand Prediction</text>
+  <text x="1248" y="462" class="card-sub">household burn-rate and run-out windows</text>
+  <text x="1248" y="486" class="card-sub">care-call plans and suggested basket</text>
+  <text x="1248" y="508" class="mono">depletion + purchase prior</text>
+
+  <path d="M1374 512 V550" class="line-green"/>
+  <rect x="1224" y="550" width="300" height="128" rx="16" class="box-amber"/>
+  <text x="1248" y="580" class="card-title">Event Journal</text>
+  <text x="1248" y="608" class="card-sub">SPEECH_FINAL, INTENT_DETECTED</text>
+  <text x="1248" y="632" class="card-sub">STATE_CHANGED, TOOL_EXECUTED</text>
+  <text x="1248" y="656" class="card-sub">OUTCOME_READY, RESPONSE_GENERATED</text>
+
+  <path d="M1374 678 V716" class="line-amber"/>
+  <rect x="1224" y="716" width="300" height="138" rx="16" class="box-blue"/>
+  <text x="1248" y="746" class="card-title">Eval Harnesses</text>
+  <text x="1248" y="774" class="card-sub">dialogue, fold, photo, bill ablation</text>
+  <text x="1248" y="798" class="card-sub">payment adversarial checks</text>
+  <text x="1248" y="822" class="card-sub">latency, ASR, TTS, voice replay</text>
+  <text x="1248" y="846" class="mono">measured gates, not screenshots</text>
+
+  <path d="M1374 854 V892" class="line-blue"/>
+  <rect x="1224" y="892" width="300" height="94" rx="16" class="box-slate"/>
+  <text x="1248" y="922" class="card-title">Owner Intelligence UI</text>
+  <text x="1248" y="950" class="card-sub">customer detail, timeline, pending stock</text>
+  <text x="1248" y="974" class="card-sub">procurement approval and edit tables</text>
+
+  <!-- Cross-panel connectors -->
+  <path d="M480 704 C540 704 520 301 588 301" class="line-blue"/>
+  <text x="500" y="670" class="tiny">customer channels</text>
+
+  <path d="M1118 929 C1160 929 1160 922 1224 922" class="line-green"/>
+  <text x="1125" y="906" class="tiny">verified facts</text>
+
+  <path d="M1118 582 C1165 582 1170 604 1224 604" class="line-amber"/>
+  <text x="1126" y="562" class="tiny">events</text>
+
+  <path d="M1224 312 C1160 312 1170 430 1056 430" class="line-soft"/>
+  <text x="1126" y="326" class="tiny">catalogue updates</text>
+
+  <!-- Stack strip -->
+  <rect x="42" y="1064" width="1516" height="36" rx="18" fill="#0f172a"/>
+  <text x="70" y="1088" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#ffffff">Stack:</text>
+  <text x="128" y="1088" font-family="Arial, sans-serif" font-size="14" fill="#dbeafe">Next.js, Fastify, TypeScript, Prisma, Supabase Postgres, Groq Vision/LLM, Sarvam STT/TTS, Twilio Voice/WhatsApp, Evolution API, Razorpay, Render, Vercel, ngrok, LangGraph, custom eval harnesses</text>
+
+  <!-- Legend -->
+  <rect x="1220" y="126" width="22" height="10" rx="5" fill="#eef2ff" stroke="#818cf8"/>
+  <text x="1250" y="136" class="tiny">channel / UI</text>
+  <rect x="1340" y="126" width="22" height="10" rx="5" fill="#ecfdf5" stroke="#34d399"/>
+  <text x="1370" y="136" class="tiny">agent state</text>
+  <rect x="1460" y="126" width="22" height="10" rx="5" fill="#fff7ed" stroke="#f59e0b"/>
+  <text x="1490" y="136" class="tiny">verification</text>
+</svg>
