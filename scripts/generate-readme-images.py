@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 from textwrap import wrap
 
 from PIL import Image, ImageDraw, ImageFont
@@ -212,6 +213,11 @@ def box(
 
 
 def technical_architecture() -> None:
+    supplied = ROOT / "media" / "Technical.png"
+    if supplied.exists():
+        shutil.copyfile(supplied, DOCS / "nukkad-technical-architecture.png")
+        return
+
     w, h = 3840, 2160
     img = Image.new("RGB", (w, h), "#f8fafc")
     d = ImageDraw.Draw(img)
